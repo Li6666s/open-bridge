@@ -350,6 +350,12 @@ jobs:
       # holds the run with the branch untouched, a dirty log does not block.
       - name: Run upstream auto-update contract
         run: python3 -m pytest scripts/tests/test_upstream_autoupdate.py -q
+      # The scheduled archive. Order is the safety property: every archive file is
+      # written and verified before log.md is touched, because until then the log is
+      # the only place those rows exist. These also pin the refusals — an existing
+      # archive is never overwritten, and it declines off a user/* branch.
+      - name: Run scheduled-archive contract
+        run: python3 -m pytest scripts/tests/test_archive_autorun.py -q
 
   # The workload skill carries three suites of its own, and each answers a
   # different question. The skill writes unit files onto machines: a contract it

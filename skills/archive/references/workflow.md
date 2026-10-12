@@ -78,6 +78,22 @@ KW{N} but day-blocks reach KW{N+1}) is the common case after a missed archive,
 and "Saturday → archive the CURRENT week" picks the wrong target when the old
 ones are what need draining.
 
+## The scheduled run does only the mechanical half
+
+`scripts/archive-autorun.sh` (declared as a workload, daily) runs Phases 2, 3, 6
+and a METRICS-ONLY Phase 4, then records the rest as owed. It never runs a model:
+Phase 4's narrative and Phase 5's selection are judgement, and a scheduled agent
+with write access to the work log is the largest unattended blast radius here.
+
+So a scheduled archive leaves behind summaries marked *"metrics only — not
+narrated"* plus a carried `- [ ]` item saying the narrative and the distillation
+are still owed. Nothing is lost by filling them in later: the per-period `-raw.md`
+holds every row, which is what Phase 5's evidence anchors already point at.
+
+When a human runs `/archive` and finds periods already archived that way, enrich
+those summaries and run Phase 5 over their raws rather than archiving again — the
+collision guard refuses to overwrite an existing archive, deliberately.
+
 ## Phase 3: Collect — once per planned period
 
 Loop over the plan's `archive: true` entries, oldest first. For each:
