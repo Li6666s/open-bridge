@@ -501,6 +501,13 @@ SCRIPTS_CORE_ALLOWLIST = frozenset({
     # validate.yml runs its contract against the real script.
     "scripts/upstream-resolve.py",
     "scripts/tests/test_upstream_autoupdate.py",
+    # Registered with the scheduled archive. It runs DAILY and does only the
+    # mechanical half; the judgement half is recorded as owed. lib/bridge-python.sh
+    # is the one interpreter resolver the currency jobs share, so a fix lands once.
+    "scripts/archive-autorun.py",
+    "scripts/archive-autorun.sh",
+    "scripts/lib/bridge-python.sh",
+    "scripts/tests/test_archive_autorun.py",
 })
 
 
