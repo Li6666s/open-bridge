@@ -1495,3 +1495,12 @@ export function taskLane(it) {
   if (it?.state === 'backlog') return 'next'
   return 'now'
 }
+
+/** The theme a page address forces for this one load: `?theme=light` or `?theme=dark`, else null.
+ *  The static demo on the website uses it; the choice is never saved. theme.js repeats this rule,
+ *  because a classic script in <head> cannot import a module. */
+export function themeOverride(search) {
+  if (typeof search !== 'string') return null
+  const mode = new URLSearchParams(search).get('theme')
+  return mode === 'light' || mode === 'dark' ? mode : null
+}

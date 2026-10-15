@@ -146,6 +146,12 @@ computer restarts. `autostart on` (macOS) installs a LaunchAgent
 PATH of the shell that switched it on, since the cockpit calls cmux, gh, git
 and claude. `autostart off` removes it. It is off unless you switch it on.
 
+**Try it without a Bridge.** A live demo with invented data runs on the
+website: https://bks-lab.github.io/open-bridge/cockpit-demo/. Nothing there
+reaches a server and nothing is saved. Add `?theme=light` or `?theme=dark` to
+the address (here or on your own cockpit) to force the mode for that one load
+without changing your stored choice.
+
 ## 3. What you see
 
 The header carries the profile's title, when the briefing was

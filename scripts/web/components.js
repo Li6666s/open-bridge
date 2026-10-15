@@ -320,7 +320,8 @@ function Header({ s, c, merged = false }) {
   return html`<header class="hdr">
     <div class="hdr-id">
       <span class="eyebrow">${t.appName}</span>
-      <h1 class="hdr-title">${t.cockpit}</h1>
+      <div class="hdr-name"><h1 class="hdr-title">${t.cockpit}</h1>
+        ${s.mock ? html`<span class="hdr-demo" title=${t.mockNote}><span class="hdr-demo-long">${t.demoBadge}</span><span class="hdr-demo-short">${t.demoBadgeShort}</span></span>` : null}</div>
     </div>
     ${merged ? html`<${PageBar} s=${s} c=${c} />` : html`<span class="hdr-headline" aria-hidden="true"></span>`}
     <div class="hdr-right">

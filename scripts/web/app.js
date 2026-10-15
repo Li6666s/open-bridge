@@ -12,13 +12,15 @@ import { createApi } from './api.js'
 import { AGENTS_PAGE, App, CHAT_PAGE, CHECK_PAGE, START_PAGE, WORKERS_PAGE, pageOrder } from './components.js'
 import {
   CONN_GRACE_MS, DAY, addNote, attentionTabs, displayedRows, errorText, freshMore, indexRows, invalidateDetails,
-  isTypingTarget, isoDate, modalKeyAllowed, reviewHome, nextMonday, parseShortcut, planShortcut, railShown, rowByNumber, short, startRefusal,
+  isTypingTarget, isoDate, themeOverride, modalKeyAllowed, reviewHome, nextMonday, parseShortcut, planShortcut, railShown, rowByNumber, short, startRefusal,
   upsertRecord, addFeed, feedEvents,
 } from './logic.js'
 import { T, language, setControl, setLanguage } from './text.js'
 
 const params = new URLSearchParams(window.location.search)
 const MOCK = params.get('mock') === '1'
+// ?theme=light|dark forces the mode for this load and is never saved (the website demo); theme.js does the same
+const THEME_OVERRIDE = themeOverride(window.location.search)
 
 // ---------------------------------------------------------------- storage (per viewer, optional)
 
@@ -104,7 +106,7 @@ const store = createStore({
     focusUntil: Number(load('bridge-cockpit.focusUntil', '')) || null, coreConv: null, coreBrief: false, focusKey: null, picked: [], expanded: {},
     workView: load('bridge-cockpit.workView', 'area'),
     workKind: load('bridge-cockpit.workKind', null),
-    theme: load('bridge-cockpit.theme', 'auto'), drawer: null, item: null, pane: 'day', confirm: null, askFallback: null, pageDetail: false,
+    theme: THEME_OVERRIDE ?? load('bridge-cockpit.theme', 'auto'), drawer: null, item: null, pane: 'day', confirm: null, askFallback: null, pageDetail: false,
     busy: {}, snapshotText: null, openMsg: null, tabView: null, quickConv: null, agentPeer: null, agentConv: null, agentMode: 'question', quickModel: load('bridge-cockpit.quickModel', null), rvFilter: 'all', rvSort: 'verdict', rvPicked: [],
   },
   details: { inbox: {}, task: {} },

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
-// Mock mode for frontend development: open index.html?mock=1 (optionally &lang=de,
+// Mock mode for frontend development: open index.html?mock=1 (optionally &lang=de, which
+// also puts the invented data in German,
 // &offline=1 for a relay that is offline, &empty=1 for an empty briefing, &auth=0 for
 // the sign-in panel). Everything here is invented example data in the shape of the
 // contract's /api/state payload (section 11). No request leaves the page, nothing runs.
@@ -8,6 +9,109 @@
 const createMockJev = await import('./jev/logic.js').then(m => m.createMockJev, () => null)
 
 const MIN = 60000
+
+// The invented words in German, for &lang=de (rules/language-policy.md section 3: the English text is
+// the source and the key, German is data beside it, any text without an entry stays English).
+// Only words a reader sees: never an id, a key, a state or a name the page compares.
+const WORDS = {
+  de: {
+    // Today: rows, reasons, headline
+    'Review the demo report': 'Den Demo-Bericht prüfen',
+    'Prepare the alpha release notes': 'Die Notizen zur Alpha-Version vorbereiten',
+    'Tidy the issue labels on the demo board': 'Die Issue-Labels auf dem Demo-Board aufräumen',
+    'Update the setup docs after the config change': 'Die Einrichtungs-Doku nach der Config-Änderung nachziehen',
+    'Sweep old log files in the scratch folder': 'Alte Logdateien im Scratch-Ordner wegräumen',
+    'Write the onboarding guide for the demo project': 'Die Einstiegsanleitung für das Demo-Projekt schreiben',
+    'Tidy the old setup notes': 'Die alten Einrichtungsnotizen aufräumen',
+    'Settle the invoice format with the vendor': 'Das Rechnungsformat mit dem Anbieter klären',
+    'Fix the flaky test in example/repo#12': 'Den wackligen Test in example/repo#12 reparieren',
+    'Refresh the docs index': 'Den Doku-Index auffrischen',
+    'Clean up the old example fixtures': 'Die alten Beispiel-Fixtures aufräumen',
+    'Waiting for the reply on the license question': 'Warten auf die Antwort zur Lizenzfrage',
+    'Idea: dark mode for the weekly report': 'Idee: dunkles Design für den Wochenbericht',
+    'Renew the test certificate': 'Das Testzertifikat erneuern',
+    'due tomorrow': 'fällig morgen',
+    'only you': 'nur du',
+    'tab asks for permission': 'Tab fragt nach Erlaubnis',
+    'needs your yes': 'braucht dein Ja',
+    'changed since 08:40': 'geändert seit 08:40',
+    'may run alone': 'darf allein laufen',
+    '1 in the inbox': '1 im Posteingang',
+    'assigned to you': 'dir zugewiesen',
+    'quiet for 3 days': 'seit 3 Tagen ruhig',
+    'quiet for 12 days': 'seit 12 Tagen ruhig',
+    'asked 2 days ago': 'vor 2 Tagen gefragt',
+    'Nothing waits for you': 'Nichts wartet auf dich',
+    '2 for you today, next: Review the demo report': '2 für dich heute, als Nächstes: Den Demo-Bericht prüfen',
+    'since 08:40: 1 new': 'seit 08:40: 1 neu',
+    'Team call': 'Team-Call',
+    'Review of the demo project': 'Durchsicht des Demo-Projekts',
+    'Inbox': 'Posteingang',
+    'Services: all running': 'Dienste: alle laufen',
+    '2 tasks without a log row for 7 days': '2 Aufgaben seit 7 Tagen ohne Logzeile',
+    'Tabs: 3 suggested': 'Tabs: 3 vorgeschlagen',
+    'Yes given, runs on the next pass: Sweep old log files': 'Ja gegeben, läuft beim nächsten Durchlauf: Alte Logdateien wegräumen',
+    // task checks
+    'The linked issue example/repo#7 was closed as completed on 07.10, every step is checked.':
+      'Das verknüpfte Issue example/repo#7 wurde am 07.10 als erledigt geschlossen, jeder Schritt ist abgehakt.',
+    'No log row, commit or note for 34 days and nothing blocks it.': 'Seit 34 Tagen keine Logzeile, kein Commit, keine Notiz, und nichts blockiert sie.',
+    'The vendor has not answered the question from 02.10 yet (example/repo#9 open).':
+      'Der Anbieter hat die Frage vom 02.10 noch nicht beantwortet (example/repo#9 offen).',
+    // the pages of the briefing profile
+    'Systems': 'Systeme', 'Checks': 'Prüfungen', 'Services': 'Dienste', 'all running': 'alle laufen', 'nothing': 'nichts',
+    'Backup older than 2 days': 'Backup älter als 2 Tage', 'last copy on the external disk is from Tuesday': 'die letzte Kopie auf der externen Platte ist von Dienstag',
+    'Disk space below 15 percent': 'Speicherplatz unter 15 Prozent', 'scratch volume': 'Scratch-Volume',
+    'Trackers': 'Tracker', 'Assigned to me': 'Mir zugewiesen', 'Bridge tasks': 'Bridge-Aufgaben',
+    'example/repo#12 Flaky test in the parser suite': 'example/repo#12 Wackliger Test in der Parser-Suite',
+    'example/repo#15 Add a config switch for the report': 'example/repo#15 Einen Config-Schalter für den Bericht ergänzen',
+    'example/tools#4 Release checklist': 'example/tools#4 Release-Checkliste',
+    'Draft the first two chapters': 'Die ersten zwei Kapitel entwerfen', 'Outline agreed with the team': 'Gliederung mit dem Team abgestimmt',
+    'Outline written, examples collected': 'Gliederung geschrieben, Beispiele gesammelt', 'waits for the new folder layout': 'wartet auf die neue Ordnerstruktur',
+    'Usage': 'Verbrauch', 'Quota': 'Kontingent', 'no account': 'kein Konto', 'Sessions': 'Sitzungen', 'no session': 'keine Sitzung',
+    'Session (5 h): 22 %': 'Sitzung (5 h): 22 %', 'Week, all models: 84 %': 'Woche, alle Modelle: 84 %',
+    'opus · busy · 25 turns · $42.10': 'opus · arbeitet · 25 Züge · $42.10', 'sonnet · idle · 9 turns · $6.80': 'sonnet · ruht · 9 Züge · $6.80',
+    'sonnet · waiting · 4 turns · $1.95': 'sonnet · wartet · 4 Züge · $1.95',
+    'Demo dashboard': 'Demo-Dashboard', 'Docs refresh': 'Doku auffrischen', 'Release notes': 'Release-Notizen',
+    'Dates': 'Termine', 'Calendar': 'Kalender', 'no dates': 'keine Termine', 'Mail': 'Mail', 'mail account token expired': 'Token des Mailkontos abgelaufen',
+    // agent tabs and sessions
+    'Allow edit of RELEASE_NOTES.md?': 'Bearbeiten von RELEASE_NOTES.md erlauben?',
+    'Draft written to the inbox as a result. Anything else?': 'Entwurf als Ergebnis in den Posteingang gelegt. Noch etwas?',
+    'I found three sources. Should I summarise them in team.md?': 'Ich habe drei Quellen gefunden. Soll ich sie in team.md zusammenfassen?',
+    'Running the link check (12 of 40 pages)': 'Linkprüfung läuft (12 von 40 Seiten)', 'Reading the meeting notes': 'Lese die Besprechungsnotizen',
+    'Review the dashboard change': 'Die Dashboard-Änderung prüfen', 'Find where sessions are stored': 'Finden, wo Sitzungen gespeichert werden',
+    'Run the migration tests': 'Die Migrationstests laufen lassen',
+    // chat and relay
+    'My briefing state from the dashboard (09:10): 2 for you today, next: Review the demo report':
+      'Mein Briefing-Stand aus dem Dashboard (09:10): 2 für dich heute, als Nächstes: Den Demo-Bericht prüfen',
+    '1. Review the demo report first, it is due tomorrow and only you can do it.\n2. Give your yes to the two label and docs items, they run alone.\n3. The flaky test can wait until after the team call.':
+      '1. Prüf zuerst den Demo-Bericht, er ist morgen fällig und nur du kannst ihn machen.\n2. Gib den beiden Einträgen zu Labels und Doku dein Ja, sie laufen allein.\n3. Der wacklige Test kann bis nach dem Team-Call warten.',
+    'Example answer from the mock. Seven of eleven steps are done; the next one is the yaml change in this repository.\nNothing was asked for real.':
+      'Beispielantwort aus der Demo. Sieben von elf Schritten sind erledigt, als Nächstes kommt die yaml-Änderung in diesem Repository.\nNichts wurde wirklich gefragt.',
+    'Example answer from the mock: nothing was sent to a real session.\nThe real answer shows here as plain text.':
+      'Beispielantwort aus der Demo: nichts ging an eine echte Sitzung.\nDie echte Antwort steht hier als einfacher Text.',
+    // details behind a row
+    'Invented example detail.\nThe item came from a demo check and carries no real data.':
+      'Erfundenes Beispieldetail.\nDer Eintrag stammt aus einer Demo-Prüfung und enthält keine echten Daten.',
+    'looked at it, fine': 'angesehen, passt',
+    'Onboarding guide for the demo project': 'Einstiegsanleitung für das Demo-Projekt', 'team call on 2026-09-30': 'Team-Call am 2026-09-30',
+    'Goal': 'Ziel', 'Next': 'Als Nächstes', 'Log': 'Log',
+    'A new team member sets up the demo project in under an hour, with every step written down.':
+      'Ein neues Teammitglied richtet das Demo-Projekt in unter einer Stunde ein, jeder Schritt ist aufgeschrieben.',
+    '- Draft the first two chapters\n- Collect screenshots from the example setup': '- Die ersten zwei Kapitel entwerfen\n- Screenshots aus dem Beispiel-Setup sammeln',
+    '2026-10-08: outline written, examples collected\n2026-10-03: task opened': '2026-10-08: Gliederung geschrieben, Beispiele gesammelt\n2026-10-03: Aufgabe angelegt',
+    'Task opened after the team call': 'Aufgabe nach dem Team-Call angelegt',
+    'Mock: 3 snapshots, latest 09:00': 'Demo: 3 Abzüge, der neueste von 09:00',
+  },
+}
+
+/** Every string in `value` that has an entry in the table, swapped for it; anything else unchanged */
+function localize(value, words) {
+  if (!words) return value
+  if (typeof value === 'string') return Object.hasOwn(words, value) ? words[value] : value
+  if (Array.isArray(value)) return value.map(v => localize(v, words))
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, localize(v, words)]))
+  return value
+}
 
 function row(over) {
   return {
@@ -187,8 +291,12 @@ export function buildState(now = Date.now(), opts = {}) {
     },
     {
       id: 'dates', title: 'Dates', badge: { kind: 'none' }, sections: [
-        { id: 'calendar', kind: 'calendar', title: 'Calendar', status: 'skipped', reason: '', alarm: false, empty: 'no dates', count: 0, total: 0,
-          weight: 0, bad: 0, as_of: null, more: 0, items: [] },
+        // the dates lie ahead of the moment the demo opens, so the start page always has a next one
+        { id: 'calendar', kind: 'calendar', title: 'Calendar', status: 'ok', reason: '', alarm: false, empty: 'no dates', count: 2, total: 2,
+          weight: 0, bad: 0, as_of: hhmm(now - 2 * MIN), more: 0, items: [
+            item(0, { title: 'Team call', when: hhmm(now + 70 * MIN), at: new Date(now + 70 * MIN).toISOString() }),
+            item(1, { title: 'Review of the demo project', when: hhmm(now + 250 * MIN), at: new Date(now + 250 * MIN).toISOString() }),
+          ] },
         { id: 'mail', kind: 'mail', title: 'Mail', status: 'error', reason: 'mail account token expired', alarm: false, empty: 'nothing', count: 0, total: 0,
           weight: 0, bad: 0, as_of: null, more: 0, items: [] },
       ],
@@ -217,7 +325,7 @@ export function buildState(now = Date.now(), opts = {}) {
   ]
 
   const relayOnline = !opts.offline
-  return {
+  return localize({
     ok: true,
     server: { version: '0.1.0', started_ms: now - 50 * MIN },
     model: {
@@ -225,7 +333,7 @@ export function buildState(now = Date.now(), opts = {}) {
       collected_at: hhmm(now - 2 * MIN), collected_ms: now - 2 * MIN, full_ms: now - 2 * MIN, is_full: true,
       headline: empty ? 'Nothing waits for you' : '2 for you today, next: Review the demo report',
       since: empty ? null : 'since 08:40: 1 new', skipped: [],
-      agenda: empty ? [] : [{ when: '10:00', title: 'Team call' }, { when: '14:30', title: 'Review of the demo project' }],
+      agenda: empty ? [] : [{ when: hhmm(now + 70 * MIN), title: 'Team call' }, { when: hhmm(now + 250 * MIN), title: 'Review of the demo project' }],
       status: [{ title: 'Systems', count: empty ? 0 : 1, probe: true, state: 'ok' }, { title: 'Inbox', count: empty ? 0 : 6, probe: false, state: 'ok' }],
       extras: { clear: ['Services: all running'], hygiene: empty ? [] : ['2 tasks without a log row for 7 days'], workplace: empty ? null : 'Tabs: 3 suggested' },
       counts: { waiting_tabs: empty ? 0 : 2, long_tabs: empty ? 0 : 1, working_tabs: empty ? 0 : 2, now: empty ? 0 : 2, give: empty ? 0 : 3, work: empty ? 0 : 4, later: empty ? 0 : 2, hidden: hidden.length },
@@ -282,7 +390,7 @@ export function buildState(now = Date.now(), opts = {}) {
           { id: 'c03f9aa', type: 'general-purpose', description: 'Run the migration tests', since_ms: now - 6 * MIN, background: true }] },
         workflows: [] },
     ] },
-  }
+  }, WORDS[opts.lang])
 }
 
 function inboxDetail(id, state) {
@@ -327,9 +435,10 @@ export function createMockTransport(opts = {}) {
   let handlers = {}
   let seq = state.model.seq
   const jev = createMockJev ? createMockJev() : null   // the Jev tab's mock: the server's once-per-day rule, invented tokens
-  const emit = (name, payload) => { if (handlers[name]) handlers[name](payload) }
+  const words = WORDS[opts.lang]
+  const emit = (name, payload) => { if (handlers[name]) handlers[name](localize(payload, words)) }
   const note = (text, tone = 'info') => emit('note', { at: hhmm(now()), text, tone })
-  const ok = data => ({ status: 200, ok: true, data, error: null })
+  const ok = data => ({ status: 200, ok: true, data: localize(data, words), error: null })
   const fail = (status, code, message, extra = {}) => ({ status, ok: false, data: { ok: false, ...extra, error: { code, message, field: null } }, error: { code, message, field: null } })
 
   const removeRows = keys => {

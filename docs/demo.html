@@ -191,6 +191,14 @@ footer.foot code{font-family:var(--font-mono)}
   .line{opacity:1!important;transform:none!important}
 }
 @media print{ header.nav,#tabs,.term-foot{display:none!important} .line{opacity:1!important;transform:none!important} #screen{min-height:auto} }
+/* pointer to the cockpit demo, under the terminal */
+.dh-next{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:14px 24px;margin:36px auto 72px;max-width:56rem;
+  border:1px solid var(--border);border-left:3px solid var(--accent-text);border-radius:var(--r-lg);background:var(--surface-subtle);padding:18px 22px}
+.dh-next p{margin:0;font-size:15px;line-height:1.6;color:var(--on-surface);max-width:40rem}
+.dh-next p strong{color:var(--primary)}
+.dh-next .links{display:flex;flex-wrap:wrap;gap:8px 18px}
+.dh-next a{font-size:14.5px;font-weight:500;color:var(--accent-text);text-decoration:none;white-space:nowrap}
+.dh-next a:hover{text-decoration:underline}
 </style>
 <noscript><style>.line{opacity:1!important;transform:none!important}.caret{display:none}</style></noscript>
 </head>
@@ -458,6 +466,32 @@ footer.foot code{font-family:var(--font-mono)}
     <span data-lang="en">The live instance of <code>BKS-Lab</code>, the team behind BKS open-bridge. Branding, repos and stack are real, though chapter ④ shows an earlier onboarding revision (see note above); client names are kept generic and there is <b>no customer data, no secrets, no PII</b>. Formats mirror the live <code>briefing</code>, session-start, coordinator/sub-agent and <code>bridge-onboard</code> flows.</span>
     <span data-lang="de">Die echte Instanz von <code>BKS-Lab</code>, dem Team hinter BKS open-bridge. Branding, Repos und Stack sind echt, Kapitel ④ zeigt allerdings einen früheren Stand des Onboardings (siehe Hinweis oben). Kundennamen bleiben generisch, und es gibt <b>keine Kundendaten, keine Secrets, keine personenbezogenen Daten</b>. Die Formate folgen den echten Abläufen von <code>briefing</code>, Sessionstart, Koordinator mit Sub-Agent und <code>bridge-onboard</code>.</span>
   </p>
+
+  <div class="dh-next" data-reveal>
+    <p><span data-lang="en"><strong>This was the terminal.</strong> The same Bridge also has a page in the browser, the cockpit, and its demo runs live with invented data.</span><span data-lang="de"><strong>Das war das Terminal.</strong> Dieselbe Bridge hat auch eine Seite im Browser, das Cockpit, und seine Demo läuft live mit erfundenen Daten.</span></p>
+    <div class="links">
+      <a id="dh-cockpit-demo" href="cockpit-demo/index.html"><span data-lang="en">Try the cockpit demo →</span><span data-lang="de">Cockpit-Demo ausprobieren →</span></a>
+      <a href="cockpit.html"><span data-lang="en">About the cockpit</span><span data-lang="de">Mehr zum Cockpit</span></a>
+    </div>
+    <script>
+    /* The demo opens in the language and theme of this page, as on cockpit.html.
+       The address is built here, so no static link carries a query. */
+    (function(){
+      var a = document.getElementById("dh-cockpit-demo");
+      if(!a) return;
+      var r = document.documentElement;
+      function sync(){
+        var lang = r.getAttribute("data-active-lang") === "de" ? "de" : "en";
+        var theme = r.classList.contains("dark") ? "dark" : "light";
+        a.setAttribute("href", "cockpit-demo/index.html?mock=1&lang=" + lang + "&theme=" + theme);
+      }
+      sync();
+      if("MutationObserver" in window){
+        new MutationObserver(sync).observe(r, { attributes:true, attributeFilter:["class","data-active-lang"] });
+      }
+    })();
+    </script>
+  </div>
   </div>
 
 </main>

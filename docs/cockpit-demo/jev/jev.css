@@ -1,0 +1,119 @@
+/* SPDX-License-Identifier: MIT */
+/* Jev page (scripts/web/jev/page.js). Colours only from tokens.css; no transition and no keyframes
+   on anything the scene moves, the frame function owns those values (explainer-video rule 4).
+   That includes the opacity of glows and labels: a CSS opacity here would beat the attribute the
+   frame writes. */
+
+.jev-page { container-type: inline-size; --jev-me: var(--warning); --jev-give: var(--info); --jev-quick: var(--success); --jev-hot: var(--danger); }
+.jev-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.jev-sub { max-width: 70ch; margin-top: 4px; }
+.jev-actions { display: flex; gap: 8px; flex: 0 0 auto; }
+.jev-error { border: 1px solid var(--danger); color: var(--danger); border-radius: var(--radius-lg); padding: 10px 14px;
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface-raised)); }
+
+.jev-grid { display: grid; grid-template-columns: minmax(0, 1.75fr) minmax(280px, 1fr); gap: 16px; align-items: start; }
+/* by the page's own width, not the window's: the task detail beside the page narrows it */
+@container (max-width: 820px) { .jev-grid { grid-template-columns: minmax(0, 1fr); } }
+
+.jev-stage { padding: 14px 16px 12px; overflow: hidden; position: relative;
+  background:
+    radial-gradient(circle at 50% 45%, color-mix(in srgb, var(--accent) 9%, transparent), transparent 60%),
+    var(--surface-raised); }
+.jev-svg { display: block; width: 100%; height: auto; max-height: 64vh; font-family: var(--font-ui); }
+
+/* --- head line above the scene */
+.jev-head { display: flex; flex-direction: column; gap: 8px; margin-bottom: 4px; min-height: 64px; }
+.jev-first { font-size: var(--text-h4); font-weight: 600; color: var(--on-surface); min-height: 1.4em; line-height: 1.4; }
+.jev-cursor { color: var(--accent); margin-left: 2px; }
+.jev-stats { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; color: var(--on-surface-muted); font-size: var(--text-sm); }
+.jev-stats b { color: var(--on-surface); font-variant-numeric: tabular-nums; display: inline-block; min-width: 3ch; text-align: right; }
+.jev-chipline { display: inline-flex; flex-wrap: wrap; gap: 6px; }
+.jev-num-wide { min-width: 5ch; }
+/* what the rating used: tokens, today's total, and the honest line about the price */
+.jev-cost { position: relative; display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 4px;
+  padding: 1px 8px; margin: 0 -8px; border-radius: var(--radius-full); }
+.jev-cost-glow { position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+  background: color-mix(in srgb, var(--accent) 18%, transparent); }
+.jev-cost > :not(.jev-cost-glow) { position: relative; }
+.jev-cost-today { color: var(--on-surface-muted); }
+.jev-price { color: var(--on-surface-faint); font-size: 12px; }
+.jev-pulse { fill: none; stroke: var(--accent); stroke-width: 1.5; }
+
+/* --- reading loop */
+.jev-wire { stroke: var(--border); stroke-width: 1; stroke-dasharray: 2 6; }
+.jev-spark { fill: var(--accent); }
+.jev-chip { fill: var(--on-surface-muted); font-size: 18px; }
+.jev-orbit { fill: none; stroke: var(--accent); stroke-width: 2; stroke-dasharray: 18 7 3 7; opacity: .55; }
+.jev-orbit-2 { stroke: var(--primary); stroke-width: 1.2; stroke-dasharray: 2 9; opacity: .5; }
+.jev-core { fill: url(#jev-core-fill); stroke: var(--accent); stroke-width: 1.5; }
+.jev-stop-a { stop-color: var(--accent-subtle); }
+.jev-stop-b { stop-color: var(--primary); }
+.jev-core-label { fill: var(--on-primary); font-size: 20px; font-weight: 700; letter-spacing: .04em; }
+.jev-reading { fill: var(--on-surface-muted); font-size: 15px; font-family: var(--font-mono); }
+
+/* --- matrix */
+.jev-quad { stroke: none; }
+.jev-quad-now { fill: color-mix(in srgb, var(--jev-hot) 11%, transparent); }
+.jev-quad-plan { fill: color-mix(in srgb, var(--accent) 10%, transparent); }
+.jev-quad-hand { fill: color-mix(in srgb, var(--jev-give) 9%, transparent); }
+.jev-quad-drop { fill: color-mix(in srgb, var(--on-surface-faint) 8%, transparent); }
+.jev-qlabel { font-size: 15px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; fill: var(--on-surface-faint); }
+.jev-qlabel-now { fill: var(--jev-hot); }
+.jev-axis { stroke: var(--border-strong); stroke-width: 1.5; }
+.jev-axis-label { fill: var(--on-surface-muted); font-size: 13px; font-family: var(--font-mono); }
+
+.jev-trail { stroke-width: 2; stroke-linecap: round; }
+.jev-trail.jev-me { stroke: var(--jev-me); }
+.jev-trail.jev-delegate { stroke: var(--jev-give); }
+
+.jev-dot { cursor: pointer; }
+.jev-dot-core { stroke: var(--surface-raised); stroke-width: 2; }
+.jev-me .jev-dot-core { fill: var(--jev-me); }
+.jev-delegate .jev-dot-core { fill: var(--jev-give); }
+.jev-me .jev-dot-glow { fill: color-mix(in srgb, var(--jev-me) 22%, transparent); }
+.jev-delegate .jev-dot-glow { fill: color-mix(in srgb, var(--jev-give) 22%, transparent); }
+.jev-dot-ring { fill: none; stroke: var(--on-surface-muted); stroke-width: 2; transform: rotate(-90deg); }
+.jev-dot-rank { fill: var(--surface-raised); font-size: 11px; font-weight: 700; font-family: var(--font-mono); pointer-events: none; }
+.jev-dot-label { fill: var(--on-surface); font-size: 13px; font-weight: 600; paint-order: stroke; stroke: var(--surface-raised);
+  stroke-width: 4px; stroke-linejoin: round; pointer-events: none; }
+.jev-ripple { fill: none; stroke: var(--jev-hot); stroke-width: 2; }
+.jev-crown { fill: var(--jev-hot); }
+
+.jev-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 6px; }
+.jev-note { color: var(--on-surface); }
+.jev-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; }
+.jev-swatch.jev-me { background: var(--jev-me); }
+.jev-swatch.jev-delegate { background: var(--jev-give); }
+
+/* --- plan */
+.jev-side { padding: 14px 14px 10px; }
+.jev-side-title { font-size: var(--text-label); text-transform: uppercase; letter-spacing: .08em; color: var(--on-surface-muted); margin: 2px 4px 10px; }
+.jev-plan { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.jev-row { display: flex; gap: 10px; align-items: flex-start; padding: 8px 8px; border-radius: var(--radius-lg); will-change: transform; }
+.jev-row.is-hover { background: var(--surface-muted); }
+.jev-row.is-selected { background: var(--accent-subtle); }
+.jev-rank { flex: 0 0 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 700;
+  background: var(--surface-muted); color: var(--on-surface); }
+.jev-rank.jev-me { background: color-mix(in srgb, var(--jev-me) 22%, var(--surface-raised)); }
+.jev-rank.jev-delegate { background: color-mix(in srgb, var(--jev-give) 20%, var(--surface-raised)); }
+.jev-row-main { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 5px; }
+.jev-row-title { font-size: var(--text-sm); color: var(--on-surface); line-height: 1.35; overflow-wrap: anywhere; }
+button.jev-row-title { font-weight: 400; color: var(--on-surface); }
+button.jev-row-title:hover { color: var(--secondary); }
+.jev-row-act { flex: 0 0 auto; min-height: 22px; padding: 0 7px; margin-top: -1px; }
+/* "advise me" sits on every row: shown on the row in hand (hover, focus, open detail), the tab jump always */
+/* the quiet one takes no width: it lies over the row's top right corner, so every bar keeps its length */
+.jev-row { position: relative; }
+.jev-row-act.is-quiet { opacity: 0; position: absolute; top: 6px; right: 6px; background: var(--surface-raised); }
+.jev-row.is-hover .jev-row-act.is-quiet, .jev-row.is-selected .jev-row-act.is-quiet, .jev-row-act.is-quiet:focus-visible { opacity: 1; }
+.jev-row-meta { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.jev-pill { font-size: 11.5px; padding: 1px 8px; border-radius: var(--radius-full); border: 1px solid var(--border); color: var(--on-surface-muted); }
+.jev-pill.jev-me { border-color: var(--jev-me); color: var(--on-surface); }
+.jev-pill.jev-delegate { border-color: var(--jev-give); color: var(--on-surface); }
+.jev-pill.jev-quick { border-color: var(--jev-quick); color: var(--on-surface); }
+.jev-conf { font-size: 11px; color: var(--on-surface-faint); }
+.jev-bar { display: block; height: 4px; border-radius: var(--radius-full); background: var(--surface-muted); overflow: hidden; }
+.jev-bar-fill { display: block; height: 100%; width: 100%; transform-origin: left center; transform: scaleX(0); border-radius: inherit; }
+.jev-bar-fill.jev-me { background: var(--jev-me); }
+.jev-bar-fill.jev-delegate { background: var(--jev-give); }
+.jev-plan-ghost .jev-row { opacity: .6; }
