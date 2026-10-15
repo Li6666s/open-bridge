@@ -15,7 +15,8 @@ What it writes into docs/cockpit-demo/:
 - index.html, the source page with three changes: a tiny inline script as the first
   thing in <head> that adds mock=1 to the address when it is missing (app.js reads it
   when the module loads, so the bare address cockpit-demo/ opens the demo with invented
-  data and makes no request), a robots noindex, and the title "Bridge Cockpit demo".
+  data and makes no request), a robots noindex, the site's icon (the cockpit page has
+  none, and a missing one is a 404 in the console), and the title "Bridge Cockpit demo".
 
     python3 scripts/build-cockpit-demo.py --write    # rewrite the copy, remove stale files
     python3 scripts/build-cockpit-demo.py --check    # exit 1 and name what drifted
@@ -55,7 +56,8 @@ def demo_index(source: str) -> str:
         raise SystemExit("build-cockpit-demo: scripts/web/index.html no longer has the expected <head> or <title>")
     page = source.replace(head, head + BOOT + "\n", 1)
     page = page.replace("<title>Bridge Cockpit</title>",
-                        '<meta name="robots" content="noindex">\n<title>Bridge Cockpit demo</title>', 1)
+                        '<meta name="robots" content="noindex">\n<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">\n'
+                        '<title>Bridge Cockpit demo</title>', 1)
     return page
 
 

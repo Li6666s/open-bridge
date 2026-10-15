@@ -94,6 +94,8 @@ def test_index_html_turns_mock_mode_on_first_thing():
     assert "replaceState" in boot and "'mock'" in boot and "'1'" in boot
     assert '<meta name="robots" content="noindex">' in page
     assert "<title>Bridge Cockpit demo</title>" in page
+    assert '<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">' in page
+    assert (ROOT / "docs" / "assets" / "favicon.svg").is_file()
     assert '<script type="module" src="app.js"></script>' in page
     assert page.index("replaceState") < page.index('src="app.js"')
 
