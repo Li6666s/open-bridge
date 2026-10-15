@@ -1,0 +1,646 @@
+<!DOCTYPE html>
+<!-- ============================================================================
+     BKS open-bridge: cockpit.html  (feature page)
+     Built on the shared shell used by index.html / concepts.html.
+     Self-contained single file, GitHub-Pages-ready, fully offline, native UTF-8.
+     Bilingual EN/DE (data-lang spans + L toggle), tool-neutral, no external assets.
+     ============================================================================ -->
+<html lang="en" data-active-lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BKS open-bridge: Cockpit</title>
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="alternate icon" href="assets/favicon.ico" sizes="16x16 32x32 48x48">
+<meta name="description" content="The Bridge cockpit in BKS open-bridge (early version, alpha): a local web page on 127.0.0.1 that shows your briefing, inbox and tasks, agent tabs, Claude sessions, workers, machines and token use, and acts on them with a click through the Bridge's own scripts.">
+<!-- Social / Open Graph -->
+<meta property="og:type" content="website">
+<meta property="og:title" content="BKS open-bridge: Cockpit">
+<meta property="og:description" content="A local web page for the whole Bridge: briefing, work, agent tabs, sessions, workers and tokens, steered with a click. Early version (alpha).">
+<meta property="og:url" content="https://bks-lab.github.io/open-bridge/cockpit.html">
+<meta property="og:image" content="https://bks-lab.github.io/open-bridge/social-preview.png">
+<meta property="og:image:width" content="1280">
+<meta property="og:image:height" content="640">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="BKS open-bridge: Cockpit">
+<meta name="twitter:description" content="A local web page that shows and steers the whole Bridge. Early version (alpha).">
+
+<!-- Anti-FOUC pre-paint: theme + language set BEFORE the stylesheet paints. -->
+<script>
+(function(){
+  var r = document.documentElement;
+  var pref = "system";
+  try{
+    var t = localStorage.getItem("ob-theme");
+    if(t === "light" || t === "dark") pref = t;
+  }catch(e){}
+  /* Three states, and "system" is the default. Reading the media query here
+     rather than only at first paint is what makes the system setting the
+     default rather than a one time seed. */
+  if(pref === "dark" || (pref === "system" && window.matchMedia &&
+     window.matchMedia("(prefers-color-scheme: dark)").matches)){
+    r.classList.add("dark");
+  }
+  r.setAttribute("data-theme-pref", pref);
+  try{
+    var l = localStorage.getItem("ob-lang");
+    var lang = (l === "de") ? "de" : (r.getAttribute("lang") || "en");
+    r.setAttribute("data-active-lang", lang); r.setAttribute("lang", lang);
+  }catch(e){ r.setAttribute("data-active-lang","en"); }
+})();
+</script>
+
+<link rel="stylesheet" href="assets/brand.css">
+<noscript><style>.reveal,.reset-line{opacity:1!important;transform:none!important}</style></noscript>
+
+<!-- ============ page-specific styles (cockpit.html) ============ -->
+<style>
+:target{scroll-margin-top:84px}
+[id]{scroll-margin-top:84px}
+code, .mono{
+  font-family:var(--mono);font-size:0.86em;background:var(--code-bg);
+  border:1px solid var(--border-subtle);border-radius:var(--r-sm);padding:1px 6px;color:var(--on-surface);
+}
+.ck-sec{padding-block:88px}
+.grp{max-width:46rem;margin:0 auto 22px;text-align:center}
+.grp .eyebrow{color:var(--accent-text)}
+.grp .h2{margin-top:8px}
+.block{max-width:68ch;margin:0 auto 40px}
+.block p{font-size:16.5px;line-height:1.7;color:var(--on-surface);margin-bottom:14px}
+.block p:last-child{margin-bottom:0}
+
+/* hero */
+.ck-hero .lede{max-width:64ch}
+.alpha{
+  display:inline-flex;align-items:center;gap:8px;margin-bottom:14px;
+  font-size:12.5px;font-weight:600;letter-spacing:0.05em;text-transform:uppercase;
+  padding:5px 12px;border-radius:var(--r-full);
+  border:1px solid var(--attention);color:var(--attention-text);
+  background:color-mix(in srgb,var(--attention) 10%,var(--surface));
+}
+.alpha::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--attention)}
+.lead-def{
+  margin-top:30px;max-width:var(--prose-w);
+  border:1px solid var(--border);border-left:3px solid var(--attention);
+  border-radius:var(--r-lg);background:var(--surface-subtle);padding:22px 28px;
+}
+.lead-def .k{font-size:13px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:var(--attention-text)}
+.lead-def p.def{margin-top:10px;font-size:16.5px;line-height:1.6;color:var(--on-surface)}
+.lead-def .more{margin-top:12px;font-size:15px}
+.lead-def .more a{font-weight:500;text-decoration:none}
+.lead-def .more a:hover{text-decoration:underline}
+.ck-hero-grid{display:block}
+@media (max-width:1099px){
+  .ck-hero .prose{max-width:var(--prose-w);margin-inline:auto}
+  .ck-hero .lead-def{margin-inline:auto}
+}
+@media (min-width:1100px){
+  .ck-hero-grid{display:grid;grid-template-columns:minmax(0,34rem) minmax(0,36rem);justify-content:space-between;gap:56px;align-items:center}
+  .ck-hero .prose{max-width:none;margin:0}
+  .ck-hero .shot{margin:0}
+}
+
+/* screenshots */
+.shot{margin:0 auto;max-width:64rem}
+.shot .frame{border:1px solid var(--border);border-radius:var(--r-lg);overflow:hidden;background:var(--surface-subtle)}
+.shot img{width:100%;height:auto}
+.shot .frame{line-height:0}
+.shot figcaption{margin-top:12px;font-size:14px;line-height:1.6;color:var(--secondary)}
+.shot figcaption strong{color:var(--primary);font-weight:600}
+.shot.phone{max-width:20rem}
+.shot-pair{max-width:var(--hero-w);margin:0 auto;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:24px}
+.shot-pair .shot{max-width:none}
+.shot-row{max-width:var(--hero-w);margin:0 auto;display:grid;grid-template-columns:minmax(0,1fr) 20rem;gap:32px;align-items:start}
+.shot-row .shot{max-width:none}
+@media (max-width:900px){ .shot-pair,.shot-row{grid-template-columns:1fr} .shot-row .phone{max-width:20rem;margin-inline:auto} }
+
+/* cards */
+.cards{max-width:var(--hero-w);margin:0 auto;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px}
+.cards.two{grid-template-columns:repeat(2,minmax(0,1fr))}
+.card2{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-lg);padding:24px 26px}
+.card2 .n{font-family:var(--mono);font-size:13px;font-weight:600;color:var(--accent-text);letter-spacing:0.04em;margin-bottom:8px}
+.card2 h3{font-size:18px;font-weight:600;line-height:1.3;color:var(--primary);margin-bottom:10px}
+.card2 p{font-size:15px;line-height:1.65;color:var(--on-surface);margin:0}
+.card2 .tag{display:inline-block;margin-top:12px;font-size:12px;font-weight:600;letter-spacing:0.03em;padding:3px 10px;border-radius:var(--r-full);border:1px solid var(--border);background:var(--surface-subtle);color:var(--secondary)}
+.card2.off{border-top:3px solid var(--attention)}
+@media (max-width:900px){ .cards,.cards.two{grid-template-columns:1fr} }
+
+/* terminal */
+.term{max-width:52rem;margin:0 auto}
+.code-label{display:flex;align-items:center;justify-content:space-between;gap:12px;font-family:var(--mono);font-size:12px;color:var(--secondary);padding:0 4px 8px}
+.code{font-family:var(--mono);font-size:13.5px;line-height:1.7;background:var(--surface-subtle);border:1px solid var(--border);border-radius:var(--r-lg);padding:20px 22px;overflow-x:auto;color:var(--on-surface);white-space:pre}
+html.dark .code{background:var(--code-bg)}
+.code .cmt{color:var(--secondary)}
+.code .k{color:var(--accent-text);font-weight:600}
+.term .after{max-width:68ch;margin:16px auto 0;font-size:14px;line-height:1.6;color:var(--secondary)}
+.term .after a{color:var(--accent-text);text-decoration:none;font-weight:500}
+.term .after a:hover{text-decoration:underline}
+
+.note{max-width:68ch;margin:28px auto 0;border:1px solid var(--border);border-left:3px solid var(--attention);border-radius:var(--r-lg);background:var(--surface);padding:20px 24px}
+.note .k{font-size:12px;font-weight:600;letter-spacing:0.05em;text-transform:uppercase;color:var(--attention-text);margin-bottom:8px}
+.note p{font-size:15px;line-height:1.65;color:var(--on-surface);margin:0}
+
+.pointers{max-width:var(--prose-w);margin:0 auto;display:flex;flex-wrap:wrap;justify-content:center;gap:10px}
+.pointers a{text-decoration:none;color:var(--accent-text);padding:8px 14px;border-radius:var(--r-full);border:1px solid var(--border);background:var(--surface-subtle);font-size:14px;font-weight:500}
+.pointers a:hover{background:var(--accent-soft)}
+
+@media (max-width:640px){
+  .ck-sec{padding-block:60px}
+  .grp{text-align:left}
+  .pointers{justify-content:flex-start}
+}
+@media (max-width:560px){ .lead-def{padding:20px} .card2{padding:20px} }
+</style>
+</head>
+<body>
+
+
+
+<!-- ======================= STICKY HEADER (shared) ======================= -->
+<header class="nav">
+  <div class="nav-inner">
+    <a class="wordmark" href="index.html">open<span class="text-gradient">-bridge</span></a>
+    <nav class="site-nav" aria-label="Site">
+      <a href="index.html"><span data-lang="en">Home</span><span data-lang="de">Start</span></a>
+      <a href="demo.html"><span data-lang="en">Demo</span><span data-lang="de">Demo</span></a>
+      <a href="use-cases.html"><span data-lang="en">Use Cases</span><span data-lang="de">Anwendungsfälle</span></a>
+      <a href="concepts.html"><span data-lang="en">Concepts</span><span data-lang="de">Konzepte</span></a>
+      <a href="workspaces.html"><span data-lang="en">Workspaces</span><span data-lang="de">Workspaces</span></a>
+      <a href="workloads.html"><span data-lang="en">Workloads</span><span data-lang="de">Workloads</span></a>
+      <a href="agents.html"><span data-lang="en">Agents</span><span data-lang="de">Agents</span></a>
+      <a class="active" aria-current="page" href="cockpit.html"><span data-lang="en">Cockpit</span><span data-lang="de">Cockpit</span></a>
+      <a href="explore.html"><span data-lang="en">Explore</span><span data-lang="de">Erkunden</span></a>
+      <a href="changelog.html"><span data-lang="en">Changelog</span><span data-lang="de">Changelog</span></a>
+    </nav>
+    <div class="nav-spacer"></div>
+    <div class="nav-chips">
+      <a class="chip" href="https://github.com/bks-lab/open-bridge" target="_blank" rel="noopener" aria-label="GitHub repository">
+        <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+        <span class="chip-label">GitHub</span>
+      </a>
+      <a class="chip" href="index.html#license" aria-label="MIT license">MIT</a>
+      <div class="seg" role="group" aria-label="Language / Sprache">
+        <button id="lang-en" type="button" aria-pressed="true" title="Toggle language (press L)">EN</button>
+        <button id="lang-de" type="button" aria-pressed="false" title="Sprache umschalten (Taste L)">DE</button>
+      </div>
+      <button class="icon-btn" id="theme-toggle" aria-label="Toggle light / dark theme (T)" title="Toggle theme (press T)">
+        <svg class="auto" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 010 18z" fill="currentColor" stroke="none"/></svg>
+        <svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg>
+        <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+<script defer src="assets/site-nav.js"></script>
+<script defer src="assets/site-nav.js"></script>
+
+<main id="top">
+
+  <section class="page-hero ck-hero">
+    <div class="container ck-hero-grid">
+      <div class="ck-hero-text">
+        <div class="prose">
+          <span class="alpha"><span data-lang="en">Early version (alpha)</span><span data-lang="de">Frühe Version (Alpha)</span></span>
+          <p class="eyebrow" data-lang="en">Feature</p>
+          <p class="eyebrow" data-lang="de">Feature</p>
+          <h1 class="h1">Cockpit</h1>
+          <p class="lede" data-lang="en">The cockpit is one browser tab that shows what is going on in your Bridge and lets you act on it. It runs on your own computer and nowhere else.</p>
+          <p class="lede" data-lang="de">Das Cockpit ist ein Browser-Tab, der zeigt, was in deiner Bridge los ist, und dich direkt handeln lässt. Es läuft auf deinem eigenen Rechner und nirgends sonst.</p>
+        </div>
+
+        <div class="lead-def" data-reveal>
+          <div class="k" data-lang="en">Still being extended</div>
+          <div class="k" data-lang="de">Wird noch ausgebaut</div>
+          <p class="def" data-lang="en">The cockpit works and is used daily, but it is young. Pages, buttons and settings still change. Expect rough edges, and please report what breaks or confuses you as an issue.</p>
+          <p class="def" data-lang="de">Das Cockpit funktioniert und wird täglich benutzt, ist aber jung. Seiten, Knöpfe und Einstellungen ändern sich noch. Rechne mit Ecken und Kanten und melde bitte als Issue, was kaputtgeht oder verwirrt.</p>
+          <p class="more">
+            <a href="https://github.com/bks-lab/open-bridge/blob/main/docs/bridge-cockpit.md" target="_blank" rel="noopener"><span data-lang="en">Read the full cockpit guide →</span><span data-lang="de">Den ganzen Cockpit-Guide lesen →</span></a>
+          </p>
+        </div>
+      </div>
+
+      <figure class="shot " data-reveal>
+  <div class="frame"><img data-lang="en" src="assets/cockpit/light-start.jpg" width="1600" height="1000" loading="lazy" decoding="async" alt="The cockpit start page in light mode: a greeting, the headline of the day, a field to ask the chat, and a row of tiles around the bridge core, each tile a way into a page."><img data-lang="de" src="assets/cockpit/light-start.jpg" width="1600" height="1000" loading="lazy" decoding="async" alt="Die Cockpit-Startseite im hellen Modus: eine Begrüßung, die Schlagzeile des Tages, ein Feld für Fragen an den Chat und eine Reihe von Kacheln um den Bridge-Kern, jede Kachel ein Zugang zu einer Seite."></div>
+  <figcaption><span data-lang="en"><strong>Start.</strong> The way in: the day in one line, a field to ask, and tiles that open each page. Demo data.</span><span data-lang="de"><strong>Start.</strong> Der Einstieg: der Tag in einer Zeile, ein Feld zum Fragen und Kacheln, die jede Seite öffnen. Demodaten.</span></figcaption>
+</figure>
+    </div>
+  </section>
+
+  <section class="alt ck-sec" id="what">
+    <div class="container">
+      <div class="grp" data-reveal>
+        <p class="eyebrow" data-lang="en">What it is</p>
+        <p class="eyebrow" data-lang="de">Was es ist</p>
+        <h2 class="h2" data-lang="en">One page for the whole Bridge</h2>
+        <h2 class="h2" data-lang="de">Eine Seite für die ganze Bridge</h2>
+      </div>
+      <div class="block" data-reveal>
+<p data-lang="en">A local web page, served only on <code>127.0.0.1</code>. It brings together what you otherwise look up in many places, and it acts on it with a click.</p>
+<p data-lang="de">Eine lokale Webseite, die nur auf <code>127.0.0.1</code> antwortet. Sie bringt zusammen, was du sonst an vielen Stellen nachschlägst, und handelt auf Klick.</p>
+      </div>
+      <div class="cards" data-reveal="stagger">
+        <div class="card2 ">
+          <div class="n">01</div>
+          <h3><span data-lang="en">Briefing, inbox and tasks</span><span data-lang="de">Briefing, Inbox und Aufgaben</span></h3>
+          <p data-lang="en">What waits for you, what you can hand off, and your tasks, on one page.</p>
+          <p data-lang="de">Was auf dich wartet, was du übergeben kannst und deine Aufgaben, auf einer Seite.</p>
+        </div>
+        <div class="card2 ">
+          <div class="n">02</div>
+          <h3><span data-lang="en">Agent tabs and sessions</span><span data-lang="de">Agent-Tabs und Sitzungen</span></h3>
+          <p data-lang="en">Which agent tabs run, which one asks for a yes, and which Claude sessions are open with their subagents.</p>
+          <p data-lang="de">Welche Agent-Tabs laufen, welcher ein Ja braucht und welche Claude-Sitzungen mit ihren Subagenten offen sind.</p>
+        </div>
+        <div class="card2 ">
+          <div class="n">03</div>
+          <h3><span data-lang="en">Workers, machines, tokens</span><span data-lang="de">Worker, Maschinen, Tokens</span></h3>
+          <p data-lang="en">The background workers, the machines of your fleet, and how many tokens the week has used.</p>
+          <p data-lang="de">Die Hintergrund-Worker, die Maschinen deiner Flotte und wie viele Tokens die Woche verbraucht hat.</p>
+        </div>
+      </div>
+      <div class="note" data-reveal>
+        <div class="k"><span data-lang="en">Acts through the Bridge's own scripts</span><span data-lang="de">Handelt über die eigenen Skripte der Bridge</span></div>
+        <p data-lang="en">A click on a button runs a script the Bridge already has, such as <code>inbox.py</code>, <code>task.py</code> or <code>workplace.py</code>. The cockpit adds no second way to change things.</p>
+<p data-lang="de">Ein Klick auf einen Knopf startet ein Skript, das die Bridge ohnehin hat, etwa <code>inbox.py</code>, <code>task.py</code> oder <code>workplace.py</code>. Das Cockpit bringt keinen zweiten Weg mit, etwas zu ändern.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="ck-sec" id="see">
+    <div class="container">
+      <div class="grp" data-reveal>
+        <p class="eyebrow" data-lang="en">What you see</p>
+        <p class="eyebrow" data-lang="de">Was du siehst</p>
+        <h2 class="h2" data-lang="en">Start, Today, Sessions</h2>
+        <h2 class="h2" data-lang="de">Start, Heute, Sitzungen</h2>
+      </div>
+      <div class="block" data-reveal>
+<p data-lang="en">Three pages carry most of the day. The page also works in dark mode and on a phone.</p>
+<p data-lang="de">Drei Seiten tragen den größten Teil des Tages. Die Seite funktioniert auch im Dunkelmodus und auf dem Handy.</p>
+      </div>
+      <div class="shot-pair" data-reveal>
+<figure class="shot " data-reveal>
+  <div class="frame"><img data-lang="en" src="assets/cockpit/light-today.jpg" width="1600" height="1000" loading="lazy" decoding="async" alt="The Today page in light mode: tasks that can be handed off to an agent, and agent tabs that wait for a yes or a no, each with a button."><img data-lang="de" src="assets/cockpit/light-today.jpg" width="1600" height="1000" loading="lazy" decoding="async" alt="Die Seite Heute im hellen Modus: Aufgaben, die an einen Agenten übergeben werden können, und Agent-Tabs, die auf ein Ja oder Nein warten, jeweils mit einem Knopf."></div>
+  <figcaption><span data-lang="en"><strong>Today.</strong> What waits for you: tasks to hand off, and agent tabs asking for a yes. Demo data.</span><span data-lang="de"><strong>Heute.</strong> Was auf dich wartet: Aufgaben zum Übergeben und Agent-Tabs, die ein Ja brauchen. Demodaten.</span></figcaption>
+</figure>
+<figure class="shot " data-reveal>
+  <div class="frame"><img data-lang="en" src="assets/cockpit/dark-today.jpg" width="1600" height="1000" loading="lazy" decoding="async" alt="The same Today page in dark mode, with the same tasks and agent tabs on a dark background."><img data-lang="de" src="assets/cockpit/dark-today.jpg" width="1600" height="1000" loading="lazy" decoding="async" alt="Dieselbe Seite Heute im dunklen Modus, mit denselben Aufgaben und Agent-Tabs auf dunklem Hintergrund."></div>
+  <figcaption><span data-lang="en"><strong>Dark mode.</strong> The same page; the theme follows your system or your choice.</span><span data-lang="de"><strong>Dunkelmodus.</strong> Dieselbe Seite; das Thema folgt deinem System oder deiner Wahl.</span></figcaption>
+</figure>
+      </div>
+      <div style="height:32px"></div>
+      <div class="shot-row" data-reveal>
+<figure class="shot " data-reveal>
+  <div class="frame"><img data-lang="en" src="assets/cockpit/light-sessions.jpg" width="1600" height="1000" loading="lazy" decoding="async" alt="The Sessions page: a list of Claude sessions, with the subagents each one started shown beneath it."><img data-lang="de" src="assets/cockpit/light-sessions.jpg" width="1600" height="1000" loading="lazy" decoding="async" alt="Die Seite Sitzungen: eine Liste von Claude-Sitzungen, darunter jeweils die Subagenten, die sie gestartet hat."></div>
+  <figcaption><span data-lang="en"><strong>Sessions.</strong> Your Claude sessions and the subagents they started, in one list. Demo data.</span><span data-lang="de"><strong>Sitzungen.</strong> Deine Claude-Sitzungen und die Subagenten, die sie gestartet haben, in einer Liste. Demodaten.</span></figcaption>
+</figure>
+<figure class="shot phone" data-reveal>
+  <div class="frame"><img data-lang="en" src="assets/cockpit/phone-start.jpg" width="780" height="1688" loading="lazy" decoding="async" alt="The cockpit start page on a phone, 390 pixels wide: the same greeting and tiles, stacked in one column."><img data-lang="de" src="assets/cockpit/phone-start.jpg" width="780" height="1688" loading="lazy" decoding="async" alt="Die Cockpit-Startseite auf einem Handy, 390 Pixel breit: dieselbe Begrüßung und dieselben Kacheln, in einer Spalte gestapelt."></div>
+  <figcaption><span data-lang="en"><strong>Phone.</strong> At 390 px the page stacks into one column and the tabs move into a drawer.</span><span data-lang="de"><strong>Handy.</strong> Bei 390 px stapelt sich die Seite in eine Spalte, und die Tabs wandern in eine Schublade.</span></figcaption>
+</figure>
+      </div>
+      <div style="height:40px"></div>
+      <div class="cards" data-reveal="stagger">
+        <div class="card2 ">
+          <div class="n">Start</div>
+          <h3><span data-lang="en">The way in</span><span data-lang="de">Der Einstieg</span></h3>
+          <p data-lang="en">A greeting, the day in one line, a field that asks the chat directly, and tiles that each open a page.</p>
+          <p data-lang="de">Eine Begrüßung, der Tag in einer Zeile, ein Feld, das den Chat direkt fragt, und Kacheln, die je eine Seite öffnen.</p>
+        </div>
+        <div class="card2 ">
+          <div class="n">Today</div>
+          <h3><span data-lang="en">What waits for you</span><span data-lang="de">Was auf dich wartet</span></h3>
+          <p data-lang="en">The briefing: approve, defer or drop rows, hand a task to an agent tab, or answer a tab that asks for a yes.</p>
+          <p data-lang="de">Das Briefing: Zeilen freigeben, verschieben oder verwerfen, eine Aufgabe an einen Agent-Tab übergeben oder einem Tab antworten, der ein Ja braucht.</p>
+        </div>
+        <div class="card2 ">
+          <div class="n">Sessions</div>
+          <h3><span data-lang="en">Your Claude sessions</span><span data-lang="de">Deine Claude-Sitzungen</span></h3>
+          <p data-lang="en">Open sessions with the subagents they started, so you see who is working on what.</p>
+          <p data-lang="de">Offene Sitzungen mit den Subagenten, die sie gestartet haben, damit du siehst, wer woran arbeitet.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="alt ck-sec" id="adapts">
+    <div class="container">
+      <div class="grp" data-reveal>
+        <p class="eyebrow" data-lang="en">Fits your Bridge</p>
+        <p class="eyebrow" data-lang="de">Passt zu deiner Bridge</p>
+        <h2 class="h2" data-lang="en">It adapts to the Bridge it runs in</h2>
+        <h2 class="h2" data-lang="de">Es passt sich der Bridge an, in der es läuft</h2>
+      </div>
+      <div class="block" data-reveal>
+<p data-lang="en">The cockpit is not tied to one look or one language.</p>
+<p data-lang="de">Das Cockpit ist weder an ein Aussehen noch an eine Sprache gebunden.</p>
+      </div>
+      <div class="cards" data-reveal="stagger">
+        <div class="card2 ">
+          <div class="n">01</div>
+          <h3><span data-lang="en">Colours and fonts</span><span data-lang="de">Farben und Schriften</span></h3>
+          <p data-lang="en">Taken from the <code>DESIGN.md</code> of that Bridge. A Bridge without one gets neutral defaults.</p>
+          <p data-lang="de">Aus der <code>DESIGN.md</code> dieser Bridge übernommen. Eine Bridge ohne eine bekommt neutrale Vorgaben.</p>
+        </div>
+        <div class="card2 ">
+          <div class="n">02</div>
+          <h3><span data-lang="en">Language</span><span data-lang="de">Sprache</span></h3>
+          <p data-lang="en">Read from the config: <code>cockpit.language</code>, else your conversation language, else English.</p>
+          <p data-lang="de">Aus der Config gelesen: <code>cockpit.language</code>, sonst deine Gesprächssprache, sonst Englisch.</p>
+        </div>
+        <div class="card2 ">
+          <div class="n">03</div>
+          <h3><span data-lang="en">Your own briefing</span><span data-lang="de">Dein eigenes Briefing</span></h3>
+          <p data-lang="en">What the page shows comes from your briefing profile. Without one of your own, a built-in profile runs.</p>
+          <p data-lang="de">Was die Seite zeigt, kommt aus deinem Briefing-Profil. Ohne eigenes läuft ein eingebautes Profil.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="ck-sec" id="safety">
+    <div class="container">
+      <div class="grp" data-reveal>
+        <p class="eyebrow" data-lang="en">Safety</p>
+        <p class="eyebrow" data-lang="de">Sicherheit</p>
+        <h2 class="h2" data-lang="en">Local only, and nothing goes out by itself</h2>
+        <h2 class="h2" data-lang="de">Nur lokal, und nichts geht von allein raus</h2>
+      </div>
+      <div class="block" data-reveal>
+<p data-lang="en">The page can approve inbox entries and start agents, so it is built to do nothing a stranger could trigger.</p>
+<p data-lang="de">Die Seite kann Inbox-Einträge freigeben und Agenten starten. Deshalb ist sie so gebaut, dass kein Fremder etwas auslösen kann.</p>
+      </div>
+      <div class="cards two" data-reveal="stagger">
+        <div class="card2 ">
+          <div class="n">01</div>
+          <h3><span data-lang="en">Local address only</span><span data-lang="de">Nur lokale Adresse</span></h3>
+          <p data-lang="en">The server answers on <code>127.0.0.1</code> and never on every interface of your computer.</p>
+          <p data-lang="de">Der Server antwortet auf <code>127.0.0.1</code> und nie auf allen Schnittstellen deines Rechners.</p>
+        </div>
+        <div class="card2 ">
+          <div class="n">02</div>
+          <h3><span data-lang="en">Sign-in link with a token</span><span data-lang="de">Anmeldelink mit Token</span></h3>
+          <p data-lang="en">You open the page once through a link that carries a secret key. The browser keeps it in a cookie, and the address bar does not.</p>
+          <p data-lang="de">Du öffnest die Seite einmal über einen Link mit geheimem Schlüssel. Der Browser behält ihn in einem Cookie, die Adressleiste nicht.</p>
+        </div>
+        <div class="card2 ">
+          <div class="n">03</div>
+          <h3><span data-lang="en">A fixed list of commands</span><span data-lang="de">Eine feste Liste von Befehlen</span></h3>
+          <p data-lang="en">The buttons send verbs, never free commands. Only scripts from the Bridge's own list can run, and every write leaves a line in an audit log.</p>
+          <p data-lang="de">Die Knöpfe senden Verben, nie freie Befehle. Es laufen nur Skripte aus der eigenen Liste der Bridge, und jede Schreibaktion hinterlässt eine Zeile im Audit-Log.</p>
+        </div>
+        <div class="card2 ">
+          <div class="n">04</div>
+          <h3><span data-lang="en">Questions to Claude are signed</span><span data-lang="de">Fragen an Claude sind signiert</span></h3>
+          <p data-lang="en">A question carries a signature that a program merely writing files into your repository cannot forge.</p>
+          <p data-lang="de">Eine Frage trägt eine Signatur, die ein Programm, das nur Dateien in dein Repository schreibt, nicht fälschen kann.</p>
+        </div>
+      </div>
+      <div style="height:40px"></div>
+      <div class="grp" data-reveal>
+        <h3 class="h2" data-lang="en" style="font-size:24px">Off by default</h3>
+        <h3 class="h2" data-lang="de" style="font-size:24px">Standardmäßig aus</h3>
+      </div>
+      <div class="block" data-reveal>
+<p data-lang="en">Anything that sends something or runs by itself stays off until you switch it on.</p>
+<p data-lang="de">Alles, was etwas versendet oder von allein läuft, bleibt aus, bis du es einschaltest.</p>
+      </div>
+      <div class="cards" data-reveal="stagger">
+        <div class="card2 off">
+          <div class="n">relay</div>
+          <h3><span data-lang="en">Relay</span><span data-lang="de">Relay</span></h3>
+          <p data-lang="en">Hands questions from the page to your control session. Needs an optional mod.</p>
+          <p data-lang="de">Reicht Fragen von der Seite an deine Steuer-Sitzung weiter. Braucht einen optionalen Mod.</p>
+          <span class="tag"><span data-lang="en">Off by default</span><span data-lang="de">Standardmäßig aus</span></span>
+        </div>
+        <div class="card2 off">
+          <div class="n">triage</div>
+          <h3><span data-lang="en">Daily triage</span><span data-lang="de">Tägliche Sortierung</span></h3>
+          <p data-lang="en">Sorts your tasks and inbox once a day by itself, with a small model call. Otherwise only on a click.</p>
+          <p data-lang="de">Sortiert deine Aufgaben und die Inbox einmal am Tag von allein, mit einem kleinen Modellaufruf. Sonst nur auf Klick.</p>
+          <span class="tag"><span data-lang="en">Off by default</span><span data-lang="de">Standardmäßig aus</span></span>
+        </div>
+        <div class="card2 off">
+          <div class="n">jev</div>
+          <h3><span data-lang="en">Jev</span><span data-lang="de">Jev</span></h3>
+          <p data-lang="en">Orders your rows by urgency. When switched on, it sends the titles and a few fields of up to 20 rows to an external API (api.typesafe.ai). Details in the guide.</p>
+          <p data-lang="de">Ordnet deine Zeilen nach Dringlichkeit. Wenn eingeschaltet, sendet es Titel und einige Felder von bis zu 20 Zeilen an eine externe API (api.typesafe.ai). Details im Guide.</p>
+          <span class="tag"><span data-lang="en">Off by default</span><span data-lang="de">Standardmäßig aus</span></span>
+        </div>
+        <div class="card2 off">
+          <div class="n">login</div>
+          <h3><span data-lang="en">Login item</span><span data-lang="de">Anmeldeobjekt</span></h3>
+          <p data-lang="en">Starts the cockpit when you log in on macOS and restarts it after a crash.</p>
+          <p data-lang="de">Startet das Cockpit beim Anmelden unter macOS und nach einem Absturz neu.</p>
+          <span class="tag"><span data-lang="en">Off by default</span><span data-lang="de">Standardmäßig aus</span></span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="alt ck-sec" id="switch-on">
+    <div class="container">
+      <div class="grp" data-reveal>
+        <p class="eyebrow" data-lang="en">Get started</p>
+        <p class="eyebrow" data-lang="de">Loslegen</p>
+        <h2 class="h2" data-lang="en">How to switch it on</h2>
+        <h2 class="h2" data-lang="de">So schaltest du es ein</h2>
+      </div>
+      <div class="block" data-reveal>
+<p data-lang="en">You need an onboarded Bridge, so a <code>bridge-config.yaml</code> in the repo root, and <code>python3</code> with PyYAML.</p>
+<p data-lang="de">Du brauchst eine eingerichtete Bridge, also eine <code>bridge-config.yaml</code> im Repo-Wurzelverzeichnis, und <code>python3</code> mit PyYAML.</p>
+      </div>
+      <div class="term" data-reveal>
+        <div class="code-label"><span>bridge-config.yaml</span></div>
+<pre class="code"><span class="k">cockpit:</span>
+  enabled: true</pre>
+        <div class="code-label" style="margin-top:22px"><span><span data-lang="en">then, in a Claude Code session in the Bridge root</span><span data-lang="de">dann, in einer Claude-Code-Sitzung im Bridge-Wurzelverzeichnis</span></span></div>
+<pre class="code"><span class="k">/cockpit</span>
+
+<span class="cmt"># <span data-lang="en">or from any terminal in the Bridge root</span><span data-lang="de">oder aus jedem Terminal im Bridge-Wurzelverzeichnis</span></span>
+python3 scripts/bridge-cockpit.py open</pre>
+        <p class="after" data-lang="en">The server starts, or the running one is reused, and the page opens. Open the link once; after that the plain address works as a bookmark in that browser. Every other setting is optional and has a default.</p>
+        <p class="after" data-lang="de">Der Server startet, oder der laufende wird weiterverwendet, und die Seite öffnet sich. Öffne den Link einmal; danach funktioniert die einfache Adresse in diesem Browser als Lesezeichen. Jede weitere Einstellung ist optional und hat einen Standardwert.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="ck-sec" id="read-next">
+    <div class="container">
+      <div class="grp" data-reveal>
+        <p class="eyebrow" data-lang="en">Go deeper</p>
+        <p class="eyebrow" data-lang="de">Tiefer einsteigen</p>
+        <h2 class="h2" data-lang="en">Read next</h2>
+        <h2 class="h2" data-lang="de">Weiterlesen</h2>
+      </div>
+      <div class="pointers" data-reveal="stagger">
+        <a href="https://github.com/bks-lab/open-bridge/blob/main/docs/bridge-cockpit.md" target="_blank" rel="noopener"><span data-lang="en">Cockpit guide (docs/bridge-cockpit.md)</span><span data-lang="de">Cockpit-Guide (docs/bridge-cockpit.md)</span></a>
+        <a href="https://github.com/bks-lab/open-bridge/blob/main/docs/bridge-cockpit-dev.md" target="_blank" rel="noopener"><span data-lang="en">Changing the code</span><span data-lang="de">Den Code ändern</span></a>
+        <a href="https://github.com/bks-lab/open-bridge/blob/main/docs/briefings.md" target="_blank" rel="noopener"><span data-lang="en">Briefings</span><span data-lang="de">Briefings</span></a>
+        <a href="https://github.com/bks-lab/open-bridge/blob/main/docs/workplace.md" target="_blank" rel="noopener"><span data-lang="en">Workplace (agent tabs)</span><span data-lang="de">Workplace (Agent-Tabs)</span></a>
+        <a href="https://github.com/bks-lab/open-bridge/blob/main/docs/inbox.md" target="_blank" rel="noopener">Inbox</a>
+      </div>
+    </div>
+  </section>
+
+  <section class="cta-band"><div class="container">
+    <p class="eyebrow"><span data-lang="en">Get started</span><span data-lang="de">Loslegen</span></p>
+    <h2><span data-lang="en">One prompt. Your own private bridge.</span><span data-lang="de">Ein Prompt. Deine eigene, private Bridge.</span></h2>
+    <p><span data-lang="en">Paste it into Claude Code, Codex or Copilot CLI. Your agent follows SETUP.md, shows you its plan and waits for your go.</span><span data-lang="de">Kopier ihn in Claude Code, Codex oder Copilot CLI. Dein Agent folgt SETUP.md, zeigt dir seinen Plan und wartet auf dein Go.</span></p>
+    <div class="cta-row"><a class="btn btn-primary" href="index.html#get-started"><span data-lang="en">Get the prompt</span><span data-lang="de">Zum Prompt</span> <span class="arrow">→</span></a><a class="btn btn-secondary" href="demo.html"><span data-lang="en">See it work</span><span data-lang="de">Sieh es arbeiten</span></a></div>
+  </div></section>
+
+</main>
+<!-- ========================== END PAGE CONTENT ============================== -->
+
+<!-- ======================= FOOTER (shared) ======================= -->
+<footer id="license">
+  <div class="foot-grid">
+    <div class="foot-blurb">
+      <a class="wordmark" href="index.html">open<span class="text-gradient">-bridge</span></a>
+      <span data-lang="en">Built at BKS-Lab (a small team) and used daily to run it. Present tense, no hero arc: this is method and substrate.</span>
+      <span data-lang="de">Gebaut bei BKS-Lab (einem kleinen Team) und täglich genutzt, um genau diese Firma zu betreiben. Präsens, kein Heldenbogen: das ist Methode und Substrat.</span>
+      <table class="license-table">
+        <tr><td><span data-lang="en">Code &amp; content</span><span data-lang="de">Code &amp; Inhalt</span></td><td>MIT</td><td><a href="https://github.com/bks-lab/open-bridge/blob/main/LICENSE" target="_blank" rel="noopener">LICENSE</a></td></tr>
+        <tr><td><span data-lang="en">Brand</span><span data-lang="de">Marke</span></td><td><span data-lang="en">Trademark policy</span><span data-lang="de">Markenrichtlinie</span></td><td><a href="https://github.com/bks-lab/open-bridge/blob/main/TRADEMARK.md" target="_blank" rel="noopener">TRADEMARK.md</a></td></tr>
+      </table>
+      <p class="muted" style="margin-top:14px;font-size:12.5px">© 2026 BKS-Lab and Contributors. <span data-lang="en">Licenses cover copyright, not brands.</span><span data-lang="de">Lizenzen decken Copyright ab, nicht Marken.</span> <span data-lang="en">Contributions require a DCO sign-off (</span><span data-lang="de">Beiträge erfordern einen DCO-Sign-off (</span><code>git commit -s</code>).</p>
+    </div>
+
+    <div>
+      <h4 data-lang="en">Explore</h4>
+      <h4 data-lang="de">Erkunden</h4>
+      <a href="index.html"><span data-lang="en">Home</span><span data-lang="de">Start</span></a>
+      <a href="concepts.html"><span data-lang="en">Concepts in depth</span><span data-lang="de">Konzepte im Detail</span></a>
+      <a href="workspaces.html"><span data-lang="en">Workspaces</span><span data-lang="de">Workspaces</span></a>
+      <a href="cockpit.html"><span data-lang="en">Cockpit</span><span data-lang="de">Cockpit</span></a>
+      <a href="use-cases.html"><span data-lang="en">Use cases &amp; solutions</span><span data-lang="de">Anwendungsfälle &amp; Lösungen</span></a>
+      <a href="explore.html"><span data-lang="en">Explore the concepts</span><span data-lang="de">Konzepte erkunden</span></a>
+    </div>
+
+    <div>
+      <h4 data-lang="en">Links</h4>
+      <h4 data-lang="de">Links</h4>
+      <a href="https://github.com/bks-lab/open-bridge" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://github.com/bks-lab/open-bridge/blob/main/README.md" target="_blank" rel="noopener">README</a>
+      <a href="https://github.com/bks-lab/open-bridge/tree/main/docs" target="_blank" rel="noopener">docs/</a>
+      <a href="https://github.com/bks-lab/open-bridge/blob/main/docs/workspaces.md" target="_blank" rel="noopener"><span data-lang="en">Workspaces guide</span><span data-lang="de">Workspaces-Guide</span></a>
+      <a href="https://github.com/bks-lab/open-bridge/blob/main/docs/bridge-cockpit.md" target="_blank" rel="noopener"><span data-lang="en">Cockpit guide</span><span data-lang="de">Cockpit-Guide</span></a>
+    </div>
+  </div>
+
+  <div class="foot-bottom">
+    <span data-lang="en">Public · MIT · no waitlist · newly released</span>
+    <span data-lang="de">Public · MIT · keine Warteliste · frisch veröffentlicht</span>
+    <a class="btn btn-secondary" style="padding:10px 20px;font-size:14px" href="https://github.com/bks-lab/open-bridge" target="_blank" rel="noopener">
+      <span data-lang="en">Read the code on GitHub</span><span data-lang="de">Lies den Code auf GitHub</span> <span class="arrow">→</span>
+    </a>
+  </div>
+</footer>
+
+<!-- ======================= Shared page controller ======================= -->
+<script>
+(function(){
+  "use strict";
+  var root = document.documentElement;
+
+  /* Theme has three states, not two. The old toggle wrote a permanent override
+     on the very first click and offered no way back, so a reader who once tried
+     the other mode never saw their own system setting again, and nothing here
+     listened for that setting changing while the page was open. Now: no stored
+     value means "follow the system", and it follows it live; light and dark are
+     explicit choices; the button cycles back round to system. */
+  var THEME_KEY = "ob-theme";
+  var THEME_LBL = {
+    en:{ system:"Theme follows your system. Click for light.",
+         light:"Theme is light. Click for dark.",
+         dark:"Theme is dark. Click to follow your system again." },
+    de:{ system:"Design folgt deinem System. Klick für hell.",
+         light:"Design ist hell. Klick für dunkel.",
+         dark:"Design ist dunkel. Klick, um wieder dem System zu folgen." }
+  };
+  var themeBtn = document.getElementById("theme-toggle");
+  function systemDark(){
+    try { return !!(window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches); }
+    catch(e){ return false; }
+  }
+  function themePref(){
+    var p = root.getAttribute("data-theme-pref");
+    return (p === "light" || p === "dark") ? p : "system";
+  }
+  function labelTheme(){
+    if(!themeBtn) return;
+    var l = root.getAttribute("data-active-lang") === "de" ? "de" : "en";
+    var text = THEME_LBL[l][themePref()];
+    themeBtn.setAttribute("aria-label", text);
+    themeBtn.setAttribute("title", text + " (T)");
+  }
+  function applyTheme(pref){
+    var dark = pref === "dark" || (pref === "system" && systemDark());
+    if(dark){ root.classList.add("dark"); } else { root.classList.remove("dark"); }
+    root.setAttribute("data-theme-pref", pref);
+    labelTheme();
+  }
+  function toggleTheme(){
+    var p = themePref();
+    var next = p === "system" ? "light" : (p === "light" ? "dark" : "system");
+    applyTheme(next);
+    try {
+      if(next === "system"){ localStorage.removeItem(THEME_KEY); }
+      else { localStorage.setItem(THEME_KEY, next); }
+    } catch(e){}
+  }
+  if(themeBtn){ themeBtn.addEventListener("click", toggleTheme); }
+  try{
+    var mq = window.matchMedia("(prefers-color-scheme: dark)");
+    var onSystem = function(){ if(themePref() === "system") applyTheme("system"); };
+    if(mq.addEventListener){ mq.addEventListener("change", onSystem); }
+    else if(mq.addListener){ mq.addListener(onSystem); }
+  }catch(e){}
+  labelTheme();
+
+  function applyLang(lang){
+    root.setAttribute("data-active-lang", lang);
+    root.setAttribute("lang", lang);
+    labelTheme();          // the theme tooltip is bilingual too
+    var en = document.getElementById("lang-en");
+    var de = document.getElementById("lang-de");
+    if(en){ en.setAttribute("aria-pressed", lang === "en" ? "true" : "false"); }
+    if(de){ de.setAttribute("aria-pressed", lang === "de" ? "true" : "false"); }
+  }
+  applyLang(root.getAttribute("data-active-lang") === "de" ? "de" : "en");
+  function setLang(lang){
+    applyLang(lang);
+    try { localStorage.setItem("ob-lang", lang); } catch(e){}
+  }
+  var enBtn = document.getElementById("lang-en");
+  var deBtn = document.getElementById("lang-de");
+  if(enBtn){ enBtn.addEventListener("click", function(){ setLang("en"); }); }
+  if(deBtn){ deBtn.addEventListener("click", function(){ setLang("de"); }); }
+
+  document.addEventListener("keydown", function(ev){
+    if(ev.metaKey || ev.ctrlKey || ev.altKey) return;
+    var tag = (ev.target && ev.target.tagName) ? ev.target.tagName.toUpperCase() : "";
+    if(tag === "INPUT" || tag === "TEXTAREA" || (ev.target && ev.target.isContentEditable)) return;
+    var k = ev.key.toLowerCase();
+    if(k === "t"){ toggleTheme(); }
+    if(k === "l"){ setLang(root.getAttribute("data-active-lang") === "en" ? "de" : "en"); }
+  });
+
+  var reduceMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if("IntersectionObserver" in window && !reduceMotion){
+    var io = new IntersectionObserver(function(entries){
+      entries.forEach(function(en){
+        if(en.isIntersecting){ en.target.classList.add("in"); io.unobserve(en.target); }
+      });
+    }, { threshold: 0.12 });
+    document.querySelectorAll(".reveal").forEach(function(el){ io.observe(el); });
+  } else {
+    document.querySelectorAll(".reveal").forEach(function(el){ el.classList.add("in"); });
+  }
+})();
+</script>
+<script defer src="assets/diagram-steps.js"></script>
+<script defer src="assets/page-motion.js"></script>
+</body>
+</html>
