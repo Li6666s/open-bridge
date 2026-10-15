@@ -8,6 +8,7 @@ DESIGN.md, and that the demo's index.html turns mock mode on by itself.
 from __future__ import annotations
 
 import importlib.util
+import re
 import shutil
 import subprocess
 import sys
@@ -132,7 +133,10 @@ def test_every_other_file_is_a_byte_copy():
 def _instance(tree: Path) -> Path:
     (tree / "bridge-config.yaml").write_text("identity: {}\n", encoding="utf-8")
     design = tree / "DESIGN.md"
-    design.write_text(design.read_text(encoding="utf-8").replace("#6366F1", "#123456"), encoding="utf-8")
+    text = design.read_text(encoding="utf-8")
+    # a colour of its own: every hex colour the file uses becomes another one, whatever the Bridge's palette
+    text = re.sub(r"#[0-9A-Fa-f]{6}\b", lambda m: "#123456" if m.group(0).upper() != "#123456" else "#654321", text)
+    design.write_text(text, encoding="utf-8")
     assert stylesheet(tree) != (tree / "docs" / "cockpit-demo" / "colors.css").read_text(encoding="utf-8")
     return tree
 
