@@ -876,6 +876,21 @@ def test_items_close_when_rules_or_the_section_are_removed(tmp_path):
     assert bf.file_to_inbox(box, gone, bf.collect(root, gone, ctx(root))) == (0, 1)
 
 
+def test_an_item_the_cockpit_filed_for_a_row_closes_when_the_row_is_gone_not_when_no_rule_wants_it(tmp_path):
+    """Do it on a page row files an item under the to_inbox key; no rule asked for it, so the sweep that
+    closes what no rule wants must leave it while its row is there"""
+    root = bridge(tmp_path)
+    task(root, "alpha", blocked_by="vendor")
+    box = inbox.Inbox(root / "work" / "inbox", actor="t", clock=lambda: NOW)
+    profile = {"id": "m", "sections": [{"kind": "tasks"}]}
+    box.add(source="bridge-cockpit", kind="decision", summary="Tasks: alpha", gate="free", closer="reporter",
+            key="briefing:m:tasks:alpha")
+    assert bf.file_to_inbox(box, profile, bf.collect(root, profile, ctx(root))) == (0, 0)
+    box.add(source="bridge-cockpit", kind="decision", summary="Tasks: vanished", gate="free", closer="reporter",
+            key="briefing:m:tasks:vanished")
+    assert bf.file_to_inbox(box, profile, bf.collect(root, profile, ctx(root))) == (0, 1)
+
+
 def test_account_ref_must_stay_inside_the_bridge(tmp_path):
     root = bridge(tmp_path)
     outside = tmp_path / "elsewhere.yaml"

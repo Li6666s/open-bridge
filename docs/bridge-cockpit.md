@@ -571,6 +571,18 @@ with the source and its link as detail), starts the agent on that item, and
 takes the row out of the briefing for 30 days, since the inbox item now stands
 for it. "Ask Claude" stays beside it for a quick look.
 
+**The same on the other pages.** A row on Status, Dates, Trackers or More that is a
+finding (red or yellow) or a tracker row has Get it done, Advise and Close as well,
+in the table and in its detail. It is keyed `item:<page>/<section>/<row id>` (a hash of
+the title when the source gives no id). Get it done files it to the inbox under the
+key `briefing:<profile>:<section>:<row id>`, the one `to_inbox` uses, so an item the
+briefing already filed is reused instead of doubled, and the briefing closes the item
+once the row is gone (the probe is green again). A row without a source id is filed for a
+person to close. The row leaves its page for 30 days, or for the day you choose with
+Later. Rows that need no one (a gauge, an appointment, a commit count, a log line) get no
+buttons; a section can switch it for all its rows with `actionable: true|false` in its
+page entry (docs/briefings.md).
+
 **Close in two clicks.** Every row of the Briefing that can end, its detail,
 a task row on a page and a selection carry "Close ▾" with two outcomes,
 Done and Not doing it (a task also "Other reason …", the full dialog). What

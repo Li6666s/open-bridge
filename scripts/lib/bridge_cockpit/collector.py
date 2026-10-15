@@ -58,9 +58,10 @@ def make_link(url: str | None, root: Path) -> dict | None:
     return None
 
 
-def info_out(it: dict, index: int, root: Path, tabs: list[dict], view: dict | None, starting: set) -> dict:
+def info_out(it: dict, index: int, root: Path, tabs: list[dict], view: dict | None, starting: set,
+             page_id: str = "", section_id: str = "") -> dict:
     tab = m.tab_for({"task": it.get("task"), "inbox_id": None}, tabs) if it.get("task") else None
-    return {"index": index, "title": it["title"], "detail": it["detail"], "when": it["when"], "tone": it["tone"],
+    return {"index": index, "key": m.item_key(page_id, section_id, it), "actionable": it.get("actionable") is True, "title": it["title"], "detail": it["detail"], "when": it["when"], "tone": it["tone"],
             "link": make_link(it.get("url"), root), "task": it.get("task"), "ask": it["ask"], "mark": it["mark"],
             "priority": it.get("priority"), "state": it.get("state"), "lines": it.get("lines", []),
             "meter": it.get("meter"), "group": it.get("group"), "icon": it.get("icon"),
@@ -180,7 +181,8 @@ def build_model(view: dict, *, root: Path, tabs: list[dict], seen: dict, control
         secs = []
         for s in pg["sections"]:
             cap = DRAWN_CAP if s.get("view") in ("mosaic", "tiles", "groups") else ITEM_CAP    # drawn views filter every row
-            items = [info_out(it, i, root, tabs, view, starting) for i, it in enumerate(s["items"][:cap])]
+            items = [info_out(it, i, root, tabs, view, starting, pg["id"], s["id"]) for i, it in enumerate(s["items"][:cap])]
+            items = [i for i in items if not (i["actionable"] and (i["key"] in settled or (hidden.get(i["key"]) or "") > today))]
             secs.append({k: s[k] for k in ("id", "kind", "title", "status", "reason", "alarm", "empty", "count", "total",
                                            "weight", "bad", "as_of")} | {"items": items, "view": s.get("view"),
                                                                           "hide_empty": s.get("hide_empty") is True,
@@ -526,8 +528,25 @@ class Collector:
                     if s["id"] == section_id:
                         tabs = self.app.tabs.tab_list()
                         starting = self.starting_items()
-                        items = [info_out(it, i, self.app.root, tabs, view, starting) for i, it in enumerate(s["items"])]
+                        items = [info_out(it, i, self.app.root, tabs, view, starting, page_id, section_id) for i, it in enumerate(s["items"])]
+                        out = {**self.app.store.hidden(), **{k: "9999-12-31" for k in self.app.store.dismissed()}}
+                        today = m.iso_date(self.app.clock())
+                        items = [i for i in items if not (i["actionable"] and (i["key"] in self.settled or (out.get(i["key"]) or "") > today))]
                         return items, s.get("total", len(items))
+        return None
+
+    def view_profile(self) -> str | None:
+        with self.lock:
+            return (self.view or {}).get("profile") or self.app.cfg.profile or None
+
+    def page_item_by_key(self, key: str) -> tuple[dict, dict, dict] | None:
+        """(page, section, raw info) of a page item by its `item:` key, in the whole section (not the capped list)"""
+        with self.lock:
+            for pg in (self.view or {}).get("pages", []):
+                for s in pg["sections"]:
+                    for it in s["items"]:
+                        if m.item_key(pg["id"], s["id"], it) == key:
+                            return pg, s, it
         return None
 
     def page_item(self, page_id: str, section_id: str, index: int) -> tuple[dict, dict] | None:

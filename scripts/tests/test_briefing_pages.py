@@ -159,7 +159,8 @@ def test_tracker_rows_fill_every_column():
     rows = _section(bv.pages(_result(), _profile()), "mine")["items"]
     pr, old = rows
     assert pr == {"title": "acme/app#7 Fix login", "when": "09:30", "detail": "PR · open",
-                  "tone": None, "url": "https://example.test/acme/app/pull/7", "task": None, "ask": True, "mark": None}
+                  "tone": None, "url": "https://example.test/acme/app/pull/7", "task": None, "ask": True, "mark": None,
+                  "actionable": True, "id": "acme/app#7"}
     # a project that the id already names is not repeated; another one is
     assert old["detail"] == "open · Roadmap · P1"
     assert old["when"] == "05.10"
@@ -776,3 +777,42 @@ def test_the_default_words_follow_the_bridges_language():
     assert titles["dates"] == "Termine" and titles["today"] == "Was heute geschah"
     assert {p["id"]: p["title"] for p in bv.pages(_result(), _profile())}["dates"] == "Dates"     # English otherwise
     assert bv.labels_for("fr") is bv.LABELS and bv.labels_for("de-AT") is bv.LABELS_DE
+
+
+# ---------------------------------------------------------------- rows a person can act on
+
+def test_findings_and_tracker_rows_are_actionable_by_default_and_carry_their_source_id():
+    pages = bv.pages(_result(), _profile())
+    probes = _section(pages, "probes")["items"]
+    assert [(r["id"], r["actionable"]) for r in probes] == [("p1", True), ("p2", True)]
+    assert all(r["actionable"] for r in _section(pages, "mine")["items"])
+
+
+def test_rows_that_are_no_task_are_not_actionable_by_default():
+    """A gauge, an appointment, a commit count and a log line need no one: no Do it, no Later"""
+    pages = bv.pages(_result(), _profile())
+    for sid in ("cal", "commits", "log"):
+        assert not any(r["actionable"] for r in _section(pages, sid)["items"]), sid
+    quiet = {"collected_at": NOW, "sections": [_sec("res", "command", [{"id": "a", "title": "fine", "tone": "none"}])]}
+    assert _section(bv.pages(quiet, _profile()), "res")["items"][0]["actionable"] is False
+
+
+def test_a_row_that_leads_to_an_inbox_item_or_a_task_keeps_its_own_path():
+    result = {"collected_at": NOW, "sections": [_sec("work", "tasks", [{"id": "t1", "title": "A task", "state": "blocked"}])]}
+    assert _section(bv.pages(result, _profile()), "work")["items"][0]["actionable"] is False
+
+
+def test_a_page_entry_switches_actionable_on_or_off_for_its_whole_section():
+    def view(sid, value):
+        return {"pages": [{"id": "x", "title": "X", "sections": [{"id": sid, "actionable": value}]}]}
+    pages = bv.pages(_result(), _profile(view("cal", True)))
+    assert all(r["actionable"] for r in _section(pages, "cal")["items"])
+    pages = bv.pages(_result(), _profile(view("probes", False)))
+    assert not any(r["actionable"] for r in _section(pages, "probes")["items"])
+
+
+def test_actionable_in_a_page_entry_is_validated():
+    ok = {"pages": [{"id": "x", "title": "X", "sections": [{"id": "probes", "actionable": True}]}]}
+    assert not bv._page_problems(ok)
+    bad = {"pages": [{"id": "x", "title": "X", "sections": [{"id": "probes", "actionable": "yes"}]}]}
+    assert any("actionable must be true or false" in p for p in bv._page_problems(bad))

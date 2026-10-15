@@ -1533,12 +1533,14 @@ def file_to_inbox(box, profile: dict, result: dict) -> tuple:
     look, so it cannot know a row is gone (the advise `checks_run` rule)."""
     sections = {section_id(s): s for s in profile.get("sections") or [] if isinstance(s, dict)}
     filed, wanted, closable = 0, set(), set()
+    present: set = set()          # every row id each section shows now, for the items the cockpit filed
     pid = profile.get("id")
     own = f"{KEY_PREFIX}{pid}:"
     for entry in result["sections"]:
         prefix = f"{own}{entry['id']}:"
         if entry["status"] == "ok":
             closable.add(prefix)      # also when its rules were removed: nothing is wanted any more
+            present.update(prefix + str(i["id"]) for i in entry.get("all", entry["items"]) if "id" in i)
         rules = (sections.get(entry["id"]) or {}).get("to_inbox") or []
         if not rules:
             continue
@@ -1564,6 +1566,8 @@ def file_to_inbox(box, profile: dict, result: dict) -> tuple:
         if key[len(own):].split(":", 1)[0] not in sections:
             box.close(item.id, note="its section was removed from the profile")
             closed += 1
+        elif item.source == "bridge-cockpit" and key in present:
+            continue      # filed by Do it on a page row: no rule wants it, the row's presence does
         elif any(key.startswith(p) for p in closable):
             box.close(item.id, note="no longer in the briefing source")
             closed += 1

@@ -673,11 +673,17 @@ export function triageCounts(items, map) {
 /** The AI's effort as 0 to 3 dots */
 export const effortDots = e => ({ small: 1, medium: 2, large: 3 })[e] ?? 0
 
+/** Whether a row of the Status, Dates, Trackers or More page offers Do it, Advise and Settle: the page says so
+ *  (`actionable`), and a row with an inbox item or a task of its own keeps that path */
+export function pageItemActs(it) {
+  return !!(it?.actionable && it.key && !it.inbox && !it.task)
+}
+
 /** The row a page item acts through: the briefing's own row when it has one, else one made from the
  *  item (an inbox item or a task the page lists but the briefing does not); the server checks it again */
 export function actionRow(it, byKey) {
   const key = triageKey(it)
-  if (!key) return null
+  if (!key) return pageItemActs(it) ? { key: it.key, title: it.title, settle: ['done', 'not_doing'] } : null
   const own = byKey?.get(key)
   if (own) return own
   // an inbox item that runs on (put off with what it waits on) is no row of the day: it can open again

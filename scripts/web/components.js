@@ -11,7 +11,7 @@ import {
   sectionRows, short, startRefusal, stateToken, toneToken,
   VERDICT_ORDER, centsText, confidenceDots, reviewRows, verdictCounts, verdictToken,
   agentLane, checkFlow, gaugeArc, gaugeBands, gaugePoint, gaugeSection, laneWindow, meterScale, meterText, meterView,
-  canTab, chatStamp, runProgress, screenLines, TONE_FILTERS, FILTER_TONE, actionRow, filterRows, groupRows, tagFacets, toneFilter, runToken, serious, statusSplit, detailText, scheduleText, dayNoteText, railShown, previewText, weekdayNames, triageKey, triageShows, verdictSegments, linkParts, probeText, newestFirst, filterWorkers, groupBySystem, stripMark, workerFacets, workerTone,
+  canTab, chatStamp, runProgress, screenLines, TONE_FILTERS, FILTER_TONE, actionRow, pageItemActs, filterRows, groupRows, tagFacets, toneFilter, runToken, serious, statusSplit, detailText, scheduleText, dayNoteText, railShown, previewText, weekdayNames, triageKey, triageShows, verdictSegments, linkParts, probeText, newestFirst, filterWorkers, groupBySystem, stripMark, workerFacets, workerTone,
   sectionTile, tokenText, usageBars, usageToday, USAGE_SOURCES, jevList, workKinds, reviewHome,
   greetingPart, homeCatalog, homeChosen, homeContinue, homeProjects, inProject, meterPace, projectTone, tabOfTask,
   countInProject, focusPick, moveId, nextEvent, untilText, STAGE, stageDust, stageSpots, clockLeft, pulseSpeed,
@@ -536,6 +536,21 @@ function SettleMenu({ rows, s, c, size = 'xs' }) {
       ${ok.some(r => !r.task && !r.inbox_id) ? html`<span class="settle-hint muted small">${t.settleHint}</span>` : null}
     </span>` : null}
   </span>`
+}
+
+/** The buttons of a page row that is no inbox item or task but a person can hand on: the same Do it, Advise
+ *  and Settle as a work row. The server files it to the inbox first and starts on that */
+function PageItemActions({ it, s, c, after }) {
+  const t = T()
+  if (!pageItemActs(it)) return null
+  const row = actionRow(it, new Map())
+  const busy = !!s.ui.busy[it.key]
+  // `after` runs once a step went through (the detail drawer closes with it)
+  const run = verb => Promise.resolve(c.rowAction(row, verb)).then(r => { if (r?.ok) after?.() })
+  const cc = after ? { ...c, act: async (verb, args) => { const r = await c.act(verb, args); if (r?.ok) after(); return r } } : c
+  return html`<${Btn} size="xs" variant="primary" busy=${busy} onClick=${() => run('do')}>${t.action.do}<//>
+    <${Btn} size="xs" variant="secondary" busy=${busy} onClick=${() => run('advise')}>${t.action.advise}<//>
+    <${SettleMenu} rows=${[row]} s=${s} c=${cc} />`
 }
 
 function RowItem({ row, s, c }) {
@@ -1725,6 +1740,7 @@ function InfoRow({ it, page, section, s, c, byKey, scale = 0, lead = null }) {
       ${it.link?.kind === 'web' ? html`<a class="btn btn-ghost btn-xs" href=${it.link.href} target="_blank" rel="noopener noreferrer">
         <${Icon} name="external" size=${14} /><span class="btn-label">${t.openLink}</span></a>` : null}
       ${it.link?.kind === 'file' ? html`<${Btn} size="xs" variant="ghost" icon="copy" cls="act-quiet" title=${it.link.path} onClick=${() => c.copy(it.link.path)}>${t.copyPath}<//>` : null}
+      <${PageItemActions} it=${it} s=${s} c=${c} />
       ${it.ask ? html`<${Btn} size="xs" variant="ghost" cls="act-quiet" onClick=${() => c.ask('info', { page, section, index: it.index })}>${t.btnAsk}<//>` : null}
       ${it.task ? html`<${Btn} size="xs" variant="secondary" busy=${!!s.ui.busy[`task:${it.task}`]}
         title=${it.tab && it.tab.live ? undefined : t.btnStartAgentTitle} onClick=${() => (it.tab && it.tab.live ? c.act('tab_jump', { tab_ref: it.tab.ref }) : c.act('start_agent', { keys: [`task:${it.task}`] }))}>
@@ -4260,6 +4276,7 @@ function InfoDrawer({ s, c }) {
         ${onHost.length ? html`<${Btn} size="xs" variant="secondary" onClick=${() => { close(); c.openWorkers({ host: cur.title }) }}>${t.workersOpen}<//>` : null}
         ${cur.actions?.length && cur.row_id ? html`<${RowSteps} it=${cur} page=${page} section=${section} s=${s} c=${c} />` : null}
         ${cur.account?.status ? html`<${StatusMenu} it=${cur} page=${page} section=${section} c=${c} />` : null}
+        <${PageItemActions} it=${cur} s=${s} c=${c} after=${close} />
         ${cur.ask ? html`<${Btn} size="xs" variant="ghost" onClick=${() => { close(); c.ask('info', { page, section, index: cur.index }) }}>${t.btnAsk}<//>` : null}
       </div>
       <div class="idrawer-body">
