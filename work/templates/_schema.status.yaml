@@ -81,6 +81,14 @@ properties:
       When the block started. The briefing counts "waiting N days" from it;
       without it, from last_updated.
 
+  quiet_until:
+    type: string
+    format: date
+    description: |
+      "Runs on" (scripts/task.py wait): the task waits on blocked_by until this
+      day. Until then the briefing advice and the task review leave it alone and
+      the triage shows "look again <day>"; from that day on it asks again.
+
   next:
     type: object
     required: [what]

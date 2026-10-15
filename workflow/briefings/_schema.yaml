@@ -54,6 +54,16 @@ properties:
     type: integer
     minimum: 1
     description: "Per-section time limit. Default 30."
+  extends:
+    type: string
+    minLength: 1
+    description: |
+      The id of another profile this one builds on: its sections first (one of
+      the same id is replaced by this profile's own), then these; its view key by
+      key, this profile's keys winning; its mutes added. id, title, default and
+      offer_on are never taken over. The cockpit's profile extends the morning
+      briefing and adds the sections and pages only the cockpit shows
+      (docs/bridge-cockpit.md).
   sections:
     type: array
     minItems: 1
@@ -132,6 +142,15 @@ $defs:
           properties:
             id: {type: string, minLength: 1, not: {enum: [briefing, more]}, description: "briefing and more are taken: the briefing page and the page for the rest."}
             title: {type: string, description: "Tab name. Default: the label page_<id>, else the id."}
+            group: {enum: [main, more, day], description: "main (default): a tab in the page bar. more: after the daily tabs, and folded behind a More menu when the bar is too narrow. day: no tab of its own; its sections stand under the day list of the Today page."}
+            overview: {type: boolean, description: "true: a dashboard opens the page with a board of tiles, one per section (its count and its loudest row), each a jump to its section. Default false."}
+            jev:
+              type: object
+              additionalProperties: false
+              description: "An order of the page's task and inbox rows by Jev (integrations.typesafe), on a click only. Title, the triage's gist, the section as a label and the priority go out; nothing else."
+              properties:
+                skip_sections: {type: array, items: {type: string}, description: "Sections whose rows never go to Jev."}
+                private: {type: array, items: {type: string}, description: "Words: a row whose title, detail, task or gist holds one (any case) stays home."}
             sections:
               type: array
               minItems: 1
@@ -177,7 +196,7 @@ $defs:
       labels:
         type: object
         propertyNames:
-          enum: [activity_title, agenda_title, all_clear, back_on, boards_title, bucket_more, busy_until, capped, clash_row, clashes, col_board, col_branch, col_commits, col_days, col_note, col_repo, col_what, col_when, collides, commits, commits_today, due, end, error, first_title, free_rest, free_until, hidden, housekeeping, info_tag, lage, later, meanwhile, more, muted, new, next_date, no_next, nudge, only_you, overview_file, owed, page_dates, page_empty, page_more, page_status, page_today, page_trackers, parallel, report_title, repos_skipped, shutdown, since, st_blocked, st_in_progress, st_new, st_ready, st_review, task, today, tomorrow, until, waiting_days, why, with, workplace, yours_today]
+          enum: [activity_title, agenda_title, all_clear, back_on, boards_title, bucket_more, busy_until, capped, clash_row, clashes, col_board, col_branch, col_commits, col_days, col_note, col_repo, col_what, col_when, collides, commits, commits_today, due, end, error, first_title, free_rest, free_until, hidden, housekeeping, info_tag, lage, later, look_again, meanwhile, more, muted, new, next_date, no_next, nudge, only_you, overview_file, owed, page_dates, page_empty, page_more, page_status, page_today, page_trackers, page_work, parallel, report_title, repos_skipped, section_activity, section_advise, section_calendar, section_inbox, section_next_up, section_runs_on, section_tasks, section_workplace, shutdown, since, st_blocked, st_in_progress, st_new, st_ready, st_review, task, today, tomorrow, until, waiting_days, why, with, workplace, yours_today]
         additionalProperties: {type: string}
         description: |
           Any word the reader sees, by label name (docs/briefings.md lists them). A
@@ -260,8 +279,8 @@ $defs:
         items: {enum: [decision, question, finding, draft, result, idea]}
         description: "inbox: leave these kinds out (the waiting-for-you list skips `idea`)."
       deferred:
-        enum: [all]
-        description: "inbox: also list every put-off item, whatever its return date (the idea shelf)."
+        enum: [all, runs]
+        description: "inbox: all also lists every put-off item, whatever its return date (the idea shelf); runs lists only the put-off items that run on (inbox.py defer --on), with what they wait on."
       summary:
         type: boolean
         description: |
@@ -367,6 +386,15 @@ $defs:
         description: |
           A program that prints a JSON list of items (normalized schema for a
           section, {title,start,end} for a calendar). Runs from the Bridge root.
+      actions_argv:
+        type: array
+        minItems: 2
+        items: {type: string}
+        description: |
+          command: how a row's own step runs (a row offers `actions: [{id, label}]`).
+          Like argv, with `{id}` and `{action}` each a whole argument of its own.
+          `briefing.py act` asks the section again and runs a step only when the row
+          still offers it; an `undo` token the command returned goes back to it as is.
     additionalProperties: false
     allOf:
       - if: {properties: {kind: {const: tracker}}}

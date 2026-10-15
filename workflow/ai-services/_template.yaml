@@ -1,0 +1,13 @@
+# yaml-language-server: $schema=./_schema.yaml
+# One consumer's AI selection. Copy to <id>.yaml; absent files keep Claude.
+# Built-in consumers: briefing-chat, task-review, triage.
+# Workers opt in with scripts/ai-run.py --service <id>.
+schema_version: 1
+scope: user
+id: example-worker
+provider: claude              # claude | codex; no automatic fallback
+# Optional model for each provider. Omitted: caller's Claude model / Codex CLI default.
+models: {}
+# models:
+#   claude: sonnet
+#   codex: your-model-id

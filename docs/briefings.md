@@ -73,6 +73,17 @@ python3 scripts/briefing.py validate              # every profile; exit 1 on a p
 ("good morning" → morning, "acme" → acme). That is how a Bridge with several
 profiles offers the right one instead of the person having to remember ids.
 
+`extends: <id>` builds one profile on another: the base's sections first (a
+section with the same id is replaced by the profile's own), then its own; the
+base's `view` key by key, the profile's own keys winning; the base's `mutes`
+added. `id`, `title`, `default` and `offer_on` stay the profile's own, so an
+extending profile never becomes the default briefing by accident. This is how
+the cockpit works on top of the briefing: a profile `cockpit` with
+`extends: morning` takes every section of the morning briefing and adds what
+only the cockpit shows (resources, token use) and its pages, while
+`/briefing` keeps running the lean morning profile. The cockpit picks it with
+`cockpit.profile` ([`bridge-cockpit.md`](bridge-cockpit.md) § 8).
+
 ## Section kinds
 
 | kind | Shows | Keys |
@@ -308,6 +319,9 @@ so a mute never makes something disappear without a trace.
 
 Setting the dashboard up, step by step: [`briefing-dashboard.md`](briefing-dashboard.md).
 
+The cockpit ([`bridge-cockpit.md`](bridge-cockpit.md), an early version) shows the same
+profile as a local web page, with the tabs, the columns and the row actions below.
+
 A dashboard (the briefing-ui mod for Claude Code in `mods/briefing-ui`, later a web tab) shows the
 briefing as one page and every other section on tabs beside it. Which section
 stands on which tab differs per person, so the profile says it:
@@ -322,12 +336,20 @@ view:
         - {id: upstream, empty: "nothing behind"}
     - id: dates
       title: Dates
+      group: more            # cockpit: after the daily tabs, folded behind More when the bar is too narrow
+      overview: true         # cockpit: opens it with a tile per section, each a jump to it
       sections: [calendar, deadlines]
     - id: github
       title: GitHub
       sections:
         - github-mine
         - {id: boards, detail: [raw_state, project]}
+    - id: work
+      title: Work
+      jev:                   # cockpit with Jev on: orders the rows on a click, never by itself
+        skip_sections: [applications]   # these rows never go out
+        private: [private, family]      # nor rows whose title, detail, task, source or gist holds one
+      sections: [inbox, tasks, applications]
   page_rest: show          # a section no page names goes to the tab "More"; hide leaves it out
 ```
 
@@ -351,6 +373,38 @@ A page lists every row a section found, not only the briefing's first few
 itself with `tone: bad | warn | dim | none` on the item (a usage figure is
 information, not a finding).
 
+A row may also carry a gauge, `meter: {value, max, unit, elapsed}`: `value` a
+number from 0, `max` above 0 (without it the rows of a section are scaled against
+each other, for costs or sizes), `unit` up to eight characters (`%`, `$`, `GB`)
+and `elapsed` from 0 to 1, how much of the time window behind the value has
+passed (a quota that resets). With a `max`, `warn` and `bad` say where those ranges begin
+(in the value's unit); a section whose rows all have a `max` shows as gauges. The cockpit draws it as a bar with a mark at
+`elapsed` and says in words when the value runs ahead of the time; the terminal
+card ignores it. A gauge with a value it cannot read is dropped, a bad `max`,
+`unit` or `elapsed` only loses that field.
+
+For a drawn section (`view: tiles | mosaic`) a row may say more: `group` and
+`icon` place and mark it, `tags: {label: value}` (up to six short strings) give
+the filter chips (a label with two to sixteen values gets a row of them), and
+`account: {id, status}` marks a row as the account `identity/accounts/<id>.yaml`.
+On such a row the cockpit offers its status menu (active, paused, disabled,
+written into the file by `scripts/bridge-resources.py set-status`), and a group
+whose head row (`icon: account`) carries the same id opens all its rows as one
+filterable list.
+
+A `command` row may also offer steps of its own: `actions: [{id, label}]` (up to
+eight; `id` lowercase letters, digits, `_` and `-`, the label as the cockpit
+shows it) next to its `id`. Its section then names how a step runs:
+`actions_argv: [..., "{id}", "{action}"]`, a list like `argv` in which `{id}` and
+`{action}` each stand as a whole argument (validation refuses anything else).
+`briefing.py act <profile> <section> <row-id> <action>` asks the section again and
+runs the step only when that row still offers it, then prints the command's JSON.
+When that JSON carries `undo: "restore:..."`, the token goes back to the same
+command unchecked by act (the row may be gone by then), so the command itself
+must check it. The cockpit shows the steps as a two-click menu on the row
+and keeps every step in its history, with "take back" where an undo came back.
+Example: the rows of a job-application tracker (followed up, turned down, ...).
+
 Each row also says where it leads. **url** is a web address, or a file of this
 Bridge as a `file://` link when the item's `url` (or the field a page entry's
 `link` names) holds a path inside this Bridge that exists (a task's
@@ -368,7 +422,10 @@ A page entry overrides that per section: `when` and `link` name an item field,
 "nothing"), and `alarm: true` makes every row a red finding, nothing more (for
 an empty section that reads as good news, set `empty:` too, for example
 `empty: "all green"`); `badge: false`
-keeps a section out of the number on its tab. Each section
+keeps a section out of the number on its tab; `hide_empty: true` leaves a section off its tab
+while it has no rows (an empty section without it shows as one quiet line).
+`view.page_skip: [<section id>, ...]` keeps sections off every page, the rest page
+included, while they still run: a section that only feeds a file another page reads. Each section
 also says what it adds to its tab's badge (`weight`: rows not dimmed, for
 `commits` today's commits; `bad`: red rows).
 
@@ -434,6 +491,7 @@ tab, an hour before a tab counts as long-running.
 | Wording of the briefing (headline, tab names, "today") | same profile, `view.labels` |
 | Dashboard on or off, card or side panel, band, voice, poll interval, how old the full run may be, layout backup, launch target | `bridge-config.yaml` `briefing.claude_code_ui` |
 | Language of the dashboard's own words (`de`, `en`) | `briefing.claude_code_ui.language`, else `language.conversation`, else English |
+| The cockpit: on or off, port, profile, voice, poll interval, launch target | `bridge-config.yaml` `cockpit:` ([`bridge-cockpit.md`](bridge-cockpit.md)) |
 | Name of the control workspace: the workspace whose session steers the others; the dashboard in that session polls the agent tabs, the others read its state | `bridge-config.yaml` `workplace.control.name` ([workplace](workplace.md)) |
 
 The dashboard's own words (buttons, help, the prompts it sends) sit in one

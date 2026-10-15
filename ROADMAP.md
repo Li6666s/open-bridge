@@ -72,8 +72,12 @@ market test.
 
 ## Next
 
-Nothing is in flight. The next item is whatever the OPEN column above or a
-new issue earns first.
+- **Bridge cockpit** ([`docs/bridge-cockpit.md`](docs/bridge-cockpit.md)): a local web page
+  that watches and steers the Bridge. It ships as an early version (alpha), off unless
+  switched on, and is being extended from daily use.
+
+Beyond it, the next item is whatever the OPEN column above or a new issue earns
+first.
 
 ## Later
 

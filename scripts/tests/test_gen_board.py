@@ -452,7 +452,23 @@ def test_streams_are_counted_but_never_count_against_wip(board_tree, monkeypatch
     out = capsys.readouterr().out
     assert "Doing 2" in out
     assert "Streams 3" in out
-    assert f"WIP 2/{gb.WIP_WARN}" in out
+    assert f"WIP 2/{gb.WIP_WARN}" in out                   # no work.max_active: the default cap
+
+
+def test_the_wip_cap_comes_from_the_config_and_zero_switches_it_off(board_tree, monkeypatch, capsys):
+    for slug in ("a", "b", "c"):
+        write_status(board_tree / "work" / "tasks", slug, "status: doing")
+    (board_tree / "bridge-config.yaml").write_text("work:\n  max_active: 2\n", encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", ["gen-board.py"])
+    assert gb.main() == 0
+    board = (board_tree / "work" / "board.md").read_text(encoding="utf-8")
+    assert "| WIP (doing+review) | 3 / 2 · ⚠️ WIP 3 > 2 |" in board
+    (board_tree / "bridge-config.yaml").write_text("work:\n  enabled: true\n", encoding="utf-8")
+    assert gb.main() == 0                                   # not set: the default of 10
+    assert f"| WIP (doing+review) | 3 / {gb.WIP_WARN} |" in (board_tree / "work" / "board.md").read_text(encoding="utf-8")
+    (board_tree / "bridge-config.yaml").write_text("work:\n  max_active: 0\n", encoding="utf-8")
+    assert gb.main() == 0                                   # 0: no cap at all
+    assert "| WIP (doing+review) | 3 |" in (board_tree / "work" / "board.md").read_text(encoding="utf-8")
 
 
 def test_a_multi_line_headline_stays_one_table_row(board_tree, monkeypatch):

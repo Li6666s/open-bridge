@@ -233,6 +233,14 @@ families:
     writer: "a person, or an org overlay; board items only through github-projects-manager"
     read: named
 
+  - path: workflow/ai-services/
+    object: "which AI provider and model one consumer uses (briefing chat, task review, triage, a worker)"
+    island: "core: template, schema; user: entries"
+    lives: [core, private]
+    references: []
+    writer: "a person"
+    read: named
+
   - path: workflow/workloads/
     object: "one declared run on one machine"
     island: "core: template, schema, contract tests; user: entries"

@@ -83,6 +83,7 @@ And capabilities you switch on when you need them:
 | [Workloads](docs/workloads.md) | one file per scheduled job or daemon on your machines, checked against the live service manager |
 | [Inbox](docs/inbox.md) | everything that needs you waits in one place until the live source says it is done, and the briefing shows it first |
 | [Workplace](docs/workplace.md) | plan the day as workspaces with one agent tab per task, and steer the tabs from one place through a driver for your terminal tool |
+| [Cockpit](docs/bridge-cockpit.md) (alpha) | a local web page that shows the briefing, inbox, tasks, agent tabs and machines and acts on them with a click; an early version, off until you switch it on, and still being extended |
 | [Always-on machine](docs/always-on-machine.md) | a machine that stays on runs your watchers and files what it finds into the inbox while your laptop sleeps |
 | [Secrets](docs/secrets.md) | reference URIs instead of values, and a skill that resolves them without printing them |
 | [Memory](docs/memory.md) | durable facts as one file each, versioned with the rest of the instance |

@@ -286,6 +286,31 @@ skills.
 
 **Offer only when** the session runs in Claude Code and `mods/briefing-ui/` exists in this Bridge.
 
+### Bridge Cockpit (watch and steer, early version)
+**What:** A local web page (127.0.0.1 only) that watches and steers the whole Bridge: the briefing, your work (inbox and tasks), agent tabs and sessions, workers, machines and token use, with buttons that act. Operational, not pixel-art. An early version (alpha) that is still being extended: say so when offering it.
+
+**When you need it:** You want everything at a glance in a browser tab and to act from there, not via CLI commands.
+
+**Activate:** `cockpit.enabled: true` in `bridge-config.yaml`, then `/cockpit`. Guide: `docs/bridge-cockpit.md`.
+
+### Cockpit relay (Claude Code mod, early access)
+**What:** Lets the cockpit hand a question to the Claude Code session that steers the others ("To the control session" on the page). It only heartbeats and submits signed questions; no card, no command. Claude Code only (function hooks).
+
+**When you need it:** You use the cockpit and want questions that need the day's context, or should act at once, to reach your control session.
+
+**Activate:** From the Bridge folder `claude plugin marketplace add ./mods --scope local` and `claude plugin install cockpit-relay@open-bridge-mods --scope local`, with `cockpit.enabled: true`. Guide: `docs/bridge-cockpit.md` section 5, `mods/cockpit-relay/README.md`.
+
+**Offer only when** the session runs in Claude Code, the cockpit is on, and `mods/cockpit-relay/` exists in this Bridge.
+
+### Jev in the cockpit (optional integration)
+**What:** Typed judgments from Jev (api.typesafe.ai) on the cockpit: urgency, impact, effort and "only you" per task, a suggested first task, and a work page ordered by Jev on request. Only titles, short summaries, labels and priorities leave the machine; a page can keep sections or words private (`jev:` on the profile page).
+
+**When you need it:** You have a Jev (TypeSafe) API key and want a second opinion on what to do first.
+
+**Activate:** Put the key in the keychain, then `integrations.typesafe.enabled: true` and `key_ref: keychain://<service>/<account>` in `bridge-config.yaml`. To switch it off again, `enabled: false`: the tab, the strip and every call disappear. Guide: `docs/bridge-cockpit.md` (Jev).
+
+**Offer only when** the cockpit is on and the person says they have a Jev or TypeSafe key. Without a key, never mention it: it is off and costs nothing.
+
 ### Themes
 **What:** YAML files in `themes/` control user-facing vocabulary only — never tools, delegation, or goals. Switch via `theme:` in `bridge-config.yaml`.
 

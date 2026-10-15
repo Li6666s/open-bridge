@@ -97,7 +97,7 @@ def sample():
             task_item("timesheet", "Time tracking", nxt={"what": "Sketch the data model", "who": "me"}),
             task_item("austria", "Austria onboarding", blocked_by="test run at the customer",
                       changed_at="2026-09-18"),
-            task_item("a2a", "Bridge to bridge", nxt={"what": "Free up the mini", "who": "axel"},
+            task_item("a2a", "Bridge to bridge", nxt={"what": "Free up the mini", "who": "ada"},
                       changed_at="2026-10-01"),
             task_item("keys", "Keychain backup", nxt={"what": "Restore test", "who": "me"}),
             task_item("bare", "Task without next step")]),
@@ -110,7 +110,7 @@ def sample():
                                      {"id": "c2", "title": "Mini review", "start": "2026-10-06T16:00",
                                       "end": "2026-10-06T17:00"}]),
         sec("activity", "activity", [{"id": "x", "title": "rebuilt the daemon", "changed_at": "2026-10-04T22:59",
-                                      "project": "k2a", "new": True}]),
+                                      "project": "orbit", "new": True}]),
         sec("workplace", "workplace", [{"id": "a2a", "title": "Bridge to bridge", "state": "resume"},
                                        {"id": "typesafe", "title": "CV matching", "state": "new"}]),
     )
@@ -364,6 +364,16 @@ def test_waiting_counts_from_blocked_since_and_shortens_the_reason_at_a_word():
     reason = next(w for w in row["why"] if w.startswith("test run"))
     assert reason.endswith("…") and reason[:-1].rstrip() in t["blocked_by"]
     assert t["blocked_by"].split()[len(reason[:-1].split()) - 1] == reason[:-1].split()[-1]
+
+
+def test_a_task_that_runs_on_says_when_to_look_again_and_asks_only_from_that_day():
+    t = task_item("austria", "Austria onboarding", changed_at="2026-09-01", blocked_by="Antwort vom Kunden")
+    t["blocked_since"], t["quiet_until"] = "2026-09-18", "2099-01-05"
+    row = bv.build(result(sec("tasks", "tasks", [t])), profile(view={"style": "triage"}))["buckets"][0]["items"][0]
+    assert any(w.startswith("look again") for w in row["why"]) and row.get("nudge") is False
+    t["quiet_until"] = "2020-01-05"                                   # the day has come: it asks again
+    row = bv.build(result(sec("tasks", "tasks", [t])), profile(view={"style": "triage"}))["buckets"][0]["items"][0]
+    assert row.get("nudge") is True
 
 
 def test_the_headline_shortens_a_long_title_at_a_word():
@@ -808,12 +818,12 @@ def test_report_is_a_valid_style_and_its_labels_relabel():
 def test_report_why_has_no_internal_ids_and_links_issue_refs():
     sections = [{"kind": "command", "id": "up", "argv": ["x"]},
                 {"kind": "tracker", "id": "gh", "provider": "github"}]
-    up = {"id": "upstream:bks", "title": "Overlay bks: sync due", "state": "ready", "raw_state": "drift"}
+    up = {"id": "upstream:acme", "title": "Overlay acme: sync due", "state": "ready", "raw_state": "drift"}
     pr = {"id": "acme/app#7", "title": "Fix it", "state": "ready", "raw_state": "your PR, open 8 days",
           "url": "https://github.com/acme/app/pull/7"}
     text = bv.draw(_report(None, sections, sec("up", "command", [up]), sec("gh", "tracker", [pr])))
-    assert "upstream:bks" not in text
-    assert "**Overlay bks: sync due** (drift)" in text
+    assert "upstream:acme" not in text
+    assert "**Overlay acme: sync due** (drift)" in text
     assert "**Fix it** ([acme/app#7](https://github.com/acme/app/pull/7) · your PR, open 8 days)" in text
 
 
@@ -960,3 +970,14 @@ def test_an_inbox_row_carries_its_key_so_a_dashboard_sees_which_tab_filed_it():
     r = result(sec("inbox", "inbox", [item]))
     rows = {i["inbox_id"]: i for b in bv.build(r, profile(view={"style": "triage"}))["buckets"] for i in b["items"]}
     assert rows["i9"]["inbox_key"] == "tab-alpha-result"
+
+
+def test_a_shortened_title_gives_way_to_the_full_one_of_the_same_thing():
+    # one source names a thing by its short tab label ("A2A: Anfragen an den…"), another by its full title:
+    # the row keeps the full one, whichever source came first
+    issue = {"id": "acme/infra#17", "state": "new", "category": "open", "url": "https://github.com/acme/infra/issues/17"}
+    r = result(sec("gh", "tracker", [{**issue, "title": "Time tracking…"}]),
+               sec("board", "tracker", [{**issue, "title": "Time tracking requirements"}]))
+    view = bv.build(r, profile(view={"style": "triage"}))
+    titles = [i["title"] for b in view["buckets"] for i in b["items"] if "Time tracking" in i["title"]]
+    assert titles == ["Time tracking requirements"]

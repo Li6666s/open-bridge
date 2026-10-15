@@ -232,6 +232,8 @@ def test_tasks_list_every_active_task_with_area_priority_and_flags(repo):
     assert set(rows) == {"payments-incident", "bigcorp-report", "bigcorp-old", "platform-upgrade", "waiting-on-vendor"}
     pay = rows["payments-incident"]
     assert pay["area"] == "Bigcorp" and pay["priority"] == "P0" and pay["label"]
+    # the full heading beside the short tab label, so a page can show the whole name
+    assert pay["title"] and len(pay["title"]) >= len(pay["label"].rstrip("…"))
     assert pay["blocked_by"] is None and pay["stale"] is False and pay["score"] > rows["bigcorp-report"]["score"]
     assert rows["platform-upgrade"]["area"] == "Platform"
     assert rows["waiting-on-vendor"]["area"] == "Misc" and rows["waiting-on-vendor"]["blocked_by"] == "vendor answers"
@@ -780,3 +782,76 @@ def test_the_router_gets_a_short_budget_so_a_click_never_outlasts_the_dashboard(
     monkeypatch.setattr(wp.subprocess, "run", fake_run)
     routed = wp.route(lrepo, _router("[]"), entries)
     assert seen["timeout"] <= 45 and routed[0]["workspace"] == entries[0]["workspace"]
+
+
+# ---------------------------------------------------------------- the optional verbs: caps, focus, key, screen, close
+
+FULL_DRIVER = """\
+import json, sys
+req = json.load(sys.stdin)
+v = req["verb"]
+if v == "tabs":
+    print(json.dumps({"tabs": [{"name": "alpha", "workspace": "W", "ref": "%3", "state": "needs-you", "last": "Allow?"}]}))
+elif v == "sessions":
+    print(json.dumps({"sessions": {}}))
+elif v == "caps":
+    print(json.dumps({"caps": ["tabs", "sessions", "send", "focus", "key", "screen", "close"]}))
+elif v == "screen":
+    print(json.dumps({"text": "line " + req["tab"] + " " + str(req["lines"])}))
+elif v in ("focus", "key", "close"):
+    print(json.dumps({"report": [v + " " + req["tab"] + (" " + req["key"] if v == "key" else "")]}))
+else:
+    print(json.dumps({"report": ["ERROR unknown verb " + v]})); sys.exit(1)
+"""
+
+
+def test_the_optional_verbs_go_through_the_driver(tmp_path):
+    script = tmp_path / "driver.py"
+    script.write_text(FULL_DRIVER)
+    drv = wp.CommandDriver([sys.executable, str(script)])
+    assert drv.caps() == ["tabs", "sessions", "send", "focus", "key", "screen", "close"]
+    assert drv.focus("%3") == ["focus %3"]
+    assert drv.key("%3", "escape") == ["key %3 escape"]
+    assert drv.screen("%3", 40) == "line %3 40"
+    assert drv.close("%3") == ["close %3"]
+
+
+def test_a_driver_without_caps_serves_the_six_base_verbs(tmp_path):
+    script = tmp_path / "driver.py"
+    script.write_text("import json, sys\nprint(json.dumps({}))\n")
+    assert wp.CommandDriver([sys.executable, str(script)]).caps() == list(wp.BASE_CAPS)
+    assert wp.NoneDriver().caps() == []
+    assert wp.NoneDriver().screen("x", 10) is None
+    assert "no driver" in wp.NoneDriver().focus("x")[0].lower()
+
+
+def test_a_key_outside_the_known_ones_is_refused_before_the_driver(tmp_path):
+    script = tmp_path / "driver.py"
+    script.write_text(FULL_DRIVER)
+    drv = wp.CommandDriver([sys.executable, str(script)])
+    out = drv.key("%3", "ctrl-c")
+    assert out[0].startswith("ERROR") and drv.failed
+
+
+def test_the_cli_runs_the_optional_verbs(repo, tmp_path, capsys):
+    script = tmp_path / "driver.py"
+    script.write_text(FULL_DRIVER)
+    (repo / "bridge-config.yaml").write_text(f"workplace:\n  driver: {{command: ['{sys.executable}', '{script}']}}\n")
+    assert wp.main(["--root", str(repo), "caps", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out) == {"caps": ["tabs", "sessions", "send", "focus", "key", "screen", "close"]}
+    assert wp.main(["--root", str(repo), "key", "%3", "1"]) == 0
+    assert capsys.readouterr().out.strip() == "key %3 1"
+    assert wp.main(["--root", str(repo), "screen", "%3", "--lines", "5", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out) == {"text": "line %3 5"}
+    assert wp.main(["--root", str(repo), "focus", "%3"]) == 0 and wp.main(["--root", str(repo), "close", "%3"]) == 0
+
+
+def test_a_resume_reopens_one_task_session_in_its_own_folder(lrepo):
+    sid = "0b1c2d3e-4f50-6172-8394-a5b6c7d8e9f0"
+    cfg = {"agent": {"resume": "claude --resume {session} --model sonnet"}}
+    (e,) = wp.build_launch(lrepo, cfg, ["payments-incident"], "go", resume=sid, resume_cwd="/tmp/some where")
+    assert e["kind"] == "task" and e["resume"] == sid
+    assert e["command"] == (f"cd -- '/tmp/some where' && export {wp.TAB_ENV}=payments-incident && "
+                            f"claude --resume {sid} --model sonnet")
+    (bad,) = wp.build_launch(lrepo, cfg, ["payments-incident"], "go", resume="not-a-session")
+    assert "error" in bad

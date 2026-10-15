@@ -1,0 +1,6 @@
+{
+  "description": "The cockpit relay: heartbeat, signed questions from the cockpit as prompts into this session, answers written back. Active only with cockpit.enabled and cockpit.relay in bridge-config.yaml.",
+  "modules": [
+    "./register.tsx"
+  ]
+}

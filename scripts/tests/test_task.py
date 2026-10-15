@@ -215,6 +215,19 @@ def test_close_declined_sets_the_outcome(repo):
     assert "Declined: moot" in text
 
 
+def test_a_normal_close_drops_an_old_declined_outcome(repo):
+    _log_with_today(repo)
+    path = repo / "work" / "tasks" / "alpha" / "STATUS.md"
+    path.write_text(path.read_text(encoding="utf-8").replace("status: doing\n", "status: doing\noutcome: declined\n", 1),
+                    encoding="utf-8")
+    assert "outcome: declined" in path.read_text(encoding="utf-8")
+    r = run(repo, "close", "alpha", "--reason", "shipped after all")
+    assert r.returncode == 0, r.stderr
+    today = _dt.date.today()
+    text = (repo / "work" / "done" / f"{today:%Y-%m}" / "alpha" / "STATUS.md").read_text(encoding="utf-8")
+    assert "status: done\n" in text and "outcome:" not in text
+
+
 def test_close_without_a_log_creates_one_with_todays_block(repo):
     r = run(repo, "close", "alpha")
     assert r.returncode == 0, r.stderr
@@ -265,3 +278,118 @@ def test_a_failing_log_step_is_a_warning_after_the_move(repo):
     out = _json.loads(r.stdout)
     assert out["warnings"] and "log" in out["warnings"][0]
     assert (repo / "work" / "done" / f"{_dt.date.today():%Y-%m}" / "alpha" / "STATUS.md").is_file()
+
+
+# ---------------------------------------------------------------- reopen: the inverse of close
+
+def test_reopen_brings_a_closed_task_back_with_its_status_and_a_note(repo):
+    (repo / "work/tasks/alpha/STATUS.md").write_text(BLOCKED, encoding="utf-8")
+    log = _log_with_today(repo)
+    assert run(repo, "close", "alpha", "--declined", "--reason", "by mistake").returncode == 0
+    r = run(repo, "reopen", "alpha", "--json")
+    assert r.returncode == 0, r.stderr
+    today = _dt.date.today()
+    path = repo / "work" / "tasks" / "alpha" / "STATUS.md"
+    assert path.is_file() and not (repo / "work" / "done" / f"{today:%Y-%m}" / "alpha").exists()
+    text = path.read_text(encoding="utf-8")
+    assert "status: doing\n" in text and "closed:" not in text and "outcome:" not in text
+    assert "priority: P1\n" in text                                    # everything else stays
+    assert f"- {today.isoformat()}: Reopened" in text and "Declined: by mistake" in text   # history kept
+    out = _json.loads(r.stdout)
+    assert out["slug"] == "alpha" and out["status"] == "doing" and out["moved_from"].startswith("work/done/")
+    rows = [ln for ln in log.read_text(encoding="utf-8").splitlines() if "| alpha |" in ln]
+    assert rows[-1].endswith("reopened |")
+    assert "alpha" in (repo / "work" / "board.md").read_text(encoding="utf-8")
+
+
+def test_reopen_as_backlog_with_a_note_says_it_should_still_be_done(repo):
+    _log_with_today(repo)
+    assert run(repo, "close", "alpha").returncode == 0
+    r = run(repo, "reopen", "alpha", "--as", "backlog", "--note", "still to be done")
+    assert r.returncode == 0, r.stderr
+    text = (repo / "work/tasks/alpha/STATUS.md").read_text(encoding="utf-8")
+    assert "status: backlog\n" in text and "Reopened: still to be done" in text
+
+
+def test_reopen_refuses_an_open_task_an_unknown_one_and_a_bad_status(repo):
+    r = run(repo, "reopen", "alpha")
+    assert r.returncode == 1 and "open" in r.stderr
+    r = run(repo, "reopen", "ghost")
+    assert r.returncode == 1 and "ghost" in r.stderr
+    assert run(repo, "reopen", "alpha", "--as", "done").returncode == 2
+    assert not (repo / "work" / "log.md").exists()
+
+
+def test_reopen_takes_the_latest_close_when_a_slug_was_closed_twice(repo):
+    for month in ("2026-08", "2026-09"):
+        d = repo / "work" / "done" / month / "old"
+        d.mkdir(parents=True)
+        (d / "STATUS.md").write_text(STATUS.replace("alpha", "old").replace("doing", "done").replace(
+            "last_updated: 2026-09-01", f"last_updated: {month}-15"), encoding="utf-8")
+    r = run(repo, "reopen", "old", "--json")
+    assert r.returncode == 0, r.stderr
+    assert _json.loads(r.stdout)["moved_from"] == "work/done/2026-09/old"
+    assert (repo / "work" / "done" / "2026-08" / "old").is_dir()
+
+
+# ---------------------------------------------------------------- runs on, and a task from an inbox item
+
+def test_wait_marks_a_task_as_running_on_until_a_day_and_clear_takes_it_back(repo):
+    import datetime
+    today = datetime.date.today().isoformat()
+    p = repo / "work/tasks/alpha/STATUS.md"
+    r = run(repo, "wait", "alpha", "--until", "2099-01-05", "--on", "an answer from the vendor")
+    assert r.returncode == 0, r.stderr
+    text = p.read_text(encoding="utf-8")
+    assert 'blocked_by: "an answer from the vendor"' in text and "quiet_until: 2099-01-05" in text
+    assert f"blocked_since: {today}" in text and "status: doing" in text
+    assert "Runs on until 2099-01-05: an answer from the vendor" in text            # a dated note says so
+    assert run(repo, "wait", "alpha", "--until", "2099-02-01").returncode == 0   # no new reason: the old one stays
+    text = p.read_text(encoding="utf-8")
+    assert 'blocked_by: "an answer from the vendor"' in text and "quiet_until: 2099-02-01" in text and text.count("blocked_by:") == 1
+    assert run(repo, "wait", "alpha", "--clear").returncode == 0
+    assert run(repo, "wait", "alpha", "--until", "2099-02-01").returncode == 0   # no reason at all: it simply runs
+    assert 'blocked_by: "runs on"' in p.read_text(encoding="utf-8")
+    assert run(repo, "wait", "alpha", "--clear").returncode == 0
+    text = p.read_text(encoding="utf-8")
+    assert "blocked_by" not in text and "quiet_until" not in text and "blocked_since" not in text
+    assert run(repo, "wait", "alpha", "--until", "gestern").returncode == 1        # a day, nothing else
+
+
+def test_new_task_from_an_inbox_item_starts_in_backlog_and_closes_the_item(repo):
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("inbox_mod", ROOT / "scripts" / "inbox.py")
+    ib = importlib.util.module_from_spec(spec)
+    sys.modules["inbox_mod"] = ib                      # dataclasses look their module up
+    spec.loader.exec_module(ib)
+    box = ib.Inbox(repo / "work" / "inbox", actor="test")
+    item = box.add(source="session", kind="decision", summary="Make the channel known: a few short videos",
+                   detail="three short videos", closer="person")
+    r = run(repo, "new", "--from-inbox", item, "--json")
+    assert r.returncode == 0, r.stderr
+    import json as _json
+    out = _json.loads(r.stdout)
+    slug = out["slug"]
+    assert slug.startswith("make-the-channel-known")
+    text = (repo / "work/tasks" / slug / "STATUS.md").read_text(encoding="utf-8")
+    assert "status: backlog" in text and f"slug: {slug}" in text
+    assert 'headline: "Make the channel known: a few short videos"' in text
+    assert f"inbox {item}" in text and "three short videos" in text
+    closed = box.get(item)
+    assert closed.state == "done" and any(slug in (e.data.get("text") or "") for e in closed.events)
+    assert run(repo, "new", "--from-inbox", item).returncode == 1       # a closed item becomes no second task
+    assert run(repo, "new", "alpha", "--headline", "x").returncode == 1  # a slug that exists is refused
+    r = run(repo, "new", "beta", "--headline", "Etwas Neues", "--status", "doing")
+    assert r.returncode == 0, r.stderr
+    assert "status: doing" in (repo / "work/tasks/beta/STATUS.md").read_text(encoding="utf-8")
+
+
+def test_a_new_slug_is_the_head_of_the_summary_cut_between_words():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("task_slug", ROOT / "scripts" / "task.py")
+    m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+    assert m._new_slug("Chatbot on a new model: grant access in the cloud account") == "chatbot-on-a-new-model"
+    slug = m._new_slug("Move the build machine carefully over to Python 3.15 (with PyYAML)")
+    assert slug == "move-the-build-machine-carefully-over-to" and len(slug) <= 40
+    assert m._new_slug("Größe prüfen") == "groesse-pruefen" and m._new_slug("!!!") == "task"

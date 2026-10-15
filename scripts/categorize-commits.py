@@ -122,7 +122,7 @@ USER_PATTERNS = [
     # lives in .claude/mods/, its own folder marketplace, and never promotes.
     # ENUMERATED like agents/ above: a new shipped mod is added to the
     # lookahead deliberately, and anything else in mods/ fails closed.
-    r"^mods/(?!README\.md$|\.claude-plugin/marketplace\.json$|briefing-ui/)",
+    r"^mods/(?!README\.md$|\.claude-plugin/marketplace\.json$|briefing-ui/|cockpit-relay/)",
     r"^\.claude/mods/",
 ]
 
@@ -422,6 +422,7 @@ SCRIPTS_CORE_ALLOWLIST = frozenset({
     "scripts/tests/test_briefing_view.py",
     "scripts/tests/test_briefing_activity.py",
     "scripts/tests/test_briefing_pages.py",
+    "scripts/tests/test_briefing_act.py",
     "scripts/tests/fixtures/briefing/ado/query.json",
     "scripts/tests/fixtures/briefing/calendar/icalbuddy.txt",
     "scripts/tests/fixtures/briefing/calendar/sample.ics",
@@ -501,6 +502,75 @@ SCRIPTS_CORE_ALLOWLIST = frozenset({
     # validate.yml runs its contract against the real script.
     "scripts/upstream-resolve.py",
     "scripts/tests/test_upstream_autoupdate.py",
+    "scripts/ai-run.py",
+    "scripts/lib/ai_services.py",
+    "scripts/tests/test_ai_services.py",
+    # Registered with the cockpit (docs/bridge-cockpit.md): the
+    # local server, its static page with the vendored Preact+htm bundle, and
+    # both suites. validate.yml runs the server and the frontend tests.
+    "scripts/bridge-cockpit.py",
+    "scripts/lib/bridge_cockpit/__init__.py",
+    "scripts/lib/bridge_cockpit/config.py",
+    "scripts/lib/bridge_cockpit/runner.py",
+    "scripts/lib/bridge_cockpit/model.py",
+    "scripts/lib/bridge_cockpit/text.py",
+    "scripts/lib/bridge_cockpit/collector.py",
+    "scripts/lib/bridge_cockpit/tabs.py",
+    "scripts/lib/bridge_cockpit/actions.py",
+    "scripts/lib/bridge_cockpit/relay.py",
+    "scripts/lib/bridge_cockpit/watch.py",
+    "scripts/lib/bridge_cockpit/store.py",
+    "scripts/lib/bridge_cockpit/details.py",
+    "scripts/lib/bridge_cockpit/jev.py",          # optional integration, off unless integrations.typesafe.enabled
+    "scripts/lib/bridge_cockpit/review.py",
+    "scripts/lib/bridge_cockpit/sessions.py",
+    "scripts/lib/bridge_cockpit/usage.py",
+    "scripts/tests/test_bridge_cockpit_usage.py",
+    "scripts/lib/bridge_cockpit/daybook.py",              # the start page's day by day
+    "scripts/tests/test_bridge_cockpit_daybook.py",
+    "scripts/lib/bridge_cockpit/returns.py",              # the return channel of starts handed to tabs
+    "scripts/tests/test_bridge_cockpit_returns.py",
+    "scripts/lib/bridge_cockpit/graph.py",                # the knowledge graph of the inner room
+    "scripts/tests/test_bridge_cockpit_graph.py",
+    "scripts/lib/bridge_cockpit/quick.py",
+    "scripts/lib/bridge_cockpit/agents.py",
+    "scripts/lib/bridge_cockpit/triage.py",
+    "scripts/triage.py",
+    "scripts/tests/test_triage.py",
+    "scripts/tests/test_bridge_cockpit_triage.py",
+    "scripts/lib/bridge_cockpit/history.py",
+    "scripts/lib/bridge_cockpit/design.py",              # the colours, read from the Bridge's own DESIGN.md
+    "scripts/bridge-resources.py",
+    "scripts/tests/test_bridge_resources.py",
+    "scripts/cloud-inventory.py",
+    "scripts/tests/test_cloud_inventory.py",
+    "scripts/lib/bridge_cockpit/server.py",
+    "scripts/tests/test_bridge_cockpit.py",
+    "scripts/tests/test_bridge_cockpit_core.py",
+    "scripts/tests/test_bridge_cockpit_jev.py",
+    "scripts/web/index.html",
+    "scripts/web/jev/jev.css",                # the Jev page, loaded with import() only when switched on
+    "scripts/web/jev/logic.js",
+    "scripts/web/jev/motion.js",
+    "scripts/web/jev/page.js",
+    "scripts/web/theme.js",
+    "scripts/web/app.js",
+    "scripts/web/api.js",
+    "scripts/web/components.js",
+    "scripts/web/inner.js",                   # the inner room behind the core: the knowledge graph in 3D
+    "scripts/web/logic.js",
+    "scripts/web/triage.js",
+    "scripts/web/motion.js",
+    "scripts/web/text.js",
+    "scripts/web/mock.js",
+    "scripts/web/tokens.css",
+    "scripts/web/style.css",
+    "scripts/web/fonts/inter-latin-wght.woff2",          # DESIGN.md's two families, served by the cockpit itself
+    "scripts/web/fonts/playfair-display-latin-500.woff2",
+    "scripts/web/vendor/htm-preact-3.1.1.module.js",
+    "scripts/web/vendor/README.md",
+    "scripts/tests/bridge_cockpit_frontend.test.mjs",
+    "scripts/tests/bridge_cockpit_jev.test.mjs",
     # Registered with the scheduled archive. It runs DAILY and does only the
     # mechanical half; the judgement half is recorded as owed. lib/bridge-python.sh
     # is the one interpreter resolver the currency jobs share, so a fix lands once.

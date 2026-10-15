@@ -663,3 +663,183 @@ def test_a_finding_with_a_probe_or_a_closer_does_not_warn(box, capsys):
     box.add(source="m", kind="finding", summary="a", closes_when={"after": "2026-10-09"})
     box.add(source="m", kind="finding", summary="b", closer="reporter")
     assert "no way to close" not in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------- reopen: a close by mistake
+
+def test_reopen_brings_a_closed_or_dropped_item_back_as_a_new_event(box):
+    for verb in ("close", "drop", "reject"):
+        item_id = add(box, key=f"k-{verb}")
+        box.event(item_id, verb, text="by mistake")
+        assert box.get(item_id).state in ("done", "dropped")
+        before = sorted(p.name for p in (box.root / item_id / "events").iterdir())
+        box.reopen(item_id, note="still needed")
+        after = sorted(p.name for p in (box.root / item_id / "events").iterdir())
+        assert after[:len(before)] == before and len(after) == len(before) + 1   # nothing rewritten
+        assert after[-1].endswith("-reopen.yaml")
+        assert box.get(item_id).state == "open"
+        assert item_id in [i.id for i in box.open_items()]
+
+
+def test_runs_on_is_a_defer_that_names_what_it_waits_on(box):
+    # runs on: quiet until the day to look again, with who or what it waits on
+    item_id = add(box, key="k-runs")
+    box.event(item_id, "defer", until="2099-01-01", waits_on="an answer from the vendor")
+    item = box.get(item_id)
+    # stored as waits_on, never a bare `on` key (a boolean to YAML 1.1 readers)
+    stored = "\n".join(f.read_text(encoding="utf-8") for f in (box.root / item_id / "events").glob("*defer*"))
+    assert "waits_on: an answer from the vendor" in stored and "'on'" not in stored
+    assert item.state == "deferred" and item.deferral == {"until": "2099-01-01", "on": "an answer from the vendor"}
+    assert item.as_dict()["waiting_on"] == "an answer from the vendor" and item.as_dict()["deferred_until"] == "2099-01-01"
+    box.event(item_id, "defer", until="2099-02-01")            # a plain later: nothing it waits on
+    assert box.get(item_id).deferral == {"until": "2099-02-01", "on": None}
+    box.reopen(item_id)
+    assert box.get(item_id).deferral is None and "waiting_on" not in box.get(item_id).as_dict()
+    box.event(item_id, "defer", until="2099-03-01", on="an older event")   # the first events wrote `on`: still read
+    assert box.get(item_id).deferral == {"until": "2099-03-01", "on": "an older event"}
+
+
+def test_reopen_takes_back_a_defer(box):
+    # "later" by mistake: the cockpit's undo reopens the deferred item at once
+    item_id = add(box, key="k-later")
+    box.event(item_id, "defer", until="2099-01-01")
+    assert box.get(item_id).state == "deferred"
+    box.reopen(item_id)
+    assert box.get(item_id).state == "open"
+
+
+def test_a_reopened_executed_item_is_never_run_again_without_a_new_yes(box):
+    item_id = add(box, gate="your-yes", action={"argv": ["true"]})
+    box.approve(item_id)
+    box.event(item_id, "executed")
+    box.reopen(item_id)
+    item = box.get(item_id)
+    assert item.state == "open" and item.approval is None
+    assert item_id not in [i.id for i in box.runnable()]
+
+
+def test_reopen_takes_back_a_yes_that_has_not_run(box):
+    # a yes in the cockpit by mistake: undo before the runner's next pass, the item is open and never runs
+    item_id = add(box, gate="your-yes", action={"argv": ["true"]})
+    box.approve(item_id)
+    assert box.get(item_id).state == "approved"
+    box.reopen(item_id)
+    assert box.get(item_id).state == "open" and item_id not in [i.id for i in box.runnable()]
+
+
+def test_reopen_refuses_an_open_item_and_a_close_after_it_closes_again(box):
+    item_id = add(box)
+    with pytest.raises(ValueError):
+        box.reopen(item_id)
+    box.close(item_id)
+    box.reopen(item_id)
+    box.close(item_id, note="now really done")
+    assert box.get(item_id).state == "done"
+
+
+def test_cli_reopen_renders_the_inbox_view(tmp_path):
+    def run(*args):
+        return subprocess.run([sys.executable, str(SCRIPT), "--root", str(tmp_path), "--by", "web", *args],
+                              capture_output=True, text=True)
+    item_id = run("add", "--from", "x/y", "--kind", "decision", "--summary", "Tidy labels").stdout.strip()
+    assert run("close", item_id).returncode == 0
+    r = run("reopen", item_id, "--note", "closed by mistake")
+    assert r.returncode == 0, r.stderr
+    assert "Tidy labels" in (tmp_path / "work" / "inbox.md").read_text(encoding="utf-8")
+    assert run("reopen", item_id).returncode == 1
+
+
+# ---------------------------------------------------------------- quiet after a deliberate close
+#
+# An alarm was investigated and closed by a reader in the morning; a reminder hours later
+# carried the IDENTICAL text and opened a new item plus a new phone message. A close by
+# somebody who looked at it answers that exact text.
+
+DETAIL = "WHERE: host\nWHAT TO DO: read the log\n[failure] job: ended with 143 at 2026-10-13T02:59:51+00:00"
+
+
+def _closed(box, by="watcher", text="noted after investigation", detail=DETAIL):
+    item_id = add(box, kind="finding", key="notify:k1", detail=detail, closer="bot")
+    box.event(item_id, "close", by=by, text=text)
+    return item_id
+
+
+def test_recently_closed_finds_an_identical_finding_closed_by_a_reader(box):
+    item_id = _closed(box)
+    hit = box.recently_closed("notify:k1", DETAIL, hours=24)
+    assert hit is not None and hit[0].id == item_id and hit[1].by == "watcher"
+
+
+def test_recently_closed_ignores_a_close_older_than_the_window(tmp_path):
+    clock = {"now": NOW}
+    box = inbox.Inbox(tmp_path / "work" / "inbox", actor="laptop", clock=lambda: clock["now"])
+    _closed(box)
+    clock["now"] = NOW + dt.timedelta(hours=25)
+    assert box.recently_closed("notify:k1", DETAIL, hours=24) is None
+
+
+def test_recently_closed_ignores_a_changed_finding(box):
+    _closed(box)
+    assert box.recently_closed("notify:k1", DETAIL.replace("143", "1"), hours=24) is None
+
+
+def test_recently_closed_treats_a_moved_timestamp_as_the_same_finding(box):
+    _closed(box)
+    moved = DETAIL.replace("2026-10-13T02:59:51+00:00", "2026-10-14T03:00:02+00:00")
+    assert box.recently_closed("notify:k1", moved, hours=24) is not None
+
+
+def test_recently_closed_ignores_a_probe_close_the_trouble_came_back(box):
+    _closed(box, by="check", text="closes_when holds")
+    assert box.recently_closed("notify:k1", DETAIL, hours=24) is None
+
+
+def test_recently_closed_ignores_an_all_clear_the_trouble_came_back(box):
+    _closed(box, by="always-on", text="All clear from the run manager: healthy again")
+    assert box.recently_closed("notify:k1", DETAIL, hours=24) is None
+
+
+def test_recently_closed_knows_only_the_english_all_clear_by_default(box):
+    _closed(box, by="always-on", text="Fin d'alerte: ok")
+    assert box.recently_closed("notify:k1", DETAIL, hours=24) is not None
+
+
+def test_recently_closed_takes_the_all_clear_words_of_the_fork(tmp_path):
+    box = inbox.Inbox(tmp_path / "work" / "inbox", actor="laptop", clock=lambda: NOW,
+                      all_clear=("Fin d'alerte",))
+    _closed(box, by="always-on", text="Fin d'alerte: ok")
+    assert box.recently_closed("notify:k1", DETAIL, hours=24) is None
+
+
+def test_cli_reads_the_all_clear_words_from_the_config(tmp_path, capsys):
+    (tmp_path / "bridge-config.yaml").write_text("inbox:\n  all_clear: [\"Fin d'alerte\"]\n", encoding="utf-8")
+    box = inbox.Inbox(tmp_path / "work" / "inbox", actor="laptop")
+    _closed(box, by="always-on", text="Fin d'alerte: ok")
+    rc = inbox.main(["--root", str(tmp_path), "--by", "always-on", "add", "--from", "m/bridge-notify",
+                     "--kind", "finding", "--summary", "orbit (m)", "--key", "notify:k1",
+                     "--detail", DETAIL, "--closer", "bot", "--quiet-after-close-h", "24"])
+    assert rc == 0
+    assert not capsys.readouterr().out.strip().splitlines()[-1].startswith("quiet ")
+
+
+def test_cli_add_quiet_after_close_records_seen_and_files_nothing(tmp_path, capsys):
+    root = tmp_path
+    box = inbox.Inbox(root / "work" / "inbox", actor="laptop")
+    item_id = _closed(box)
+    rc = inbox.main(["--root", str(root), "--by", "always-on", "add", "--from", "m/bridge-notify",
+                     "--kind", "finding", "--summary", "orbit (m)", "--key", "notify:k1",
+                     "--detail", DETAIL, "--closer", "bot", "--quiet-after-close-h", "24"])
+    out = capsys.readouterr().out.strip().splitlines()[-1]
+    assert rc == 0
+    assert out.startswith(f"quiet {item_id} watcher ")
+    assert [p.name for p in (root / "work" / "inbox").iterdir() if p.is_dir()] == [item_id]
+    assert box.get(item_id).events[-1].verb == "seen"
+    assert box.get(item_id).state == "done"
+
+
+def test_cli_add_without_the_flag_still_opens_a_new_item(tmp_path, capsys):
+    box = inbox.Inbox(tmp_path / "work" / "inbox", actor="laptop")
+    item_id = _closed(box)
+    inbox.main(["--root", str(tmp_path), "add", "--from", "m/bridge-notify", "--kind", "finding",
+                "--summary", "orbit (m)", "--key", "notify:k1", "--detail", DETAIL, "--closer", "bot"])
+    assert capsys.readouterr().out.strip().splitlines()[-1] != item_id

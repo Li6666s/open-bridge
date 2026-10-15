@@ -18,6 +18,7 @@ things as open that had been solved hours earlier, because the sentence saying
     python3 scripts/inbox.py check           # close what the live source says is done
     python3 scripts/inbox.py run             # execute what a person released
     python3 scripts/inbox.py render          # regenerate work/inbox.md (a view)
+    python3 scripts/inbox.py reopen <id> [--note TEXT]   # undo a close, drop or reject
 
 LAYOUT. ``work/inbox/<id>/item.yaml`` is written once and never changed.
 Every later change (a note, a yes, a close) is a NEW file under
@@ -35,6 +36,10 @@ GATES. ``free`` the Bridge may act alone · ``your-yes`` acts after a person sai
 yes, also a conditional yes ("merge once green") that ``run`` executes when the
 condition holds · ``only-you`` (send, publish, pay) is never executed by this
 script, whatever was recorded.
+
+REOPEN. A close by mistake is undone with a ``reopen`` event, never by deleting the
+close: the item is open again, every yes before it is void (an executed action does
+not run again without a new yes), and a later close closes it again.
 
 The contract lives in ``scripts/tests/test_inbox.py``. Model: docs/inbox.md.
 """
@@ -66,7 +71,7 @@ URGENCIES = ("now", "today", "later")
 #: on it and closes it. An item with neither a probe nor a closer is the one that stays open for
 #: ever, which is what the inbox exists to prevent (2026-10-07: 51 of 62 items had no way out).
 CLOSERS = ("probe", "reporter", "person", "bot")
-VERBS = ("seen", "note", "approve", "reject", "drop", "defer", "close", "executed", "failed", "urgency")
+VERBS = ("seen", "note", "approve", "reject", "drop", "defer", "close", "executed", "failed", "urgency", "reopen")
 TERMINAL = {"close": "done", "executed": "done", "reject": "dropped", "drop": "dropped"}
 ACTIVE_STATES = ("open", "approved", "waiting")
 ACTION_KEYS = {"argv", "label"}
@@ -111,6 +116,14 @@ def _utc(value: dt.datetime) -> dt.datetime:
 
 def _local_date(value: dt.datetime) -> dt.date:
     return value.date() if value.tzinfo is None else value.astimezone().date()
+
+
+_STAMP = re.compile(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2})?(\.\d+)?(Z|[+-]\d{2}:?\d{2})?")
+
+
+def _comparable(text) -> str:
+    """A finding's text with its timestamps blanked and its whitespace folded."""
+    return " ".join(_STAMP.sub("<stamp>", str(text or "")).split())
 
 
 def _has_command(spec) -> bool:
@@ -244,7 +257,7 @@ class Item:
         for e in self.events:
             if e.verb == "approve":
                 current = e.data.get("when") or True
-            elif e.verb == "failed":
+            elif e.verb in ("failed", "reopen"):      # a reopened item needs a new yes
                 current = None
         return current
 
@@ -257,20 +270,40 @@ class Item:
         return None
 
     @property
+    def deferral(self) -> dict | None:
+        """The defer in force: {"until", "on"}. `on` is what it waits on ("runs on": a person, a run);
+        a plain "later" has none. A yes or a reopen takes a defer back, as in `state`."""
+        current = None
+        for e in self.events:
+            if e.verb == "defer":
+                # stored as waits_on: a bare `on` key is a boolean to YAML 1.1 readers (the first events wrote it)
+                current = {"until": e.data.get("until"), "on": e.data.get("waits_on") or e.data.get("on")}
+            elif e.verb in ("approve", "reopen") or e.verb in TERMINAL:
+                current = None
+        return current
+
+    @property
     def last_failed(self) -> bool:
         acting = [e for e in self.events if e.verb in ("approve", "executed", "failed")]
         return bool(acting) and acting[-1].verb == "failed"
 
     @property
     def state(self) -> str:
-        deferred_until = None
+        deferred_until, terminal = None, None
         for e in self.events:
+            if terminal:                          # after a close only a reopen counts
+                if e.verb == "reopen":
+                    terminal, deferred_until = None, None
+                continue
             if e.verb in TERMINAL:
-                return TERMINAL[e.verb]
+                terminal = TERMINAL[e.verb]
+                continue
             if e.verb == "defer":
                 deferred_until = e.data.get("until")
-            elif e.verb == "approve":
+            elif e.verb in ("approve", "reopen"):   # a reopen also takes back a defer ("later" by mistake)
                 deferred_until = None
+        if terminal:
+            return terminal
         if deferred_until:
             try:
                 if _local_date(_parse_when(deferred_until)) > self.today:
@@ -285,8 +318,11 @@ class Item:
         return "open"
 
     def as_dict(self) -> dict:
+        deferral = self.deferral or {}
         return {"id": self.id, "state": self.state, **{k: v for k, v in self.data.items()
-                                                      if k != "schema_version"}, "urgency": self.urgency}
+                                                      if k != "schema_version"}, "urgency": self.urgency,
+                **({"deferred_until": deferral["until"]} if deferral.get("until") else {}),
+                **({"waiting_on": deferral["on"]} if deferral.get("on") else {})}
 
 
 def _warn(text: str) -> None:
@@ -328,10 +364,16 @@ def _dump(path: Path, data: dict) -> None:
     tmp.replace(path)
 
 
+# how a reporter's own all-clear begins (its close text); a fork whose reporters write another
+# language adds its words in bridge-config.yaml `inbox.all_clear`
+ALL_CLEAR = ("All clear",)
+
+
 class Inbox:
     def __init__(self, root: Path, *, actor: str, clock: Callable[[], dt.datetime] = dt.datetime.now,
-                 gh: GhRunner | None = None, runner: str | None = None):
+                 gh: GhRunner | None = None, runner: str | None = None, all_clear: tuple = ()):
         self.root = Path(root)
+        self.all_clear = ALL_CLEAR + tuple(w for w in all_clear if isinstance(w, str) and w)
         self.actor = _slug(actor, 30)
         self.clock = clock
         self.gh = gh
@@ -387,6 +429,39 @@ class Inbox:
         active = [i for i in self.items() if i.state in ACTIVE_STATES]
         return sorted(active, key=lambda i: (urgency_rank.get(i.urgency, 9), kind_rank.get(i.kind, 9),
                                              str(i.due or "9999"), str(i.created), i.id))
+
+    def recently_closed(self, key: str, detail: str | None, *, hours: float):
+        """The item under `key` that a READER closed within `hours`, if `detail` is unchanged.
+
+        Returns (item, close_event) or None. A close by somebody who looked at the finding
+        answers that exact text, so a watcher repeating it adds nothing (an alarm closed after
+        investigation in the morning must not come back word for word hours later as a new item
+        and a new phone message). Two closes do NOT count, because they mean the trouble had
+        ended and its return is news: a probe (`check`, closes_when held) and an all-clear
+        of the reporter itself (its text begins with a word of `all_clear`). Timestamps are blanked before comparing: a reminder of the
+        same failure may carry a re-rendered stamp, a different exit code is still different.
+        """
+        if not key:
+            return None
+        now = _utc(self.clock())
+        same = [i for i in self.items() if i.key == key and i.state == "done"]
+        for item in reversed(same):
+            closes = [e for e in item.events if e.verb in ("close", "executed")]
+            if not closes:
+                continue
+            last = closes[-1]
+            if last.by == "check" or str(last.data.get("text") or "").startswith(self.all_clear):
+                return None
+            try:
+                age = now - _utc(_parse_when(last.at))
+            except ValueError:
+                return None
+            if age > dt.timedelta(hours=hours):
+                return None
+            if _comparable(item.detail) != _comparable(detail):
+                return None
+            return item, last
+        return None
 
     def resolve(self, prefix: str) -> str:
         if (self.root / prefix / "item.yaml").is_file():
@@ -488,6 +563,14 @@ class Inbox:
 
     def close(self, item_id: str, note: str | None = None) -> None:
         self.event(item_id, "close", text=note)
+
+    def reopen(self, item_id: str, note: str | None = None) -> None:
+        """Undo a close, drop, reject, defer or a yes that has not run yet: one more event, the item is open
+        and needs a new yes."""
+        state = self.get(item_id).state
+        if state not in ("done", "dropped", "deferred", "approved", "waiting"):
+            raise ValueError(f"{item_id} is not closed ({state})")
+        self.event(item_id, "reopen", text=note)
 
     def close_by_key(self, key: str, note: str | None = None) -> list:
         """Close every live item filed under `key`. For a reporter that learns the condition is
@@ -646,6 +729,9 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument("--closes-when-json")
     a.add_argument("--closer", choices=CLOSERS,
                    help="who ends it when there is no probe: reporter, person or bot")
+    a.add_argument("--quiet-after-close-h", type=float, default=None,
+                   help="if a reader closed this key within N hours and the detail is unchanged, "
+                        "record `seen` there, file nothing and print `quiet <id> <by> <at>`")
 
     ls = sub.add_parser("list", help="open items, most urgent first")
     ls.add_argument("--all", action="store_true")
@@ -663,9 +749,13 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--note")
         if name == "close":
             sp.add_argument("--key", help="close every live item filed under this key instead of one id")
+    ro = sub.add_parser("reopen", help="undo a close, drop, reject, defer or a yes not run yet: the item is open again")
+    ro.add_argument("id")
+    ro.add_argument("--note")
     df = sub.add_parser("defer")
     df.add_argument("id")
     df.add_argument("--until", required=True, help="YYYY-MM-DD")
+    df.add_argument("--on", default=None, help="what it waits on (\"runs on\"): a person or a run; quiet until then")
     ur = sub.add_parser("urgency", help="re-prioritise an open item")
     ur.add_argument("id")
     ur.add_argument("value", choices=URGENCIES)
@@ -743,21 +833,37 @@ def _sync(root: Path, actor: str, push: bool) -> int:
     return 0
 
 
-def _runner(root: Path) -> str | None:
+def _settings(root: Path) -> dict:
+    """The `inbox:` block of bridge-config.yaml, empty when there is none or it cannot be read."""
     path = root / "bridge-config.yaml"
     try:
         data = yaml.safe_load(path.read_text(encoding="utf-8")) or {} if path.is_file() else {}
     except (OSError, yaml.YAMLError):
-        return None
-    return ((data or {}).get("inbox") or {}).get("runner")
+        return {}
+    block = (data or {}).get("inbox") if isinstance(data, dict) else None
+    return block if isinstance(block, dict) else {}
+
+
+def _runner(root: Path) -> str | None:
+    return _settings(root).get("runner")
+
+
+def _all_clear(root: Path) -> tuple:
+    words = _settings(root).get("all_clear") or ()
+    return tuple(words) if isinstance(words, list) else ()
 
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     actor = args.by or _default_actor()
-    box = Inbox(args.root / "work" / "inbox", actor=actor, runner=_runner(args.root))
+    box = Inbox(args.root / "work" / "inbox", actor=actor, runner=_runner(args.root), all_clear=_all_clear(args.root))
     try:
-        if args.cmd == "add":
+        if args.cmd == "add" and args.quiet_after_close_h and args.key and (
+                hit := box.recently_closed(args.key, args.detail, hours=args.quiet_after_close_h)):
+            item, closed = hit
+            box.event(item.id, "seen", summary=args.summary)
+            print(f"quiet {item.id} {closed.by} {closed.at}")
+        elif args.cmd == "add":
             print(box.add(source=args.source, kind=args.kind, summary=args.summary, task=args.task,
                           gate=args.gate, urgency=args.urgency, detail=args.detail, key=args.key, due=args.due,
                           action=_json_arg(args.action_json), closes_when=_json_arg(args.closes_when_json),
@@ -788,9 +894,12 @@ def main(argv=None) -> int:
             if not args.id:
                 raise ValueError(f"{args.cmd} needs an id" + (" or --key" if args.cmd == "close" else ""))
             box.event(box.resolve(args.id), args.cmd, text=args.note)
+        elif args.cmd == "reopen":
+            box.reopen(box.resolve(args.id), note=args.note)
+            (args.root / "work" / "inbox.md").write_text(box.render(), encoding="utf-8")
         elif args.cmd == "defer":
             dt.date.fromisoformat(args.until)
-            box.event(box.resolve(args.id), "defer", until=args.until)
+            box.event(box.resolve(args.id), "defer", until=args.until, **({"waits_on": args.on} if args.on else {}))
         elif args.cmd == "urgency":
             box.set_urgency(box.resolve(args.id), args.value)
             (args.root / "work" / "inbox.md").write_text(box.render(), encoding="utf-8")

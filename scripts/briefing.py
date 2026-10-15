@@ -64,11 +64,13 @@ TRACKERS = ("github", "github-board", "gitlab", "ado", "jira", "linear")
 CALENDARS = ("auto", "icalbuddy", "ics", "command")
 STATES = ("new", "ready", "in_progress", "review", "done", "blocked", "removed")
 PROFILE_KEYS = {"schema_version", "scope", "id", "title", "for", "default", "offer_on", "timeout_sec", "sections",
-                "view", "mutes"}
+                "view", "mutes", "extends"}
+# what a profile never takes over from the one it extends: it is not that briefing, only built on it
+NOT_INHERITED = {"id", "title", "default", "offer_on", "extends", "_path"}
 SECTION_KEYS = {"kind", "id", "title", "max", "to_inbox", "provider", "query", "account_ref", "state_map",
                 "status", "contexts", "days", "path", "argv", "exclude_calendars", "info_calendars", "bucket",
                 "repos", "author", "all_branches", "summary", "report_ok", "covers", "kinds", "skip_kinds",
-                "deferred", "cache_minutes", "step_headings"}
+                "deferred", "cache_minutes", "step_headings", "actions_argv"}
 # A profile is committed and often shared: a value under one of these names is
 # a credential, and credentials only ever travel as references (account_ref).
 SECRET_NAME = re.compile(r"(token|secret|password|passwd|api[_-]?key|private[_-]?key)", re.I)
@@ -140,13 +142,22 @@ def _providers():
 
 # ---------------------------------------------------------------- context
 
+def _own_python(argv) -> list:
+    """A section that says `python3` means this interpreter: the bare name follows the
+    package manager to whatever release it last installed, packages or not."""
+    argv = list(argv)
+    if argv and argv[0] in ("python3", "python"):
+        argv[0] = sys.executable
+    return argv
+
+
 def _default_run(argv, timeout=DEFAULT_TIMEOUT, cwd=None) -> str:
     try:
-        res = subprocess.run(list(argv), capture_output=True, text=True, timeout=timeout, cwd=cwd)
+        res = subprocess.run(_own_python(argv),capture_output=True, text=True, timeout=timeout, cwd=cwd)
     except FileNotFoundError:
         raise SourceError(f"{argv[0]} is not installed") from None
     except subprocess.TimeoutExpired:
-        raise SourceError(f"{argv[0]} took longer than {timeout} s") from None
+        raise SourceError(f"{argv[0]} took longer than {timeout:.0f} s") from None
     if res.returncode != 0:
         tail = (res.stderr or res.stdout or "").strip().splitlines()[-1:] or [f"exit {res.returncode}"]
         raise SourceError(f"{Path(argv[0]).name}: {tail[0][:200]}")
@@ -294,7 +305,7 @@ def read_config(root: Path) -> dict:
 
 # ---------------------------------------------------------------- profiles
 
-def load_profiles(root: Path) -> list:
+def _raw_profiles(root: Path) -> list:
     out = []
     for path in sorted((root / FAMILY).glob("*.yaml")):
         if path.name.startswith("_"):
@@ -308,10 +319,57 @@ def load_profiles(root: Path) -> list:
     return out
 
 
+def _extended(profile: dict, by_id: dict, seen: frozenset = frozenset()) -> tuple[dict, str | None]:
+    """`extends: <id>`: the base's sections first (one of the same id is replaced by the profile's own),
+    then its own; the view key by key, the profile's own winning; mutes added. id, title, default and
+    offer_on stay the profile's: the cockpit's profile builds on the morning briefing without becoming it.
+    Returns (profile, problem); an unknown base or a circle leaves the profile as it is and names it."""
+    base_id = profile.get("extends")
+    if base_id is None:
+        return profile, None
+    if not isinstance(base_id, str) or base_id not in by_id:
+        return profile, f"extends: no profile {base_id!r}"
+    if base_id in seen or base_id == profile.get("id"):
+        return profile, "extends: a circle"
+    base, problem = _extended(by_id[base_id], by_id, seen | {profile.get("id")})
+    if problem:
+        return profile, "extends: a circle" if "circle" in problem else problem
+    own = [x for x in profile.get("sections") or [] if isinstance(x, dict)]
+    own_ids = {section_id(x) for x in own}
+    sections = [x for x in base.get("sections") or [] if isinstance(x, dict) and section_id(x) not in own_ids] + own
+    out = {**{k: v for k, v in base.items() if k not in NOT_INHERITED}, **profile, "sections": sections}
+    if isinstance(base.get("view"), dict) or isinstance(profile.get("view"), dict):
+        out["view"] = {**(base.get("view") if isinstance(base.get("view"), dict) else {}),
+                       **(profile.get("view") if isinstance(profile.get("view"), dict) else {})}
+    mutes = [*(base.get("mutes") or []), *(profile.get("mutes") or [])]
+    if mutes:
+        out["mutes"] = mutes
+    return out, None
+
+
+def load_profiles(root: Path) -> list:
+    raw = _raw_profiles(root)
+    by_id = {p.get("id"): p for p in raw}
+    return [_extended(p, by_id)[0] for p in raw]
+
+
+def conversation_language(cfg: dict) -> str:
+    """bridge-config.yaml language.conversation (a mapping or a plain code); en when unset."""
+    lang = cfg.get("language")
+    return str((lang.get("conversation") if isinstance(lang, dict) else lang) or "en").strip().lower()
+
+
 def builtin_profile(cfg: dict) -> dict:
     """The briefing before profiles: inbox, advice, tasks, the enabled trackers, calendar,
     activity, and the workplace plan when a `workplace:` block is configured."""
-    sections = [{"kind": "inbox"}, {"kind": "advise"}, {"kind": "tasks", "status": ["doing", "review"]}]
+    words = _view().labels_for(conversation_language(cfg))     # the section names in the Bridge's language
+    sections = [{"kind": "inbox", "title": words["section_inbox"]}, {"kind": "advise", "title": words["section_advise"]},
+                {"kind": "tasks", "title": words["section_tasks"], "status": ["doing", "review"]},
+                # for the dashboard's work page only (bucket none: never counted in the briefing):
+                # what runs on until a day, and what comes next
+                {"kind": "inbox", "id": "inbox-runs", "title": words["section_runs_on"], "deferred": "runs", "bucket": "none"},
+                {"kind": "tasks", "id": "tasks-next", "title": words["section_next_up"], "status": ["backlog"],
+                 "bucket": "none"}]
     integrations = cfg.get("integrations") or {}
     if (integrations.get("github") or {}).get("enabled"):
         sections.append({"kind": "tracker", "id": "github", "title": "GitHub", "provider": "github-board"})
@@ -327,11 +385,12 @@ def builtin_profile(cfg: dict) -> dict:
         query = {k: v for k, v in (("organization", ado.get("org")), ("project", ado.get("project")),
                                    ("wiql", (ado.get("queries") or {}).get("open"))) if v}
         sections.append({"kind": "tracker", "id": "ado", "title": "Azure Boards", "provider": "ado", "query": query})
-    sections += [{"kind": "calendar", "provider": "auto", "days": 1}, {"kind": "activity", "days": 7}]
+    sections += [{"kind": "calendar", "title": words["section_calendar"], "provider": "auto", "days": 1},
+                 {"kind": "activity", "title": words["section_activity"], "days": 7}]
     # A Bridge that configured a workplace (docs/workplace.md) wants the day's tabs
     # proposed in its briefing, whichever driver opens them.
     if cfg.get("workplace"):
-        sections.append({"kind": "workplace"})
+        sections.append({"kind": "workplace", "title": words["section_workplace"]})
     return {"schema_version": 1, "scope": "core", "id": "builtin", "title": "Briefing", "sections": sections,
             "_path": "(built-in)"}
 
@@ -409,12 +468,20 @@ def _section_types(s: dict) -> list:
     for key in ("contexts", "exclude_calendars", "info_calendars", "argv", "kinds", "skip_kinds"):
         if key in s and not _is_str_list(s[key]):
             out.append(f"{key} must be a list of text")
+    if "actions_argv" in s:
+        aa = s["actions_argv"]
+        if not (_is_str_list(aa) and aa):
+            out.append("actions_argv must be a list of text")
+        elif not ({"{id}", "{action}"} <= set(aa)) or \
+                any(("{id}" in a or "{action}" in a) and a not in ("{id}", "{action}") for a in aa):
+            out.append("actions_argv needs {id} and {action}, each as a whole argument of its own")
     for key in ("kinds", "skip_kinds"):
         unknown = sorted(set(s.get(key) or []) - set(_inbox().KINDS)) if _is_str_list(s.get(key)) else []
         if unknown:
             out.append(f"{key}: unknown inbox kind(s) {', '.join(unknown)}")
-    if "deferred" in s and s["deferred"] != "all":
-        out.append("deferred must be `all` (show every put-off item, whatever its return date)")
+    if "deferred" in s and s["deferred"] not in ("all", "runs"):
+        out.append("deferred must be `all` (show every put-off item, whatever its return date) or `runs` "
+                   "(only the put-off items that run on: wait on someone or something until a day)")
     if "status" in s and not (_is_str_list(s["status"]) and set(s["status"]) <= {"backlog", "doing", "review", "done"}):
         out.append("status must be a list of backlog, doing, review, done")
     for key in ("query", "state_map"):
@@ -448,7 +515,7 @@ def profile_problems(data, stem: str) -> list:
     for key in ("schema_version", "scope", "id", "sections"):
         if key not in data:
             out.append(f"missing {key}")
-    for key in sorted(set(data) - PROFILE_KEYS - {"_path"}):
+    for key in sorted(set(data) - PROFILE_KEYS - {"_path", "_language"}):
         out.append(f"unknown key {key}")
     if data.get("schema_version") not in (None, 1):
         out.append("schema_version must be 1")
@@ -530,6 +597,7 @@ def profile_problems(data, stem: str) -> list:
 
 def validate(root: Path) -> list:
     problems, defaults = [], []
+    by_id = {p.get("id"): p for p in _raw_profiles(root)}
     for path in sorted((root / FAMILY).glob("*.yaml")):
         if path.name.startswith("_"):
             continue
@@ -539,7 +607,11 @@ def validate(root: Path) -> list:
         except (OSError, yaml.YAMLError) as exc:
             problems.append(f"{rel}: unreadable ({exc.__class__.__name__})")
             continue
-        problems += [f"{rel}: {p}" for p in profile_problems(data, path.stem)]
+        # a profile that extends another is checked as it is used: with the sections it takes over
+        merged, problem = _extended(data, by_id) if isinstance(data, dict) else (data, None)
+        if problem:
+            problems.append(f"{rel}: {problem}")
+        problems += [f"{rel}: {p}" for p in profile_problems(merged, path.stem)]
         if isinstance(data, dict) and data.get("default") is True:
             defaults.append(str(rel))
     if len(defaults) > 1:
@@ -569,11 +641,22 @@ def sec_inbox(section: dict, ctx: Context) -> list:
         return item.kind not in skip and (not kinds or item.kind in kinds)
 
     items = []
-    for item in filter(wanted, box.open_items()):
+    runs_only = section.get("deferred") == "runs"
+    for item in filter(wanted, () if runs_only else box.open_items()):
         items.append({"id": item.id, "title": item.summary, "state": item.state, "urgency": item.urgency,
                       "kind": item.kind, "gate": item.gate, "task": item.task, "due": item.due,
                       "key": item.key, "changed_at": str(item.created or ""), "has_action": bool(item.action)})
-    if ctx.lookahead is not None or section.get("deferred") == "all":
+    if runs_only:
+        # "runs on" (inbox.py defer --on): every put-off item that names what it waits on, whatever its day
+        for item in filter(wanted, box.items()):
+            deferral = item.deferral if item.state == "deferred" else None
+            if not deferral or not deferral.get("on"):
+                continue
+            items.append({"id": item.id, "title": item.summary, "state": "deferred", "until": str(deferral["until"]),
+                          "waiting_on": deferral["on"], "urgency": item.urgency, "kind": item.kind, "gate": item.gate,
+                          "task": item.task, "due": item.due, "key": item.key, "changed_at": str(item.created or ""),
+                          "has_action": bool(item.action)})
+    elif ctx.lookahead is not None or section.get("deferred") == "all":
         # A view that looks ahead also shows what was put off and comes back within
         # its window: "decide tomorrow" must not vanish until tomorrow. `deferred: all`
         # shows every put-off item: the idea shelf is deferred on purpose and still listed.
@@ -712,6 +795,7 @@ def sec_tasks(section: dict, ctx: Context) -> list:
                       "project": fm.get("context"), "blocked_by": fm.get("blocked_by"), "next": fm.get("next"),
                       "priority": fm.get("priority"),
                       "blocked_since": str(fm["blocked_since"]) if fm.get("blocked_since") else None,
+                      "quiet_until": str(fm["quiet_until"]) if fm.get("quiet_until") else None,
                       "changed_at": str(fm.get("last_updated") or ""), "url": str(status.relative_to(ctx.root)),
                       # what a dashboard shows when the row is opened
                       "origin": _clip(str(fm["origin"]), 200) if fm.get("origin") else None,
@@ -1211,7 +1295,7 @@ def collect(root: Path, profile: dict, ctx: Context, previous: dict | None = Non
             item["changed"] = old_known and item["id"] in old and old[item["id"]] != fp
         entry["total"] = len(items)
         entry["all"] = items
-        entry["items"] = items[: _positive(s.get("max"), len(items) or 1)] if s.get("max") else items
+        entry["items"] = items[: _positive(s.get("max"), len(items) or 1)] if s.get("max") and not profile.get("_whole") else items
         out.append(entry)
     result = {"profile": profile.get("id"), "title": profile.get("title") or profile.get("id"),
               "collected_at": ctx.now.isoformat(timespec="minutes"), "sections": out}
@@ -1557,6 +1641,42 @@ def render_view(result: dict, profile: dict, style: str | None = None, color: bo
 
 # ---------------------------------------------------------------- CLI
 
+ACTION_RE = re.compile(r"^[a-z][a-z0-9_-]{0,39}\Z")
+UNDO_RE = re.compile(r"^restore:[A-Za-z0-9._~-]{1,120}\Z")
+ROW_ID_RE = re.compile(r"^[A-Za-z0-9][^\x00-\x1f]{0,199}\Z")
+ACT_TIMEOUT = 60
+
+
+def act(root: Path, cfg: dict, profile: dict, section_ref: str, row_id: str, action: str) -> tuple[int, str]:
+    """Run one step of one row: the section must declare actions_argv, and the row, asked for again,
+    must still offer the step. An undo token a step returned goes to the command unchecked here
+    (the row may be gone by then); the command checks it. Returns (exit code, output or reason)."""
+    section = next((s for s in profile.get("sections") or [] if section_id(s) == section_ref), None)
+    if not section or section.get("kind") != "command" or not _is_str_list(section.get("actions_argv")):
+        return 2, f"section {section_ref} has no actions"
+    if not ROW_ID_RE.match(row_id or ""):
+        return 2, "not a row id"
+    if not UNDO_RE.match(action):
+        if not ACTION_RE.match(action):
+            return 2, "not an action"
+        try:
+            rows = sec_command(section, Context(root, cfg=cfg))
+        except (SourceError, Skip) as exc:
+            return 2, f"section {section_ref} did not answer: {exc}"
+        row = next((r for r in rows if str(r.get("id")) == row_id), None)
+        offered = {a.get("id") for a in (row or {}).get("actions") or [] if isinstance(a, dict)}
+        if action not in offered:
+            return 2, f"row {row_id} does not offer {action}"
+    argv = [row_id if a == "{id}" else action if a == "{action}" else a for a in section["actions_argv"]]
+    try:
+        res = subprocess.run(_own_python(argv), cwd=str(root), capture_output=True, text=True, timeout=ACT_TIMEOUT)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return 1, str(exc)
+    if res.returncode != 0:
+        return res.returncode, (res.stderr or res.stdout).strip()[-300:]
+    return 0, res.stdout.strip()
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
     ap.add_argument("--root", type=Path, default=ROOT)
@@ -1591,6 +1711,11 @@ def main(argv=None) -> int:
         else:
             p.add_argument("--color", choices=("auto", "always", "never"), default="auto")
     sub.add_parser("validate")
+    p_act = sub.add_parser("act", help="run one step a row of a command section offers (actions_argv)")
+    p_act.add_argument("id")
+    p_act.add_argument("section")
+    p_act.add_argument("row")
+    p_act.add_argument("action")
     args = ap.parse_args(argv)
     root = args.root.resolve()
     cfg = read_config(root)
@@ -1624,13 +1749,19 @@ def main(argv=None) -> int:
         return 0
 
     try:
-        profile = select(root, cfg, getattr(args, "id", None))
+        # the profile carries the Bridge's language, so its default words come in it (briefing_view.labels_for)
+        profile = {**select(root, cfg, getattr(args, "id", None)), "_language": conversation_language(cfg)}
     except Ambiguous as exc:
         print(f"briefing: choose a profile: {', '.join(exc.ids)} (or set default: true in one)", file=sys.stderr)
         return 2
     except UnknownProfile as exc:
         print(f"briefing: {exc}", file=sys.stderr)
         return 2
+
+    if args.cmd == "act":
+        code, text = act(root, cfg, profile, args.section, args.row, args.action)
+        print(text, file=sys.stdout if code == 0 else sys.stderr)
+        return code
 
     if args.cmd == "show":
         print(yaml.safe_dump({k: v for k, v in profile.items() if k != "_path"}, sort_keys=False,
@@ -1651,7 +1782,9 @@ def main(argv=None) -> int:
 
     if getattr(args, "max_items", None):
         view_cfg = profile.get("view") if isinstance(profile.get("view"), dict) else {}
-        profile = {**profile, "view": {**view_cfg, "max_items": max(1, args.max_items)}}
+        # a dashboard that pages itself wants every row of a section, not the first `max:` of them:
+        # a cut row would vanish from its page without a trace (an inbox item set to later, 14.10.)
+        profile = {**profile, "view": {**view_cfg, "max_items": max(1, args.max_items)}, "_whole": True}
     ctx = Context(root, cfg=cfg)
     ctx.fresh = bool(getattr(args, "fresh", False))
     previous = load_snapshot(root, profile["id"])

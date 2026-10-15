@@ -806,6 +806,15 @@ SHIPPED_MODS = [
     "mods/briefing-ui/tests/tabs.test.tsx",
     "mods/briefing-ui/tests/actions.test.tsx",
     "mods/briefing-ui/tests/setup.test.tsx",
+    "mods/cockpit-relay/.claude-plugin/plugin.json",
+    "mods/cockpit-relay/README.md",
+    "mods/cockpit-relay/hooks/hooks.json",
+    "mods/cockpit-relay/hooks/register.tsx",
+    "mods/cockpit-relay/hooks/relay.ts",
+    "mods/cockpit-relay/tests/pure.test.mjs",
+    "mods/cockpit-relay/tests/relay.test.tsx",
+    "mods/cockpit-relay/tests/world.ts",
+    "mods/cockpit-relay/types/index.d.ts",
 ]
 
 

@@ -124,6 +124,13 @@ def test_without_profiles_the_builtin_keeps_todays_briefing(tmp_path):
     assert any(s.get("provider") == "github-board" for s in profile["sections"])
     bare = bf.builtin_profile({})
     assert not any(s["kind"] == "tracker" for s in bare["sections"])
+    # what runs on and what comes next: collected for the dashboard's work page, never counted in the briefing
+    extra = {s["id"]: s for s in bare["sections"] if s.get("id") in ("inbox-runs", "tasks-next")}
+    assert extra["inbox-runs"]["deferred"] == "runs" and extra["inbox-runs"]["bucket"] == "none"
+    assert extra["tasks-next"]["status"] == ["backlog"] and extra["tasks-next"]["bucket"] == "none"
+    assert bf.profile_problems({k: v for k, v in bare.items() if k != "_path"}, "builtin") == []
+    german = {s.get("id") or s["kind"]: s.get("title") for s in bf.builtin_profile({"language": {"conversation": "de"}})["sections"]}
+    assert german["inbox"] == "Posteingang" and german["inbox-runs"] == "Läuft" and german["tasks-next"] == "Als Nächstes"
 
 
 def test_offer_matches_the_profiles_vocabulary(tmp_path):
@@ -455,6 +462,9 @@ def test_max_caps_items_but_keeps_the_total(tmp_path):
         task(root, s)
     sec = bf.collect(root, {"id": "p", "sections": [{"kind": "tasks", "max": 2}]}, ctx(root))["sections"][0]
     assert len(sec["items"]) == 2 and sec["total"] == 3
+    # a dashboard that pages itself (--max-items) keeps every row: a cut row would vanish from its page
+    whole = bf.collect(root, {"id": "p", "_whole": True, "sections": [{"kind": "tasks", "max": 2}]}, ctx(root))["sections"][0]
+    assert len(whole["items"]) == 3
 
 
 def test_inbox_section_lists_open_items(tmp_path):
@@ -494,6 +504,21 @@ def test_inbox_section_can_keep_ideas_apart_and_show_shelved_ones(tmp_path):
     waiting, ideas = bf.collect(root, profile, ctx(root))["sections"]
     assert [i["id"] for i in waiting["items"]] == [d]
     assert sorted(i["id"] for i in ideas["items"]) == sorted([i1, i2])
+    assert bf.profile_problems({**profile, "schema_version": 1, "scope": "user"}, "p") == []
+
+
+def test_an_inbox_section_can_list_what_runs_on(tmp_path):
+    # "still running": put off with what it waits on; `deferred: runs` lists exactly those, a plain later stays out
+    root = bridge(tmp_path)
+    box = inbox.Inbox(root / "work" / "inbox", actor="t", clock=lambda: NOW)
+    runs = box.add(source="t", kind="question", summary="Answer from Ada")
+    later = box.add(source="t", kind="decision", summary="Later, just later")
+    box.event(runs, "defer", until="2027-01-01", on="Ada")
+    box.event(later, "defer", until="2027-01-01")
+    profile = {"id": "p", "sections": [{"kind": "inbox"}, {"kind": "inbox", "id": "runs", "deferred": "runs"}]}
+    waiting, running = bf.collect(root, profile, ctx(root))["sections"]
+    assert waiting["items"] == []
+    assert [(i["id"], i["waiting_on"], i["until"]) for i in running["items"]] == [(runs, "Ada", "2027-01-01")]
     assert bf.profile_problems({**profile, "schema_version": 1, "scope": "user"}, "p") == []
 
 
@@ -1383,3 +1408,47 @@ def test_a_tasks_section_with_step_headings_validates(tmp_path):
     root = bridge(tmp_path, profiles={"a": {"id": "a", "sections": [
         {"kind": "tasks", "status": ["doing"], "step_headings": ["Next moves"]}]}})
     assert not [p for p in bf.validate(root) if "step_headings" in str(p)]
+
+
+def test_a_section_naming_python3_runs_under_the_interpreter_of_the_briefing():
+    # Homebrew moved `python3` to a release without PyYAML; a section saying "python3"
+    # means the interpreter the briefing itself runs in, whose packages are known to work
+    out = bf._default_run(["python3", "-c", "import sys; print(sys.executable)"])
+    assert out.strip() == sys.executable
+    assert bf._own_python(["python", "x.py"])[0] == sys.executable
+    assert bf._own_python(["gh", "api"]) == ["gh", "api"]
+
+
+# ---------------------------------------------------------------- one profile builds on another (the cockpit's)
+
+def test_a_profile_extends_another_and_adds_to_it(tmp_path):
+    # the cockpit's profile takes every section of the morning briefing and adds its own, with its own pages
+    root = bridge(tmp_path, profiles={
+        "morning": {"default": True, "offer_on": ["good morning"], "title": "Morning",
+                    "sections": [{"kind": "inbox"}, {"kind": "tasks", "status": ["doing"]}],
+                    "view": {"style": "triage", "max_items": 7}},
+        "cockpit": {"extends": "morning", "title": "Cockpit",
+                    "sections": [{"kind": "tasks", "status": ["doing", "review"]},
+                                 {"kind": "command", "id": "res", "argv": ["echo"]}],
+                    "view": {"pages": [{"id": "ops", "sections": ["res", "inbox"]}]}}})
+    by = {p["id"]: p for p in bf.load_profiles(root)}
+    c = by["cockpit"]
+    assert [bf.section_id(s) for s in c["sections"]] == ["inbox", "tasks", "res"]
+    assert c["sections"][1]["status"] == ["doing", "review"]                 # its own wins over the base
+    assert c["view"]["style"] == "triage" and c["view"]["max_items"] == 7     # the base's view carries over
+    assert c["view"]["pages"][0]["id"] == "ops" and "pages" not in by["morning"]["view"]
+    assert c.get("default") is not True and not c.get("offer_on")             # it never becomes the briefing
+    assert c["title"] == "Cockpit"
+    assert bf.select(root, {})["id"] == "morning"
+    assert bf.validate(root) == []                                            # pages may name the base's sections
+
+
+def test_extends_names_an_existing_profile_and_never_itself(tmp_path):
+    root = bridge(tmp_path, profiles={
+        "morning": {"default": True, "sections": SECTIONS},
+        "lost": {"extends": "nowhere", "sections": SECTIONS},
+        "loop-a": {"extends": "loop-b", "sections": SECTIONS},
+        "loop-b": {"extends": "loop-a", "sections": SECTIONS}})
+    problems = " | ".join(bf.validate(root))
+    assert "lost.yaml: extends: no profile 'nowhere'" in problems
+    assert "loop-a.yaml: extends: a circle" in problems
