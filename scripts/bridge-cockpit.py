@@ -41,7 +41,7 @@ SCRIPTS = Path(__file__).resolve().parent
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
-# python3 may point at a new version that has no PyYAML yet (3.15 on 2026-10-13); then the cockpit
+# python3 may point at a new version that has no PyYAML yet; then the cockpit
 # starts again under the newest Python that has it, so /cockpit keeps working through an update
 PYTHONS = ("python3.14", "python3.13", "python3.12", "python3.11")
 

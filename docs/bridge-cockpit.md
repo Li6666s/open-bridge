@@ -535,6 +535,24 @@ place that wants Jev asks the same switch. It rates by itself at most once a
 day (kept in `jev.json`), "Rate again" always; the API reports tokens, not a
 price, and the page says so.
 
+**What leaves the machine when Jev is on.** Nothing goes out while
+`integrations.typesafe` is off. Switched on, a request to api.typesafe.ai
+carries today's date, the name from `cockpit.person_name` (else "the user"),
+the sentence `integrations.typesafe.person`, and rows of the dashboard, never a
+detail text, a file, a path, a log line or an inbox event:
+
+- **The Jev tab** sends up to 20 rows it shows (briefing sections first, then
+  tasks) with only these fields where a row has them: title, why, priority,
+  urgency, due, area, gate, bucket, section, task type, inbox state. It sends
+  every such row; it has no private filter.
+- **A work page with `jev:`** sends only a row's title, the triage's one-line
+  gist, its section and its priority. It leaves out the sections in
+  `skip_sections`, every row whose title, detail, task, source or gist holds a
+  `private` word, and the rows the triage says can go or an agent does.
+
+Keep rows that must not leave the machine off the Jev tab's dashboard, or
+leave Jev off.
+
 Jev ships as CORE, as an optional integration: `scripts/lib/bridge_cockpit/jev.py`
 and `scripts/web/jev/` are on the scripts allowlist, but the page loads
 `jev/page.js` and `jev/jev.css` with `import()` only once the switch is on, so

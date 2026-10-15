@@ -101,7 +101,7 @@ test('in a plain terminal the heartbeat has surface null and the relay still wor
 // ---------------------------------------------------------------- the config: the cockpit block only
 
 test('a python3 without PyYAML is not the end: the next Python that has it reads the config', async ($, on) => {
-  // python3 moved to a new version (3.15) that has no PyYAML yet, as happened on 2026-10-13
+  // python3 moved to a new version that has no PyYAML yet
   const noYaml = { exitCode: 1, stdout: '', stderr: "ModuleNotFoundError: No module named 'yaml'" }
   const config = JSON.stringify({ cockpit: { enabled: true, relay: true }, web: null, ui_language: null, language: 'de' })
   const w = await start($, on, { pythons: { python3: noYaml, 'python3.14': { exitCode: 0, stdout: config, stderr: '' } } })
@@ -234,7 +234,7 @@ test('a question in flight for more than 30 min is marked stuck and frees the sl
   expect(beat(w)).toMatchObject({ in_flight: null })
 })
 
-// ---------------------------------------------------------------- review findings (2026-10-09), carried over
+// ---------------------------------------------------------------- review findings, carried over
 
 test('a record written by anyone but the server (no mac, wrong mac, wrong key) is rejected, not submitted (SEC-1)', async ($, on) => {
   const w = await start($, on)

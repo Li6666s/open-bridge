@@ -44,7 +44,7 @@ work/inbox.md                      GENERATED view (python3 scripts/inbox.py rend
 annotated example: [`work/templates/inbox-item.yaml`](../work/templates/inbox-item.yaml).
 
 Every change is a **new event file**, never an edit. Verbs: `seen`, `note`,
-`approve`, `reject`, `drop`, `defer`, `urgency`, `close`, `executed`, `failed`. Two machines
+`approve`, `reject`, `drop`, `defer`, `urgency`, `close`, `executed`, `failed`, `reopen`. Two machines
 writing the same inbox through git therefore never touch the same file, and an
 item id ends in a random tail, so two machines filing the same thing in the same
 minute still create two folders. This is the property the task folders already have, and
@@ -68,6 +68,10 @@ ideas apart (`kinds: [idea]`) or leave them out (`skip_kinds: [idea]`). Urgency:
 | `dropped` | rejected or dropped |
 
 `open`, `approved` and `waiting` count as active and show in `list`.
+
+A close by mistake is taken back with `reopen`, one more event: the item is `open`
+again and every yes before it is void, so an executed action does not run a second
+time without a new yes. A later close closes it again.
 
 ## Gates
 
@@ -111,6 +115,15 @@ An alarm path that announces both the trouble and its end should close by key: t
 all-clear carries the alarm's own title, so the receiver rebuilds the key it filed
 the alarm under and closes that item rather than filing a new one.
 
+A reporter that repeats an alarm may pass `--quiet-after-close-h N` to `add`. When
+somebody closed an item under the same `key` within N hours and the detail is
+unchanged (timestamps aside), the new sighting is only recorded as `seen` on the
+closed item and nothing new is filed: the person who looked at it already
+answered that exact text. A close by a probe or by the reporter's own all-clear
+does not count, because then the trouble had ended and its return is news. An
+all-clear is a close text that begins with `All clear`, or with one of the words
+in `bridge-config.yaml` `inbox.all_clear` for reporters that write another language.
+
 ## Who writes
 
 - A scheduled job on an always-on machine (a watcher that finds a red check or
@@ -145,6 +158,7 @@ python3 scripts/inbox.py list [--all] [--json] [--short]   # open items, most ur
 python3 scripts/inbox.py show <id>                         # item plus its events; an unambiguous id prefix works
 python3 scripts/inbox.py approve <id> [--when-json '{...}'] [--text "edited draft"]
 python3 scripts/inbox.py reject|close|drop <id> [--note "why"]
+python3 scripts/inbox.py reopen <id> [--note "why"]           # take a close, drop or reject back
 python3 scripts/inbox.py close --key <key> [--note "why"]     # every live item filed under that key
 python3 scripts/inbox.py defer <id> --until 2026-10-08
 python3 scripts/inbox.py urgency <id> now|today|later       # re-rank; the latest urgency event wins
@@ -180,6 +194,7 @@ arrived. Name the one that acts in `bridge-config.yaml`:
 ```yaml
 inbox:
   runner: homebox      # the actor (--by / $BRIDGE_ACTOR / host name) that executes actions
+  all_clear: []        # further words an all-clear close text may begin with, besides "All clear"
 ```
 
 Everywhere else `run` prints "not running" and does nothing. Without the key

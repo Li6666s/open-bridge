@@ -751,14 +751,14 @@ def test_cli_reopen_renders_the_inbox_view(tmp_path):
 
 # ---------------------------------------------------------------- quiet after a deliberate close
 #
-# 2026-10-13: an alarm was investigated and closed by the inbox watcher at 07:02; the
-# workload reminder at 11:36 carried the IDENTICAL text and opened a new item plus a new
-# phone message. A close by somebody who looked at it answers that exact text.
+# An alarm was investigated and closed by a reader in the morning; a reminder hours later
+# carried the IDENTICAL text and opened a new item plus a new phone message. A close by
+# somebody who looked at it answers that exact text.
 
-DETAIL = "WO: host\nWAS TUN: read the log\n[failure] job: ended with 143 at 2026-10-13T02:59:51+00:00"
+DETAIL = "WHERE: host\nWHAT TO DO: read the log\n[failure] job: ended with 143 at 2026-10-13T02:59:51+00:00"
 
 
-def _closed(box, by="waechter", text="zur Kenntnis nach Untersuchung", detail=DETAIL):
+def _closed(box, by="watcher", text="noted after investigation", detail=DETAIL):
     item_id = add(box, kind="finding", key="notify:k1", detail=detail, closer="bot")
     box.event(item_id, "close", by=by, text=text)
     return item_id
@@ -767,7 +767,7 @@ def _closed(box, by="waechter", text="zur Kenntnis nach Untersuchung", detail=DE
 def test_recently_closed_finds_an_identical_finding_closed_by_a_reader(box):
     item_id = _closed(box)
     hit = box.recently_closed("notify:k1", DETAIL, hours=24)
-    assert hit is not None and hit[0].id == item_id and hit[1].by == "waechter"
+    assert hit is not None and hit[0].id == item_id and hit[1].by == "watcher"
 
 
 def test_recently_closed_ignores_a_close_older_than_the_window(tmp_path):
@@ -795,8 +795,31 @@ def test_recently_closed_ignores_a_probe_close_the_trouble_came_back(box):
 
 
 def test_recently_closed_ignores_an_all_clear_the_trouble_came_back(box):
-    _closed(box, by="always-on", text="Entwarnung der Laufverwaltung: wieder in Ordnung")
+    _closed(box, by="always-on", text="All clear from the run manager: healthy again")
     assert box.recently_closed("notify:k1", DETAIL, hours=24) is None
+
+
+def test_recently_closed_knows_only_the_english_all_clear_by_default(box):
+    _closed(box, by="always-on", text="Fin d'alerte: ok")
+    assert box.recently_closed("notify:k1", DETAIL, hours=24) is not None
+
+
+def test_recently_closed_takes_the_all_clear_words_of_the_fork(tmp_path):
+    box = inbox.Inbox(tmp_path / "work" / "inbox", actor="laptop", clock=lambda: NOW,
+                      all_clear=("Fin d'alerte",))
+    _closed(box, by="always-on", text="Fin d'alerte: ok")
+    assert box.recently_closed("notify:k1", DETAIL, hours=24) is None
+
+
+def test_cli_reads_the_all_clear_words_from_the_config(tmp_path, capsys):
+    (tmp_path / "bridge-config.yaml").write_text("inbox:\n  all_clear: [\"Fin d'alerte\"]\n", encoding="utf-8")
+    box = inbox.Inbox(tmp_path / "work" / "inbox", actor="laptop")
+    _closed(box, by="always-on", text="Fin d'alerte: ok")
+    rc = inbox.main(["--root", str(tmp_path), "--by", "always-on", "add", "--from", "m/bridge-notify",
+                     "--kind", "finding", "--summary", "orbit (m)", "--key", "notify:k1",
+                     "--detail", DETAIL, "--closer", "bot", "--quiet-after-close-h", "24"])
+    assert rc == 0
+    assert not capsys.readouterr().out.strip().splitlines()[-1].startswith("quiet ")
 
 
 def test_cli_add_quiet_after_close_records_seen_and_files_nothing(tmp_path, capsys):
@@ -808,7 +831,7 @@ def test_cli_add_quiet_after_close_records_seen_and_files_nothing(tmp_path, caps
                      "--detail", DETAIL, "--closer", "bot", "--quiet-after-close-h", "24"])
     out = capsys.readouterr().out.strip().splitlines()[-1]
     assert rc == 0
-    assert out.startswith(f"quiet {item_id} waechter ")
+    assert out.startswith(f"quiet {item_id} watcher ")
     assert [p.name for p in (root / "work" / "inbox").iterdir() if p.is_dir()] == [item_id]
     assert box.get(item_id).events[-1].verb == "seen"
     assert box.get(item_id).state == "done"

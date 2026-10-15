@@ -356,7 +356,7 @@ test('tokens.css and style.css carry no colour of their own: colors.css comes fr
   assert.match(read('index.html'), /<link rel="stylesheet" href="colors.css">/)
 })
 
-// ---------------------------------------------------------------- review findings (2026-10-09)
+// ---------------------------------------------------------------- review findings
 
 /** A stand-in EventSource: the test fires open and error with the readyState a browser would have */
 class FakeEventSource {

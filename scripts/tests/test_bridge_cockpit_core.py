@@ -267,3 +267,50 @@ def test_a_bridge_without_the_jev_files_loads_and_says_jev_is_off(tmp_path):
     assert out["state"] == 200 and out["page"] == 200 and out["components"] == 200
     assert out["jev"] == {"enabled": False, "ready": False, "reason": "off"}
     assert out["run"] == [404, "jev_off"]
+
+
+# ---------------------------------------------------------------- the smaller text tables (rules/language-policy.md section 3)
+#
+# Besides text.js and text.py, a few files word their own data in both languages. Each keeps its
+# languages side by side under identical keys, and none may leave a value empty.
+
+def _load(name: str, path: Path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _shape(value, where=""):
+    """Every leaf path of a table, failing on an empty value."""
+    if isinstance(value, dict):
+        return {p for k, v in value.items() for p in _shape(v, f"{where}/{k}")}
+    assert value not in (None, "", [], ()), where
+    return {where}
+
+
+def _small_tables():
+    from lib import briefing_view
+    from lib.bridge_cockpit import agents
+    resources = _load("bridge_resources_tables", ROOT / "scripts" / "bridge-resources.py")
+    advise = _load("advise_tables", ROOT / "skills" / "briefing" / "scripts" / "advise.py")
+    return {"briefing_view": (briefing_view.LABELS, briefing_view.LABELS_DE),
+            "bridge-resources": (resources.TX["en"], resources.TX["de"]),
+            "advise": (advise.TEXTS["en"], advise.TEXTS["de"]),
+            "agents.TASK_FRAME": ({"frame": agents.TASK_FRAME["en"]}, {"frame": agents.TASK_FRAME["de"]})}
+
+
+@pytest.mark.parametrize("name", ["briefing_view", "bridge-resources", "advise", "agents.TASK_FRAME"])
+def test_a_small_text_table_has_the_same_keys_in_both_languages(name):
+    en, de = _small_tables()[name]
+    assert _shape(en) == _shape(de)
+
+
+def test_the_jev_page_table_has_the_same_keys_in_both_languages():
+    text = (ROOT / "scripts" / "web" / "jev" / "page.js").read_text(encoding="utf-8")
+    body = text[text.index("const TEXT = {"):]
+    de = body[body.index("  de: {"):body.index("  en: {")]
+    en = body[body.index("  en: {"):body.index("\n}\n")]
+    keys = lambda block: set(re.findall(r"(?:^|[{,])\s*(\w+):\s", block, re.M)) - {"de", "en"}   # noqa: E731
+    assert keys(de) and keys(de) == keys(en)

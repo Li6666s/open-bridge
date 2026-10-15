@@ -198,11 +198,11 @@ def test_rows_carry_tags_to_filter_by_and_accounts_their_status(tmp_path):
 def test_set_status_rewrites_one_line_and_keeps_the_old_note(tmp_path):
     root = bridge(tmp_path)
     path = root / "identity" / "accounts" / "azure-x.yaml"
-    path.write_text(path.read_text().replace("status: active", "status: active   # Kunde aktiv"))
+    path.write_text(path.read_text().replace("status: active", "status: active   # customer active"))
     before = path.read_text()
     assert br.set_status(root, "azure-x", "disabled", TODAY) == 0
     after = path.read_text()
-    assert "status: disabled    # 2026-10-10 set in the dashboard, was active: Kunde aktiv" in after
+    assert "status: disabled    # 2026-10-10 set in the dashboard, was active: customer active" in after
     assert after.replace(after.splitlines()[3], "") == before.replace(before.splitlines()[3], "")   # only that line
     assert br.set_status(root, "azure-x", "disabled", TODAY) == 0                 # again: nothing to do
     # no status line yet: one comes after `id:`

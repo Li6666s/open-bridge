@@ -112,7 +112,7 @@ def collect_fixture(root: Path) -> dict:
                      "lines": [{"kind": "step", "text": "first"}]}]},
                 {"id": "apps", "kind": "command", "title": "Applications", "status": "ok", "items": [
                     {"title": "Acme: Dev, follow-up due", "row_id": "2026-10/acme",
-                     "actions": [{"id": "nachgefasst", "label": "followed up"}, {"id": "abgesagt", "label": "turned down"}]},
+                     "actions": [{"id": "followed_up", "label": "followed up"}, {"id": "turned_down", "label": "turned down"}]},
                     {"title": "No steps here"}]}]},
             {"id": "briefing", "title": "x", "sections": [{"id": "a"}]},
         ],
@@ -1338,12 +1338,12 @@ def act_answer(**data):
 def test_a_row_step_runs_through_briefing_act_and_can_be_taken_back(world):
     world.runner.handlers["briefing.act"] = act_answer(did="turned down", undo="restore:sent.2026-09-25._")
     world.runner.calls.clear()
-    res = world.act("row_action", page="tasks", section="apps", index=0, action="abgesagt")
+    res = world.act("row_action", page="tasks", section="apps", index=0, action="turned_down")
     run = world.runner.of("briefing.act")
-    assert len(run) == 1 and run[0][-3:] == ["apps", "2026-10/acme", "abgesagt"]
+    assert len(run) == 1 and run[0][-3:] == ["apps", "2026-10/acme", "turned_down"]
     undo = res["undo"][0]["undo"]
     assert undo == {"verb": "row_undo", "args": {"section": "apps", "row": "2026-10/acme", "action": "restore:sent.2026-09-25._"}}
-    world.runner.handlers["briefing.act"] = act_answer(did="rückgängig")
+    world.runner.handlers["briefing.act"] = act_answer(did="undone")
     world.runner.calls.clear()
     world.act("row_undo", **undo["args"])
     assert world.runner.of("briefing.act")[0][-3:] == ["apps", "2026-10/acme", "restore:sent.2026-09-25._"]
@@ -1359,11 +1359,11 @@ def test_a_row_step_runs_through_briefing_act_and_can_be_taken_back(world):
 
 def test_a_row_step_the_row_does_not_offer_or_a_row_without_steps_is_refused(world):
     world.runner.calls.clear()
-    for args in ({"index": 0, "action": "gewonnen"}, {"index": 1, "action": "abgesagt"}, {"index": 0, "action": "Bad"}):
+    for args in ({"index": 0, "action": "won"}, {"index": 1, "action": "turned_down"}, {"index": 0, "action": "Bad"}):
         with pytest.raises(ActionError):
             world.act("row_action", page="tasks", section="apps", **args)
     with pytest.raises(ActionError):
-        world.act("row_undo", section="apps", row="2026-10/acme", action="abgesagt")       # only an undo token
+        world.act("row_undo", section="apps", row="2026-10/acme", action="turned_down")       # only an undo token
     assert world.runner.of("briefing.act") == []
 
 
@@ -2439,7 +2439,7 @@ def test_cli_open_none_prints_without_token_in_json(cli_world):
     assert token not in res.stdout
 
 
-# ---------------------------------------------------------------- review findings (2026-10-09)
+# ---------------------------------------------------------------- review findings
 
 def test_relay_records_carry_a_mac_keyed_outside_the_bridge(world):
     """SEC-1: the mod submits only records whose mac it can check with a key no in-repo writer holds."""
@@ -3189,14 +3189,14 @@ def test_peers_are_listed_with_their_card_and_never_a_token(world):
 
 def test_asking_an_agent_runs_a2a_ask_and_a_follow_up_keeps_its_context(world):
     a2a_peers(world, "alpha")
-    world.runner.handlers["a2a.ask"] = lambda argv: a2a_answer(text="Hallo zurück.")
+    world.runner.handlers["a2a.ask"] = lambda argv: a2a_answer(text="Hello back.")
     world.runner.calls.clear()
     res = world.act("a2a_ask", peer="alpha", text="-v hallo?", mode="question")
     conv = res["conv"]
     turn = wait_agents(world)[0]["turns"][0]
     argv = world.runner.of("a2a.ask")[0]
     assert argv[2:6] == ["ask", "--json", "--wait", "90"] and argv[-3:] == ["alpha", "--", "-v hallo?"]
-    assert (turn["a"], turn["state"], turn["task_id"]) == ("Hallo zurück.", "completed", "t-1")
+    assert (turn["a"], turn["state"], turn["task_id"]) == ("Hello back.", "completed", "t-1")
     world.runner.calls.clear()
     world.act("a2a_ask", peer="alpha", text="und weiter", conv=conv, mode="task")
     wait_agents(world)

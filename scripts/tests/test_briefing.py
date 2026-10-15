@@ -508,7 +508,7 @@ def test_inbox_section_can_keep_ideas_apart_and_show_shelved_ones(tmp_path):
 
 
 def test_an_inbox_section_can_list_what_runs_on(tmp_path):
-    # "läuft noch": put off with what it waits on; `deferred: runs` lists exactly those, a plain later stays out
+    # "still running": put off with what it waits on; `deferred: runs` lists exactly those, a plain later stays out
     root = bridge(tmp_path)
     box = inbox.Inbox(root / "work" / "inbox", actor="t", clock=lambda: NOW)
     runs = box.add(source="t", kind="question", summary="Answer from Ada")

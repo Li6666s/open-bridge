@@ -364,15 +364,16 @@ def _dump(path: Path, data: dict) -> None:
     tmp.replace(path)
 
 
-# how a reporter's own all-clear begins (its close text): English, and German for the reporters that write
-# German; a fork whose reporters write another language adds its word here
-ALL_CLEAR = ("All clear", "Entwarnung")
+# how a reporter's own all-clear begins (its close text); a fork whose reporters write another
+# language adds its words in bridge-config.yaml `inbox.all_clear`
+ALL_CLEAR = ("All clear",)
 
 
 class Inbox:
     def __init__(self, root: Path, *, actor: str, clock: Callable[[], dt.datetime] = dt.datetime.now,
-                 gh: GhRunner | None = None, runner: str | None = None):
+                 gh: GhRunner | None = None, runner: str | None = None, all_clear: tuple = ()):
         self.root = Path(root)
+        self.all_clear = ALL_CLEAR + tuple(w for w in all_clear if isinstance(w, str) and w)
         self.actor = _slug(actor, 30)
         self.clock = clock
         self.gh = gh
@@ -433,11 +434,11 @@ class Inbox:
         """The item under `key` that a READER closed within `hours`, if `detail` is unchanged.
 
         Returns (item, close_event) or None. A close by somebody who looked at the finding
-        answers that exact text, so a watcher repeating it adds nothing (2026-10-13: an alarm
-        closed after investigation at 07:02 came back word for word at 11:36 as a new item and
-        a new phone message). Two closes do NOT count, because they mean the trouble had
+        answers that exact text, so a watcher repeating it adds nothing (an alarm closed after
+        investigation in the morning must not come back word for word hours later as a new item
+        and a new phone message). Two closes do NOT count, because they mean the trouble had
         ended and its return is news: a probe (`check`, closes_when held) and an all-clear
-        of the reporter itself. Timestamps are blanked before comparing: a reminder of the
+        of the reporter itself (its text begins with a word of `all_clear`). Timestamps are blanked before comparing: a reminder of the
         same failure may carry a re-rendered stamp, a different exit code is still different.
         """
         if not key:
@@ -449,7 +450,7 @@ class Inbox:
             if not closes:
                 continue
             last = closes[-1]
-            if last.by == "check" or str(last.data.get("text") or "").startswith(ALL_CLEAR):
+            if last.by == "check" or str(last.data.get("text") or "").startswith(self.all_clear):
                 return None
             try:
                 age = now - _utc(_parse_when(last.at))
@@ -832,19 +833,30 @@ def _sync(root: Path, actor: str, push: bool) -> int:
     return 0
 
 
-def _runner(root: Path) -> str | None:
+def _settings(root: Path) -> dict:
+    """The `inbox:` block of bridge-config.yaml, empty when there is none or it cannot be read."""
     path = root / "bridge-config.yaml"
     try:
         data = yaml.safe_load(path.read_text(encoding="utf-8")) or {} if path.is_file() else {}
     except (OSError, yaml.YAMLError):
-        return None
-    return ((data or {}).get("inbox") or {}).get("runner")
+        return {}
+    block = (data or {}).get("inbox") if isinstance(data, dict) else None
+    return block if isinstance(block, dict) else {}
+
+
+def _runner(root: Path) -> str | None:
+    return _settings(root).get("runner")
+
+
+def _all_clear(root: Path) -> tuple:
+    words = _settings(root).get("all_clear") or ()
+    return tuple(words) if isinstance(words, list) else ()
 
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     actor = args.by or _default_actor()
-    box = Inbox(args.root / "work" / "inbox", actor=actor, runner=_runner(args.root))
+    box = Inbox(args.root / "work" / "inbox", actor=actor, runner=_runner(args.root), all_clear=_all_clear(args.root))
     try:
         if args.cmd == "add" and args.quiet_after_close_h and args.key and (
                 hit := box.recently_closed(args.key, args.detail, hours=args.quiet_after_close_h)):

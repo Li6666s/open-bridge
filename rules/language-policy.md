@@ -60,7 +60,12 @@ Everything in the `core` tier:
   structural keys and comments stay English.
 - **Per-language UI string tables** inside a CORE program that has its own
   user-facing words (today: the `briefing-ui` mod,
-  `mods/briefing-ui/hooks/text.ts`). Allowed only in this shape:
+  `mods/briefing-ui/hooks/text.ts`; the cockpit, `scripts/web/text.js`,
+  `scripts/web/jev/page.js` and `scripts/lib/bridge_cockpit/text.py`; the
+  `cockpit-relay` mod, `TABLES` in `mods/cockpit-relay/hooks/relay.ts`; and
+  the smaller tables beside the data they word: `scripts/lib/briefing_view.py`,
+  `scripts/bridge-resources.py`, `skills/briefing/scripts/advise.py`,
+  `TASK_FRAME` in `scripts/lib/bridge_cockpit/agents.py`). Allowed only in this shape:
   - all languages side by side in ONE file, one table per language, under
     identical keys (a test asserts the key sets match and no value is empty);
   - English is the default and the fallback for any language without a table;
