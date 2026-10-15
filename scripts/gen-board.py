@@ -33,7 +33,23 @@ TASKS = ROOT / "work" / "tasks"
 STREAMS = ROOT / "work" / "streams"
 DONE = ROOT / "work" / "done"
 
-WIP_WARN = 10  # mirrors bridge-config.yaml work.max_active (soft warning only)
+WIP_WARN = 10  # the default when bridge-config.yaml sets no work.max_active (soft warning only)
+
+
+def wip_cap(root: Path) -> int | None:
+    """bridge-config.yaml work.max_active, a soft warning only: WIP_WARN when it is not set, None (no cap at
+    all) when it is 0"""
+    path = root / "bridge-config.yaml"
+    try:
+        import yaml
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) if path.is_file() else {}
+    except Exception:  # noqa: BLE001 - an unreadable config keeps the default, never a failed board
+        return WIP_WARN
+    work = (data or {}).get("work") if isinstance((data or {}).get("work"), dict) else {}
+    cap = work.get("max_active", WIP_WARN)
+    if cap is None or cap is False or cap == 0:
+        return None
+    return cap if isinstance(cap, int) and cap > 0 else WIP_WARN
 
 USAGE = (
     "usage: python3 scripts/gen-board.py [--check]\n"
@@ -161,13 +177,15 @@ def main(argv: list[str] | None = None) -> int:
     done_dir = DONE / month
     done_dirs = sorted(p.name for p in done_dir.iterdir() if p.is_dir()) if done_dir.exists() else []
     wip = len(doing) + len(review)
+    cap = wip_cap(ROOT)
+    wip_text = f"WIP {wip}/{cap}" if cap else f"WIP {wip}"
 
     if args == ["--check"]:
         print(f"Doing {len(doing)} · Review {len(review)} · Backlog {len(backlog)} · "
-              f"Streams {len(streams)} · Done-{month} {len(done_dirs)} · WIP {wip}/{WIP_WARN}")
+              f"Streams {len(streams)} · Done-{month} {len(done_dirs)} · {wip_text}")
         return 0
 
-    warn = f" · ⚠️ WIP {wip} > {WIP_WARN}" if wip > WIP_WARN else ""
+    warn = f" · ⚠️ WIP {wip} > {cap}" if cap and wip > cap else ""
     nostatus = task_nostatus + [f"{n} (stream)" for n in stream_nostatus]
     out = []
     out.append("# Board\n")
@@ -180,7 +198,7 @@ def main(argv: list[str] | None = None) -> int:
                f"| Backlog (tasks) | {len(backlog)} |\n"
                f"| Streams | {len(streams)} |\n"
                f"| Done {month} | {len(done_dirs)} |\n"
-               f"| WIP (doing+review) | {wip} / {WIP_WARN}{warn} |\n"
+               f"| WIP (doing+review) | {wip}{f' / {cap}' if cap else ''}{warn} |\n"
                + (f"| No-STATUS dirs | {len(nostatus)} ({', '.join(nostatus)}) |\n" if nostatus else ""))
     out.append("")
     out.append(section("Doing", doing))
@@ -190,7 +208,7 @@ def main(argv: list[str] | None = None) -> int:
     out.append(f"## Done {month} ({len(done_dirs)})\n\n" + (", ".join(f"`{d}`" for d in done_dirs) if done_dirs else "_(none)_") + "\n")
     (ROOT / "work" / "board.md").write_text("\n".join(out), encoding="utf-8")
     print(f"board.md regenerated: Doing {len(doing)} · Review {len(review)} · Backlog {len(backlog)} · "
-          f"Streams {len(streams)} · Done-{month} {len(done_dirs)} · WIP {wip}/{WIP_WARN}")
+          f"Streams {len(streams)} · Done-{month} {len(done_dirs)} · {wip_text}")
     return 0
 
 

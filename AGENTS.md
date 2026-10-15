@@ -208,6 +208,7 @@ one hop both ways, `--fix` rewrites a reference whose task merely moved KIND).
 | `workflow/contexts/` | where a piece of work gets documented |
 | `workflow/projects/` | a board's field values and state map, before ANY tracker call |
 | `workflow/workloads/` | one declared run on one machine |
+| `workflow/ai-services/` | which AI model a service or worker uses (default Claude) |
 | `workflow/workspaces/` | a named binding of repos + config overlays |
 
 Top-level, own lifecycle: `rules/` `protocols/standing-orders/` `skills/`
@@ -216,8 +217,7 @@ Top-level, own lifecycle: `rules/` `protocols/standing-orders/` `skills/`
 **Default-to-Folder:** every config type lives in `<wrapper>/<types>/` — a plural
 folder holding `_template.yaml`, an optional `_schema.yaml`, and all `<id>.yaml`
 instances together. `_`-prefixed files are reserved and excluded from discovery;
-filenames are plain slugs without a type prefix. Going from 1 instance to 5 is
-zero work. **Discovery** is the glob `<wrapper>/<types>/*.yaml` skipping `_`
+filenames are plain slugs without a type prefix. **Discovery** is the glob `<wrapper>/<types>/*.yaml` skipping `_`
 files: no flat fallback, no promote logic.
 
 Full layout and routing map: [`docs/structure.md`](docs/structure.md) ·
@@ -337,8 +337,7 @@ is the difference between authoring a rule and losing it silently):
 python3 scripts/validate-bridge.py     # validates, then writes .bridge/rule-scope.md
 ```
 
-**The rules that fire before you would think to look them up**, since knowing
-they exist is the whole point of naming any of them here:
+**The rules that fire before you would think to look them up**:
 
 - [`session-start.md`](rules/session-start.md) — the Phase 0 gate, before ANY response
 - [`push-guard.md`](rules/push-guard.md) — a `user/*` branch never reaches a public upstream

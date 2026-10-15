@@ -185,6 +185,27 @@ work:
 #     collision_minutes: 60
 #     customer_contexts: []
 
+# ─── Cockpit: the local web page that watches and steers the Bridge ───
+# scripts/bridge-cockpit.py, docs/bridge-cockpit.md; binds 127.0.0.1 only.
+# cockpit:
+#   enabled: false         # bridge-cockpit.py refuses to start until this is true
+#   port: 8797             # http://127.0.0.1:<port>/ (8790 to 8799 are partly taken by other Bridge services, see the doc)
+#   open_in: auto          # auto = a cmux browser tab when inside cmux, else the default browser | cmux | system | none (print the link)
+#   relay: false           # true: the control session takes questions from the page as prompts (needs mods/cockpit-relay)
+#   person_name: ""        # how the chat and Jev name you; empty: "the user"
+#   profile: ""            # briefing profile for the briefing tab; empty = briefing.default
+#   tabs_seconds: 10       # how often agent tabs are re-read while a page is open (min 5)
+#   full_minutes: 10       # on open, run the full briefing (trackers, checks) again when the last is older
+#   voice: false           # a tab that waits for you is also spoken (by the browser)
+#   triage_daily: false    # true: sort every task and inbox item once a day by itself (a small model call)
+#   snapshot_minutes: 60   # save the cmux layout (only on change) while the cockpit runs; 0 = only on Save
+#   language: en           # de | en for the page's words; default language.conversation, else en
+#   launch:
+#     target: area         # area = the workspace of the item's area (workplace.workspaces) | tab = here | workspace = one each
+#                          # | auto = a small model picks the area or a workspace of its own (workplace.router)
+#   # These five fall back to briefing.claude_code_ui (the briefing-ui mod's block) when this block leaves them out.
+
+
 # ─── Orchestrator ─────────────────────────────────────────────────────
 orchestrator:
   enabled: true
@@ -204,6 +225,14 @@ integrations:
     assignee_me: ""          # your GitHub login (used for "assigned to me" filters)
   ado:
     enabled: false           # flip to true for Azure Boards
+
+  typesafe:
+    enabled: false           # Jev (api.typesafe.ai) in the web dashboard: the Jev tab and its
+                             # judgments elsewhere appear only when this is true
+    key_ref: ""              # keychain://<service>/<account>; the key itself only in the keychain
+    person: ""               # one sentence about you for Jev's judgments, e.g. "Ada, leads a small team"
+    # criteria:              # own levels for Jev's scores, four each, lowest first; else neutral defaults
+    #   impact: ["cosmetic", "useful for my own work", "important for the team or a customer", "business critical"]
 
   # Inbound context sources — opt-in, swap per instance.
   # Capability vocab: chat | calls | calendar | mail

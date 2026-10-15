@@ -83,16 +83,28 @@ def _section(pages, sid):
 
 def test_without_a_pages_block_every_section_finds_a_page_by_its_kind():
     pages = bv.pages(_result(), _profile())
-    assert [p["id"] for p in pages] == ["status", "dates", "trackers", "today", "more"]
+    assert [p["id"] for p in pages] == ["work", "status", "dates", "trackers", "today", "more"]
     assert [s["id"] for s in _page(pages, "status")["sections"]] == ["probes"]
     assert [s["id"] for s in _page(pages, "today")["sections"]] == ["commits", "log"]
     # a kind the defaults do not know still shows, on the last page
     assert [s["id"] for s in _page(pages, "more")["sections"]] == ["workplace"]
 
 
-def test_the_briefing_page_keeps_its_own_kinds():
-    ids = {s["id"] for p in bv.pages(_result(), _profile()) for s in p["sections"]}
-    assert "inbox" not in ids
+def test_default_pages_sit_where_a_person_looks_for_them():
+    # work in front, dates and trackers behind More, what happened today under the day list (no second "Today" tab)
+    groups = {p["id"]: p["group"] for p in bv.pages(_result(), _profile())}
+    assert groups == {"work": "main", "status": "main", "dates": "more", "trackers": "more", "today": "day", "more": "more"}
+    titles = {p["id"]: p["title"] for p in bv.pages(_result(), _profile())}
+    assert titles["work"] == "Work" and titles["today"] == "What happened today"
+
+
+def test_the_work_page_carries_every_inbox_and_task_list_and_the_briefing_keeps_them_too():
+    result = _result()
+    result["sections"] += [_sec("inbox-runs", "inbox", [{"id": "2", "title": "Waits on the vendor"}], bucket="none"),
+                           _sec("tasks", "tasks", [{"id": "t1", "title": "Ship it", "task": "ship"}]),
+                           _sec("advise", "advise", [{"id": "a", "title": "A hint"}])]
+    work = _page(bv.pages(result, _profile()), "work")
+    assert [s["id"] for s in work["sections"]] == ["inbox", "inbox-runs", "tasks"]   # advice stays on the briefing
 
 
 def test_a_page_without_a_section_is_left_out():
@@ -123,6 +135,12 @@ def test_the_profile_places_sections_on_its_own_pages():
 def test_a_section_no_page_names_lands_on_the_rest_page():
     pages = bv.pages(_result(), _profile({"pages": [{"id": "ops", "sections": ["probes"]}]}))
     assert [s["id"] for s in _page(pages, "more")["sections"]] == ["mine", "cal", "commits", "log", "workplace"]
+
+
+def test_page_skip_keeps_a_feeding_section_off_every_page():
+    pages = bv.pages(_result(), _profile({"pages": [{"id": "ops", "sections": ["probes"]}], "page_skip": ["mine", "log"]}))
+    assert [s["id"] for s in _page(pages, "more")["sections"]] == ["cal", "commits", "workplace"]
+    assert bv._page_problems({"page_skip": "mine"}) == ["view.page_skip must be a list of section ids"]
 
 
 def test_the_rest_page_can_be_switched_off():
@@ -162,6 +180,74 @@ def test_command_findings_are_warnings_and_blocked_ones_are_bad():
     assert rows[1]["detail"] == "in_progress"
 
 
+def test_a_command_row_may_carry_a_meter_and_a_broken_one_is_dropped():
+    result = {"collected_at": NOW, "sections": [_sec("quota", "command", [
+        {"id": "a", "title": "Week: 74 %", "meter": {"value": 74, "max": 100, "unit": "%", "elapsed": 0.62}},
+        {"id": "b", "title": "Cost", "meter": {"value": 12.5, "unit": "$"}},
+        {"id": "c", "title": "Broken", "meter": {"value": "lots"}},
+        {"id": "d", "title": "Out of range", "meter": {"value": 3, "max": 0, "elapsed": 7, "unit": "a very long unit"}},
+        {"id": "e", "title": "Plain"}])]}
+    profile = {"id": "p", "sections": [{"kind": "command", "id": "quota", "argv": ["true"]}]}
+    rows = _section(bv.pages(result, profile), "quota")["items"]
+    assert rows[0]["meter"] == {"value": 74.0, "max": 100.0, "unit": "%", "elapsed": 0.62, "warn": None, "bad": None,
+                                "window_h": None}
+    assert rows[1]["meter"] == {"value": 12.5, "max": None, "unit": "$", "elapsed": None, "warn": None, "bad": None,
+                                "window_h": None}
+    assert "meter" not in rows[2] and "meter" not in rows[4]
+    assert rows[3]["meter"] == {"value": 3.0, "max": None, "unit": None, "elapsed": None, "warn": None, "bad": None,
+                                "window_h": None}
+
+
+def test_a_meter_may_name_the_length_of_its_time_window():
+    # with it a dashboard reckons the share per day; nonsense becomes None
+    result = {"collected_at": NOW, "sections": [_sec("quota", "command", [
+        {"id": "a", "title": "Week", "meter": {"value": 19, "max": 100, "elapsed": 0.25, "window_h": 168}},
+        {"id": "b", "title": "Zero", "meter": {"value": 1, "max": 100, "window_h": 0}},
+        {"id": "c", "title": "Text", "meter": {"value": 1, "max": 100, "window_h": "week"}},
+        {"id": "d", "title": "Years", "meter": {"value": 1, "max": 100, "window_h": 24 * 400}}])]}
+    profile = {"id": "p", "sections": [{"kind": "command", "id": "quota", "argv": ["true"]}]}
+    rows = _section(bv.pages(result, profile), "quota")["items"]
+    assert [r["meter"]["window_h"] for r in rows] == [168.0, None, None, None]
+
+
+def test_a_meter_may_name_where_warning_and_bad_begin():
+    result = {"collected_at": NOW, "sections": [_sec("quota", "command", [
+        {"id": "a", "title": "Week", "meter": {"value": 74, "max": 100, "unit": "%", "warn": 80, "bad": 95}},
+        {"id": "b", "title": "Odd", "meter": {"value": 5, "max": 100, "warn": 90, "bad": 70}},
+        {"id": "c", "title": "Over", "meter": {"value": 5, "max": 100, "warn": 150, "bad": "x"}}])]}
+    profile = {"id": "p", "sections": [{"kind": "command", "id": "quota", "argv": ["true"]}]}
+    rows = _section(bv.pages(result, profile), "quota")["items"]
+    assert (rows[0]["meter"]["warn"], rows[0]["meter"]["bad"]) == (80.0, 95.0)
+    assert (rows[1]["meter"]["warn"], rows[1]["meter"]["bad"]) == (None, None)     # bad before warn: neither
+    assert (rows[2]["meter"]["warn"], rows[2]["meter"]["bad"]) == (None, None)     # beyond max, not a number
+
+
+def test_a_section_may_ask_for_tiles_or_a_mosaic_and_rows_for_group_and_icon():
+    result = {"collected_at": NOW, "sections": [_sec("res", "command", [
+        {"id": "a", "title": "fn-a", "group": " Azure X ", "icon": "function", "tone": "none"},
+        {"id": "b", "title": "plain"}])]}
+    profile = {"id": "p", "sections": [{"kind": "command", "id": "res", "argv": ["true"]}],
+               "view": {"pages": [{"id": "r", "title": "R", "sections": [{"id": "res", "view": "tiles"}]}]}}
+    sec = _section(bv.pages(result, profile), "res")
+    assert sec["view"] == "tiles"
+    assert not bv._page_problems({"pages": [{"id": "r", "title": "R", "sections": [{"id": "res", "view": "groups"}]}]})
+    assert (sec["items"][0]["group"], sec["items"][0]["icon"]) == ("Azure X", "function")
+    assert "group" not in sec["items"][1]
+    assert any("view must be one of" in x for x in
+               bv._page_problems({"pages": [{"id": "r", "title": "R", "sections": [{"id": "res", "view": "cube"}]}]}))
+
+
+def test_a_command_row_may_offer_its_own_steps():
+    result = {"collected_at": NOW, "sections": [_sec("apps", "command", [
+        {"id": "2026-10/a", "title": "A", "actions": [{"id": "nachgefasst", "label": "nachgefasst"},
+                                                      {"id": "Bad Id", "label": "x"}, {"id": "abgesagt", "label": ""}]},
+        {"id": "2026-10/b", "title": "B", "actions": "nope"}])]}
+    profile = {"id": "p", "sections": [{"kind": "command", "id": "apps", "argv": ["true"]}]}
+    rows = _section(bv.pages(result, profile), "apps")["items"]
+    assert rows[0]["actions"] == [{"id": "nachgefasst", "label": "nachgefasst"}] and rows[0]["row_id"] == "2026-10/a"
+    assert "actions" not in rows[1] and "row_id" not in rows[1]
+
+
 def test_commits_lead_with_todays_count_busiest_first():
     rows = _section(bv.pages(_result(), _profile()), "commits")["items"]
     assert [r["title"] for r in rows] == ["busy", "quiet"]
@@ -174,6 +260,7 @@ def test_activity_from_earlier_days_is_dimmed():
     assert [r["when"] for r in rows] == ["11:00", "06.10"]
     assert [r["tone"] for r in rows] == [None, "dim"]
     assert rows[0]["detail"] == "app"
+    assert rows[0]["group"] == "app"            # a log row belongs to its context, for `view: groups`
 
 
 def test_a_page_entry_names_the_fields_for_its_columns():
@@ -215,6 +302,15 @@ def test_badge_false_keeps_a_section_out_of_the_tab_number():
     pages = bv.pages(_result(), _profile(view))
     assert _section(pages, "log")["weight"] == 0
     assert _section(pages, "commits")["weight"] == 5
+
+
+def test_hide_empty_is_carried_only_when_set_and_must_be_a_bool():
+    view = {"pages": [{"id": "day", "sections": ["commits", {"id": "log", "hide_empty": True}]}], "page_rest": "hide"}
+    pages = bv.pages(_result(), _profile(view))
+    assert _section(pages, "log")["hide_empty"] is True
+    assert "hide_empty" not in _section(pages, "commits")
+    assert any("hide_empty must be true or false" in x for x in
+               bv._page_problems({"pages": [{"id": "d", "sections": [{"id": "log", "hide_empty": "yes"}]}]}))
 
 
 def test_a_skipped_section_keeps_its_place_and_says_why():
@@ -260,7 +356,7 @@ def test_an_empty_section_still_carries_every_field():
     result = {"collected_at": NOW, "sections": [_sec("probe", "command", [])]}
     assert bv.pages(result, profile) == [{"id": "status", "title": "Status", "sections": [
         {"id": "probe", "kind": "command", "title": "Probe", "status": "ok", "reason": "", "alarm": False, "empty": "nothing",
-         "items": [], "total": 0, "weight": 0, "bad": 0, "as_of": None}]}]
+         "items": [], "total": 0, "weight": 0, "bad": 0, "as_of": None}], "group": "main"}]
 
 
 def test_collect_json_carries_the_pages(tmp_path, capsys):
@@ -607,3 +703,76 @@ def test_briefing_and_more_are_taken_page_ids_for_validate_and_the_schema_alike(
         assert any(taken in p for p in bf.profile_problems(profile, "p")), taken
         with pytest.raises(jsonschema.ValidationError):
             jsonschema.validate(profile, schema)
+
+
+def test_an_inbox_row_on_a_page_names_its_item():
+    # a dashboard joins the row to what it knows about the item (its triage, its close) by this id
+    rows = _section(bv.pages(_result(), _profile({"pages": [{"id": "in", "sections": ["inbox"]}]})), "inbox")["items"]
+    assert rows[0]["inbox"] == "1"
+    probes = _section(bv.pages(_result(), _profile({"pages": [{"id": "ops", "sections": ["probes"]}]})), "probes")
+    assert "inbox" not in probes["items"][0]
+
+
+def test_a_page_can_stand_behind_more_in_the_page_bar():
+    # a dashboard with many tabs keeps the daily ones in front; `group: more` puts a page behind
+    # a "More" menu, every other page stays in front (group main, the default)
+    view = {"pages": [{"id": "ops", "sections": ["probes"], "group": "more"},
+                      {"id": "week", "sections": ["cal"]}]}
+    pages = bv.pages(_result(), _profile(view))
+    assert _page(pages, "ops")["group"] == "more"
+    assert _page(pages, "week")["group"] == "main"
+    assert bv._page_problems(view) == []
+    assert bv._page_problems({"pages": [{"id": "ops", "sections": ["probes"], "group": "side"}]}) == [
+        "view.pages 1: group must be main, more or day"]
+
+
+def test_a_page_can_open_with_an_overview_of_its_sections():
+    # `overview: true` asks a dashboard for a board of tiles on top, one per section, each a jump to it
+    view = {"pages": [{"id": "ops", "sections": ["probes"], "overview": True}, {"id": "week", "sections": ["cal"]}]}
+    pages = bv.pages(_result(), _profile(view))
+    assert _page(pages, "ops")["overview"] is True
+    assert "overview" not in _page(pages, "week")
+    assert bv._page_problems(view) == []
+    assert bv._page_problems({"pages": [{"id": "ops", "sections": ["probes"], "overview": "yes"}]}) == [
+        "view.pages 1: overview must be true or false"]
+
+
+def test_a_page_can_ask_for_an_order_by_jev():
+    # `jev:` asks a dashboard for an order of the page's rows on a click; skip_sections and private keep rows home
+    jev = {"skip_sections": ["probes"], "private": ["privat"]}
+    view = {"pages": [{"id": "ops", "sections": ["probes"], "jev": jev}, {"id": "week", "sections": ["cal"]}]}
+    pages = bv.pages(_result(), _profile(view))
+    assert _page(pages, "ops")["jev"] == jev
+    assert "jev" not in _page(pages, "week")
+    assert bv._page_problems(view) == []
+    assert bv._page_problems({"pages": [{"id": "ops", "sections": ["probes"], "jev": {}}]}) == []
+    assert bv._page_problems({"pages": [{"id": "ops", "sections": ["probes"], "jev": True}]}) == [
+        "view.pages 1: jev must be a mapping"]
+    assert bv._page_problems({"pages": [{"id": "ops", "sections": ["probes"], "jev": {"private": "x", "y": 1}}]}) == [
+        "view.pages 1: jev.private must be a list of words", "view.pages 1: jev: unknown key y"]
+
+
+def test_a_calendar_row_carries_its_start_for_a_countdown():
+    rows = _section(bv.pages(_result(), _profile()), "cal")["items"]
+    assert rows[0]["at"].startswith("2026-10-08T09:00")
+    other = _section(bv.pages(_result(), _profile()), "mine")["items"]
+    assert "at" not in other[0]
+
+
+def test_an_inbox_item_that_runs_on_says_on_what_and_when_to_look_again():
+    r = {"collected_at": NOW, "sections": [_sec("runs", "inbox", [
+        {"id": "20261014-1000-x-ab12", "title": "Answer from Ada", "state": "deferred", "until": "2026-10-19",
+         "waiting_on": "an answer from Ada", "kind": "question", "gate": "your-yes"}])]}
+    row = _section(bv.pages(r, _profile({"pages": [{"id": "work", "sections": ["runs"]}]})), "runs")["items"][0]
+    assert row["detail"].startswith("an answer from Ada · look again ") and "19.10" in row["detail"]
+    assert [ln["kind"] for ln in row["lines"]] == ["blocked", "look"]
+
+
+def test_the_default_words_follow_the_bridges_language():
+    # one table per language under the same keys; a German Bridge gets German pages without a profile
+    assert set(bv.LABELS) == set(bv.LABELS_DE) and all(v.strip() for v in bv.LABELS_DE.values())
+    german = {**_profile(), "_language": "de"}
+    titles = {p["id"]: p["title"] for p in bv.pages(_result(), german)}
+    assert titles["dates"] == "Termine" and titles["today"] == "Was heute geschah"
+    assert {p["id"]: p["title"] for p in bv.pages(_result(), _profile())}["dates"] == "Dates"     # English otherwise
+    assert bv.labels_for("fr") is bv.LABELS and bv.labels_for("de-AT") is bv.LABELS_DE

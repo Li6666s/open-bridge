@@ -1,0 +1,16 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+title: AI service selection
+type: object
+additionalProperties: false
+required: [schema_version, scope, id, provider]
+properties:
+  schema_version: {const: 1}
+  scope: {enum: [user]}
+  id: {type: string, pattern: '^[a-z][a-z0-9-]*$'}
+  provider: {enum: [claude, codex]}
+  models:
+    type: object
+    additionalProperties: false
+    properties:
+      claude: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:/-]{0,159}$'}
+      codex: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:/-]{0,159}$'}

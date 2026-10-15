@@ -44,8 +44,14 @@ uses for owner approval:
                                            -> {"report": ["line", ...]}
     {"verb": "send", "tab": ref, "text": "..."}       -> {"report": [...]}
     {"verb": "rename", "tab": ref, "title": "..."}    -> {"report": [...]}
+  optional, a driver names the ones it serves in caps (without an answer: the six above):
+    {"verb": "caps"}                                  -> {"caps": ["tabs", "sessions", ...]}
+    {"verb": "focus", "tab": ref}                     -> {"report": [...]}
+    {"verb": "key", "tab": ref, "key": "enter" | "escape" | "y" | "n" | "1".."9"} -> {"report": [...]}
+    {"verb": "screen", "tab": ref, "lines": n}        -> {"text": "..."}
+    {"verb": "close", "tab": ref}                     -> {"report": [...]}
 
-A driver never closes a tab or a workspace. A driver that fails or answers
+A driver never closes a tab or a workspace on its own, only on `close`, which a person asked for. A driver that fails or answers
 nonsense is reported, never raised, and never read as "no tab is open":
 `open --yes` refuses and `status` says the driver failed. Model: docs/workplace.md.
 The contract lives in scripts/tests/test_workplace.py.
@@ -399,10 +405,17 @@ def _task_area(root: Path, slug: str, cfg: dict) -> dict:
     return workspace_for({"slug": slug, "context": fm.get("context")}, cfg)
 
 
+SESSION_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+
+
 def build_launch(root: Path, cfg: dict, items: list, mode: str, team: str | None = None,
-                 role: str | None = None) -> list:
+                 role: str | None = None, resume: str | None = None, resume_cwd: str | None = None) -> list:
     """One entry per requested item: label + command, or an error. Labels are unique.
-    With team and role: the tab of that role of the team on each task (inbox items have no team)."""
+    With team and role: the tab of that role of the team on each task (inbox items have no team).
+    With resume (a Claude session id): the tab goes on in that session of the task, in the folder it ran in
+    (resume_cwd; a session only resumes from its own project folder), with agent.resume as the command."""
+    if resume is not None and not SESSION_RE.fullmatch(resume):
+        return [{"item": ",".join(items), "kind": "unknown", "error": f"not a session id: {resume!r}"}]
     the_team = next((t for t in teams(cfg) if t["id"] == team), None) if team else None
     the_role = next((r for r in (the_team or {}).get("roles", []) if r["id"] == role), None)
     agent = {**DEFAULT_AGENT, **(cfg.get("agent") or {})}
@@ -453,11 +466,16 @@ def build_launch(root: Path, cfg: dict, items: list, mode: str, team: str | None
             n += 1
             label = f"{base} {n}"
         used.add(label)
-        run = agent["new"].format(slug=shlex.quote(slug), prompt=shlex.quote(prompt))
         extra = {"team": the_team["id"], "role": the_role["id"]} if the_team and the_role else {}
+        if resume:
+            run = agent["resume"].format(session=shlex.quote(resume), slug=shlex.quote(slug))
+            extra["resume"] = resume
+        else:
+            run = agent["new"].format(slug=shlex.quote(slug), prompt=shlex.quote(prompt))
+        cwd = resume_cwd if resume and resume_cwd else str(root)
         out.append({"item": name, "kind": kind, "label": label, "slug": slug, "workspace": area["name"],
                     "aliases": list(area.get("aliases") or []), **extra,
-                    "command": f"cd -- {shlex.quote(str(root))} && export {TAB_ENV}={shlex.quote(env_slug if team else slug)} && {run}"})
+                    "command": f"cd -- {shlex.quote(cwd)} && export {TAB_ENV}={shlex.quote(env_slug if team else slug)} && {run}"})
     return out
 
 
@@ -597,7 +615,8 @@ def task_rows(root: Path, cfg: dict, today: dt.date) -> list:
     for t in tasks:
         score, age = _score(t, mentions.get(t["slug"]), today)
         area = workspace_for(t, cfg)
-        rows.append({"slug": t["slug"], "label": tab_label(t, cfg), "area": area["name"],
+        rows.append({"slug": t["slug"], "label": tab_label(t, cfg), "title": (t.get("heading") or "").strip() or t["slug"],
+                     "area": area["name"],
                      "area_aliases": list(area.get("aliases") or []),
                      "priority": t.get("priority"), "type": t.get("type"), "status": t.get("status"),
                      "score": score, "age": age,
@@ -677,6 +696,11 @@ def status_rows(root: Path, cfg: dict, driver) -> list | None:
 
 # ---------------------------------------------------------------- drivers
 
+# the verbs every driver serves; the others it names in its answer to `caps`
+BASE_CAPS = ("tabs", "sessions", "open", "launch", "send", "rename")
+KEYS = ("enter", "escape", "y", "n", *(str(i) for i in range(1, 10)))
+
+
 class NoneDriver:
     """No terminal integration: nothing is open, nothing can be typed into, the plan says what to start."""
 
@@ -716,6 +740,24 @@ class NoneDriver:
 
     def rename(self, tab: str, title: str) -> list:
         return [f"No driver configured: name the tab {title!r} yourself."]
+
+    def control(self, ctl: dict, command: str, root) -> list:
+        return [f"No driver configured: start {command!r} in a terminal named {ctl.get('name')!r} yourself."]
+
+    def caps(self) -> list:
+        return []
+
+    def focus(self, tab: str) -> list:
+        return [f"No driver configured: switch to {tab} yourself."]
+
+    def key(self, tab: str, key: str) -> list:
+        return [f"No driver configured: press {key} in {tab} yourself."]
+
+    def screen(self, tab: str, lines: int) -> str | None:
+        return None
+
+    def close(self, tab: str) -> list:
+        return [f"No driver configured: close {tab} yourself."]
 
 
 class CommandDriver:
@@ -795,6 +837,39 @@ class CommandDriver:
     def rename(self, tab: str, title: str) -> list:
         return self._report({"verb": "rename", "tab": tab, "title": title})
 
+    def control(self, ctl: dict, command: str, root) -> list:
+        return self._report({"verb": "control", "control": ctl, "command": command, "root": str(root)})
+
+    def caps(self) -> list:
+        """The verbs this driver serves; a driver that names none serves the six base verbs."""
+        data = self._call({"verb": "caps"})
+        caps = (data or {}).get("caps")
+        if isinstance(caps, list) and all(isinstance(c, str) for c in caps):
+            return caps
+        return list(BASE_CAPS)
+
+    def focus(self, tab: str) -> list:
+        return self._report({"verb": "focus", "tab": tab})
+
+    def key(self, tab: str, key: str) -> list:
+        # a fixed set: a key outside it never reaches a terminal (no ctrl codes, no text through this door)
+        if key not in KEYS:
+            self.failed = True
+            return [f"ERROR key {key!r} is not one of {', '.join(KEYS)}"]
+        return self._report({"verb": "key", "tab": tab, "key": key})
+
+    def screen(self, tab: str, lines: int) -> str | None:
+        data = self._call({"verb": "screen", "tab": tab, "lines": int(lines)})
+        text = (data or {}).get("text")
+        if not isinstance(text, str):
+            if data is not None:
+                self.error = f"driver {self.name} answered no screen text"
+            return None
+        return text
+
+    def close(self, tab: str) -> list:
+        return self._report({"verb": "close", "tab": tab})
+
 
 def driver_from(spec):
     if spec in (None, "none"):
@@ -867,6 +942,8 @@ def main(argv=None) -> int:
     op.add_argument("--yes", action="store_true", help="hand the plan to the driver (default: dry run)")
     op.add_argument("--resume", action="store_true", help="also reopen tabs of earlier sessions")
     op.add_argument("--here", help="driver ref of the calling tab, which becomes the control tab")
+    ct = sub.add_parser("control", help="start a new agent tab in the control workspace (created when missing)")
+    ct.add_argument("--yes", action="store_true", help="start it (default: dry run)")
     ln = sub.add_parser("launch", help="one new agent tab (or workspace) per task slug or inbox id")
     ln.add_argument("--items", required=True, help="task slugs or open inbox ids, comma separated")
     ln.add_argument("--mode", choices=("report", "go", "context"),
@@ -880,6 +957,8 @@ def main(argv=None) -> int:
     ln.add_argument("--json", action="store_true")
     ln.add_argument("--team", help="a team id (workplace.py teams); with --role opens that role's tab")
     ln.add_argument("--role", help="the role of --team to open")
+    ln.add_argument("--resume", metavar="SESSION", help="go on in this Claude session of the one named task")
+    ln.add_argument("--cwd", help="with --resume: the folder the session ran in")
     ln.add_argument("--again", action="store_true",
                     help="open a tab even when an agent tab for the item is open already")
     sub.add_parser("teams", help="the team recipes: ordered role tabs on one task").add_argument(
@@ -893,6 +972,16 @@ def main(argv=None) -> int:
     ad = sub.add_parser("adopt")
     ad.add_argument("tab")
     ad.add_argument("slug")
+    sub.add_parser("caps", help="the verbs the configured driver serves").add_argument("--json", action="store_true")
+    for name, what in (("focus", "bring a tab to the front"), ("close", "close one tab (only when you ask)")):
+        sub.add_parser(name, help=what).add_argument("tab")
+    ky = sub.add_parser("key", help="one key into a tab: " + ", ".join(KEYS))
+    ky.add_argument("tab")
+    ky.add_argument("key")
+    sc = sub.add_parser("screen", help="the last lines a tab shows (read only)")
+    sc.add_argument("tab")
+    sc.add_argument("--lines", type=int, default=40)
+    sc.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
 
     cfg = load_cfg(args.root)
@@ -930,6 +1019,15 @@ def main(argv=None) -> int:
             return 0
         print("\n".join(driver.open(plan, only, args.resume, args.here)))
         return 1 if getattr(driver, "failed", False) else 0
+    if args.cmd == "control":
+        ctl = dict(cfg.get("control") or {"name": "Control"})
+        # the control session is a plain agent in the repo; workplace.control.command overrides it
+        command = str(ctl.get("command") or "claude").strip()
+        if not args.yes:
+            print(f"Dry run with driver {driver.name}; add --yes to start {command!r} in {ctl['name']}")
+            return 0
+        print("\n".join(driver.control(ctl, command, args.root)))
+        return 1 if getattr(driver, "failed", False) else 0
     if args.cmd == "tasks":
         rows = task_rows(args.root, cfg, today)
         if args.json:
@@ -956,7 +1054,13 @@ def main(argv=None) -> int:
             # not refused: a caller may pass its usual --mode along; the role's own mode decides
             print("note: --mode is ignored with --team; each role runs in the mode its team gives it",
                   file=sys.stderr)
-        entries = build_launch(args.root, cfg, args.items.split(","), args.mode or "report", args.team, args.role)
+        if args.resume and ("," in args.items or args.team):
+            print("--resume goes on in one session of one task, without a team", file=sys.stderr)
+            return 2
+        entries = build_launch(args.root, cfg, args.items.split(","), args.mode or "report", args.team, args.role,
+                               resume=args.resume, resume_cwd=args.cwd)
+        if args.resume:
+            args.again = True     # going on in an ended session is asked for, even beside an open tab
         good = [e for e in entries if "command" in e]
         report: list = []
         failed = any("error" in e for e in entries)
@@ -1013,6 +1117,10 @@ def main(argv=None) -> int:
                 print(f"{i:>2}  {str(r.get('workspace'))[:12]:<12} {str(r.get('name'))[:34]:<34} "
                       f"{str(r.get('state')):<9} {str(r.get('last') or '')[:80]}")
         return 0
+    if args.cmd == "caps":
+        caps = driver.caps()
+        print(json.dumps({"caps": caps}) if args.json else "\n".join(caps))
+        return 0
     tasks = collect_tasks(args.root)
     index = slug_index(tasks, cfg)
     tabs = driver.tabs()
@@ -1028,7 +1136,21 @@ def main(argv=None) -> int:
             return 1
         print("\n".join(driver.rename(tab.get("ref") or tab["name"], tab_label(task, cfg))))
         return 1 if getattr(driver, "failed", False) else 0
-    print("\n".join(driver.send(tab.get("ref") or tab["name"], " ".join(args.text))))
+    ref = tab.get("ref") or tab["name"]
+    if args.cmd == "screen":
+        text = driver.screen(ref, max(1, min(args.lines, 500)))
+        if text is None:
+            print(getattr(driver, "error", "") or "the driver cannot read this tab", file=sys.stderr)
+            return 1
+        print(json.dumps({"text": text}, ensure_ascii=False) if args.json else text)
+        return 0
+    if args.cmd in ("focus", "close"):
+        lines = getattr(driver, args.cmd)(ref)
+    elif args.cmd == "key":
+        lines = driver.key(ref, args.key)
+    else:
+        lines = driver.send(ref, " ".join(args.text))
+    print("\n".join(lines))
     return 1 if getattr(driver, "failed", False) else 0
 
 

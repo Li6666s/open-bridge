@@ -5,7 +5,10 @@
     python3 scripts/task.py priority <slug> {P0,P1,P2,P3}
     python3 scripts/task.py note <slug> <text>
     python3 scripts/task.py close <slug> [--reason TEXT] [--declined] [--json]
+    python3 scripts/task.py reopen <slug> [--as doing|backlog] [--note TEXT] [--json]
     python3 scripts/task.py review [slug ...] [--all] [--fresh] [--keep SLUG ...] [--json]
+    python3 scripts/task.py wait <slug> --until YYYY-MM-DD [--on TEXT] | --clear [--json]
+    python3 scripts/task.py new [slug] --headline TEXT | --from-inbox ID [--status backlog|doing] [--json]
 
 Rewrites only the ``priority:`` line inside the YAML frontmatter of
 work/tasks/<slug>/STATUS.md or work/streams/<slug>/STATUS.md (the key is added
@@ -27,6 +30,12 @@ directory moves to work/done/YYYY-MM/<slug>/ (a plain move, no git), the board i
 regenerated and one row goes into today's block of work/log.md. A stream, an
 unknown slug or a task already under work/done/ is refused without writing.
 
+``reopen`` is the inverse of close, for a close by mistake or a task that still has to
+be done: the newest work/done/*/<slug>/ moves back to work/tasks/<slug>/, ``status``
+becomes doing (or ``--as backlog``), ``closed:`` and ``outcome:`` go, a dated
+"Reopened" note joins the notes (the close note stays, so the history reads), the
+board is regenerated and one log row is written. A slug that is open is refused.
+
 ``review`` recommends per task in doing or review (``--backlog`` adds backlog,
 named slugs are reviewed whatever their status): close, continue, waiting, stale
 or unclear. It never changes a task. Evidence is
@@ -37,7 +46,7 @@ own_refs_closed (every tracked issue/PR closed as completed or merged) and
 blocker_resolved (everything blocked_by names is closed or merged); either one
 recommends closing, whatever the model says. Only ``unclear`` answers
 go to a stronger model in a second call. Verdicts are cached in
-.bridge/task-review.json by a hash of the evidence. Model: docs/briefing-dashboard.md.
+.bridge/task-review.json by a hash of the evidence. Model: docs/bridge-cockpit.md § 3.
 
 The allowed values are the enum in work/templates/_schema.status.yaml.
 The contract lives in ``scripts/tests/test_task.py`` and ``test_task_review.py``.
@@ -61,6 +70,9 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT / "scripts") not in sys.path:
+    sys.path.insert(0, str(ROOT / "scripts"))
+from lib import ai_services as ai
 PRIORITIES = ("P0", "P1", "P2", "P3")      # work/templates/_schema.status.yaml: priority.enum
 
 
@@ -227,7 +239,8 @@ def close_task(root: Path, slug: str, *, reason: str | None = None, declined: bo
     fields = [("status", "done", None), ("closed", f'"{today}"', "status")]
     if declined:
         fields.append(("outcome", "declined", "closed"))
-    text = remove_fields(set_fields(text, fields), ("blocked_by", "blocked_since"))
+    # a normal close drops an old "outcome: declined", which would otherwise survive and mislabel the task
+    text = remove_fields(set_fields(text, fields), ("blocked_by", "blocked_since") + (() if declined else ("outcome",)))
     word = "Declined" if declined else "Closed"
     text = add_note(text, f"{word}: {reason}" if reason else word, today)
     # Move first, then write at the destination: a move that fails leaves the task untouched in place.
@@ -255,6 +268,165 @@ def close_task(root: Path, slug: str, *, reason: str | None = None, declined: bo
         warnings.append(f"work/log.md row not written: {exc}")
     return {"slug": slug, "moved_to": f"work/done/{now:%Y-%m}/{slug}", "closed": today,
             "outcome": "declined" if declined else None, "reason": reason or None, "warnings": warnings}
+
+
+# ---------------------------------------------------------------- runs on
+
+def wait_task(root: Path, slug: str, *, until: str | None = None, on: str | None = None, clear: bool = False,
+              today: str | None = None) -> dict:
+    """"Runs on": the task waits on a person or a run until a day to look again. It stays doing; blocked_by says
+    on what, quiet_until until when nobody asks after it (briefing advice, task review). clear takes it back."""
+    today = today or dt.date.today().isoformat()
+    path = find_status(root, slug)
+    text = path.read_bytes().decode("utf-8")
+    kept = False
+    if clear:
+        text = remove_fields(text, ("blocked_by", "blocked_since", "quiet_until"))
+        text = add_note(text, "Running again", today)
+    else:
+        if not until:
+            raise ValueError("--until YYYY-MM-DD is required (or --clear)")
+        dt.date.fromisoformat(until)
+        on = " ".join((on or "").split())
+        kept = re.search(r"^blocked_by:", text, re.M) is not None and not on
+        on = on or "runs on"
+        # without --on an existing reason stays: it says more than "runs on"
+        fields = ([] if kept else [("blocked_by", json.dumps(on, ensure_ascii=False), "status")]) + [("quiet_until", until, "blocked_by")]
+        if not re.search(r"^blocked_since:", text, re.M):
+            fields.append(("blocked_since", today, "blocked_by"))
+        text = add_note(set_fields(text, fields), f"Runs on until {until}" + ("" if kept else f": {on}"), today)
+    path.write_bytes(text.encode("utf-8"))
+    with contextlib.redirect_stdout(sys.stderr):
+        regenerate_board(root)
+    return {"slug": slug, "quiet_until": None if clear else until, "on": None if clear or kept else on}
+
+
+# ---------------------------------------------------------------- new, also from an inbox item
+
+NEW_STATUSES = ("backlog", "doing")
+
+
+def _new_slug(text: str) -> str:
+    text = text.lower()
+    for a, b in (("ä", "ae"), ("ö", "oe"), ("ü", "ue"), ("ß", "ss")):
+        text = text.replace(a, b)
+    # the head of a summary ("X: the details"), no aside in brackets, cut between words, never inside one
+    text = re.sub(r"\([^)]*\)", " ", text.split(": ", 1)[0])
+    words = [w for w in re.split(r"[^a-z0-9]+", text) if w]
+    slug = ""
+    for w in words:
+        if slug and len(slug) + 1 + len(w) > 40:
+            break
+        slug = f"{slug}-{w}" if slug else w
+    return slug[:48] or "task"
+
+
+def new_task(root: Path, slug: str | None = None, *, headline: str | None = None, status: str = "backlog",
+             from_inbox: str | None = None, task_type: str = "admin", now: dt.datetime | None = None) -> dict:
+    """A new work/tasks/<slug>/STATUS.md (the template's required fields, a short body). From an inbox item the
+    headline and the situation come from the item, the origin names it, and the item closes with a pointer to
+    the task: an inbox item that turned out to be work for more than one sitting becomes a task."""
+    now = now or dt.datetime.now()
+    today = now.date().isoformat()
+    if status not in NEW_STATUSES:
+        raise ValueError(f"status must be one of {NEW_STATUSES}")
+    box = item = None
+    if from_inbox:
+        box = _module("inbox", ROOT / "scripts" / "inbox.py").Inbox(root / "work" / "inbox", actor="task")
+        item = box.get(box.resolve(from_inbox))
+        if item.state in ("done", "dropped"):
+            raise ValueError(f"inbox item {item.id} is closed ({item.state}); it becomes no task")
+        headline = headline or item.summary
+    headline = " ".join((headline or "").split())
+    if not headline:
+        raise ValueError("a task needs a headline (--headline)")
+    slug = slug or _new_slug(headline)
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", slug):
+        raise ValueError(f"not a task slug: {slug!r}")
+    work = root / "work"
+    if any(p.is_dir() for p in (work / "tasks" / slug, work / "streams" / slug)) or any((work / "done").glob(f"*/{slug}")):
+        raise ValueError(f"a task {slug!r} exists already")
+    origin = (f"inbox {item.id} ({str(item.created or '')[:10]}, {item.source}): {item.summary}" if item
+              else f"Ad-hoc {today}")
+    situation = (item.detail or item.summary) if item else headline
+    fm = [f"slug: {slug}", f"type: {task_type}", f"status: {status}", "priority: P2", f'created: "{today}"',
+          f'last_updated: "{today}"', f"headline: {json.dumps(headline, ensure_ascii=False)}",
+          f"origin: {json.dumps(origin, ensure_ascii=False)}", "sync:", "  bridge_only: true"]
+    body = (f"# {headline}\n\n## Situation\n\n{situation}\n\n## Status\n\nNew{' (from the inbox)' if item else ''}.\n\n"
+            "## Next Steps\n\n- [ ] First step\n")
+    d = work / "tasks" / slug
+    d.mkdir(parents=True)
+    (d / "STATUS.md").write_text("# yaml-language-server: $schema=../../templates/_schema.status.yaml\n---\n"
+                                 + "\n".join(fm) + "\n---\n\n" + body, encoding="utf-8")
+    warnings = []
+    if item:
+        box.close(item.id, note=f"became the task {slug} (work/tasks/{slug}/)")
+        try:
+            (work / "inbox.md").write_text(box.render(), encoding="utf-8")
+        except Exception as exc:  # noqa: BLE001 - the item is closed; a stale view is a warning
+            warnings.append(f"work/inbox.md not rendered: {exc}")
+    try:
+        with contextlib.redirect_stdout(sys.stderr):
+            regenerate_board(root)
+    except Exception as exc:  # noqa: BLE001
+        warnings.append(f"work/board.md not regenerated: {exc}")
+    try:
+        append_log_row(root, now, slug, f"new task ({status})" + (f" from inbox {item.id}" if item else ""))
+    except Exception as exc:  # noqa: BLE001
+        warnings.append(f"work/log.md row not written: {exc}")
+    return {"slug": slug, "status": status, "path": f"work/tasks/{slug}/STATUS.md",
+            "inbox": item.id if item else None, "warnings": warnings}
+
+
+REOPEN_STATUSES = ("doing", "backlog")
+
+
+def reopen_task(root: Path, slug: str, *, status: str = "doing", note: str | None = None,
+                now: dt.datetime | None = None) -> dict:
+    """The inverse of close_task: back to work/tasks/, status set, close fields gone, note, board, log row."""
+    now = now or dt.datetime.now()
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", slug):
+        raise ValueError(f"not a task slug: {slug!r}")
+    if status not in REOPEN_STATUSES:
+        raise ValueError(f"reopen as one of {', '.join(REOPEN_STATUSES)}")
+    work = root / "work"
+    for kind in ("tasks", "streams"):
+        if (work / kind / slug / "STATUS.md").is_file():
+            raise ValueError(f"{slug} is open already (work/{kind}/)")
+    closed = sorted((work / "done").glob(f"*/{slug}/STATUS.md"))
+    if not closed:
+        raise ValueError(f"no closed task {slug!r} under {work / 'done'}")
+    src = closed[-1].parent                     # month folders sort by date: the latest close
+    dest = work / "tasks" / slug
+    today = now.date().isoformat()
+    note = " ".join((note or "").split())
+    text = closed[-1].read_bytes().decode("utf-8")
+    text = remove_fields(set_fields(text, [("status", status, None)]), ("closed", "outcome"))
+    text = add_note(text, f"Reopened: {note}" if note else "Reopened", today)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        os.rename(src, dest)
+    except OSError as exc:
+        if exc.errno != errno.EXDEV:
+            raise
+        shutil.move(str(src), str(dest))
+    try:
+        (dest / "STATUS.md").write_bytes(text.encode("utf-8"))
+    except OSError:
+        os.rename(dest, src)
+        raise
+    warnings = []
+    try:
+        with contextlib.redirect_stdout(sys.stderr):
+            regenerate_board(root)
+    except Exception as exc:  # noqa: BLE001 - the task is open again; a stale board is a warning
+        warnings.append(f"work/board.md not regenerated: {exc}")
+    try:
+        append_log_row(root, now, slug, "reopened" + (f": {note}" if note else ""))
+    except Exception as exc:  # noqa: BLE001
+        warnings.append(f"work/log.md row not written: {exc}")
+    return {"slug": slug, "moved_from": str(src.relative_to(root)), "status": status, "note": note or None,
+            "warnings": warnings}
 
 
 # ---------------------------------------------------------------- review
@@ -468,7 +640,7 @@ def _ref_text(key: str, ref: dict) -> str:
     return f"{key} {what} {state}{reason}{when} \"{ref.get('title') or ''}\""
 
 
-def gather(root: Path, slugs, run, backlog: bool = False) -> list:
+def gather(root: Path, slugs, run, backlog: bool = False, now_day: dt.date | None = None) -> list:
     """Evidence per open task, deterministic: what goes to the model and what the cache hashes."""
     b = _briefing()
     base = root / "work" / "tasks"
@@ -492,6 +664,9 @@ def gather(root: Path, slugs, run, backlog: bool = False) -> list:
         fm = b._frontmatter(text)
         wanted = REVIEW_STATUSES + (("backlog",) if backlog else ())
         if not slugs and fm.get("status") not in wanted:
+            continue
+        # "runs on" (task.py wait): a check of all tasks leaves it alone until the day it names; named, it is checked
+        if not slugs and str(fm.get("quiet_until") or "") >= (now_day or dt.date.today()).isoformat():
             continue
         slug = path.parent.name
         body = re.split(r"^---\s*$", text, maxsplit=2, flags=re.M)[-1]
@@ -580,6 +755,24 @@ def ask_model(command: str, model: str, prompt: str, run, timeout: int) -> dict:
             "error": (done.stderr or "").strip()[-200:] if done.returncode != 0 else None}
 
 
+def service_model(root: Path, service: str, default: str) -> str:
+    choice = ai.select(root, service, default)
+    return choice.model or "codex-default"
+
+
+def ask_service(root: Path, service: str, command: str, model: str, prompt: str, run, timeout: int) -> dict:
+    choice = ai.select(root, service, model)
+    if choice.provider == "claude":
+        return ask_model(command, choice.model or model, prompt, run, timeout)
+    # The CLI's default model is deliberately not guessed from a release name.
+    argv = ai.batch_argv(choice, prompt, binary="codex")
+    done = run(argv, timeout=timeout, cwd=root)
+    answer = ai.parse_codex(done.stdout or "") if done.returncode == 0 else None
+    ok = bool(answer and not answer["error"])
+    return {"items": _json_array(answer["text"]) if ok else [], "cost": None, "used": [], "ok": ok,
+            "error": None if ok else ((answer or {}).get("text") or (done.stderr or "no completed answer"))[-200:]}
+
+
 def _load_cache(root: Path) -> dict:
     try:
         data = json.loads((root / REVIEW_CACHE).read_text(encoding="utf-8"))
@@ -653,12 +846,13 @@ def review(root: Path, slugs=None, *, fresh: bool = False, run=None, now: dt.dat
     started = _clock()
     cfg = _config(root)
     rcfg = _review_cfg(cfg)
-    tiers = [tier_model(cfg, "mechanical"), tier_model(cfg, "directed")]
+    tiers = [service_model(root, "task-review", tier_model(cfg, tier)) for tier in ("mechanical", "directed")]
     if escalate:
         tiers, fresh = [tiers[1]], True
-    tasks = gather(root, slugs, run, backlog=backlog)
+    tasks = gather(root, slugs, run, backlog=backlog, now_day=now.date())
     # a verdict holds for its evidence AND for what it was asked with: language, models, rule, prompt
-    settings = json.dumps([_language(cfg), tiers, rcfg["stale_days"], PROMPT_VERSION])
+    settings = json.dumps([_language(cfg), tiers, rcfg["stale_days"], PROMPT_VERSION,
+                           ai.load(root, "task-review"), rcfg["command"]], sort_keys=True)
     for t in tasks:
         t["hash"] = hashlib.sha256(f"{t['hash']}|{settings}".encode("utf-8")).hexdigest()[:16]
     cache = _load_cache(root)
@@ -688,7 +882,8 @@ def review(root: Path, slugs=None, *, fresh: bool = False, run=None, now: dt.dat
         left = REVIEW_BUDGET_SEC - (_clock() - started)
         if left < 10:
             break
-        res = ask_model(rcfg["command"], model, prompt, run, int(min(left, TIER_ONE_MAX_SEC) if level == 0 else left))
+        res = ask_service(root, "task-review", rcfg["command"], model, prompt, run,
+                          int(min(left, TIER_ONE_MAX_SEC) if level == 0 else left))
         calls += 1
         if res["cost"] is None:
             cost_known = False          # a failed or timed-out call has a cost nobody reported
@@ -738,7 +933,8 @@ def review(root: Path, slugs=None, *, fresh: bool = False, run=None, now: dt.dat
     result = {"tasks": out, "cost_usd": round(cost, 6), "cost_known": cost_known, "models_used": used_all,
               "cost_by_model": {m: round(c, 6) for m, c in by_model.items()},
               # what "check closer" will cost: one call of the directed model, measured when this run made one
-              "escalate_call_usd": round(by_model.get(tier_model(cfg, "directed"), DIRECTED_CALL_USD), 6),
+              "escalate_call_usd": (None if ai.select(root, "task-review").provider == "codex" else
+                                    round(by_model.get(tier_model(cfg, "directed"), DIRECTED_CALL_USD), 6)),
               "model_mismatch": mismatch, "calls": calls, "reviewed": len(out),
               "to_close": sum(1 for x in out if (x["verdict"] == "close" or x["resolved"]) and not x["kept"]),
               "reviewed_at": now.isoformat(timespec="seconds"), "duration_sec": round(_clock() - started, 1)}
@@ -779,6 +975,11 @@ def keep(root: Path, slugs) -> dict:
         raise ValueError(f"no recommendation to keep for: {', '.join(missing)}")
     for s in slugs:
         cache["tasks"][s]["kept"] = True
+    # the dashboard's overview reads the last run: it shows the dismissal at once, not after the next check
+    last = cache.get("last") if isinstance(cache.get("last"), dict) else None
+    for t in (last or {}).get("tasks") or []:
+        if isinstance(t, dict) and t.get("slug") in slugs:
+            t["kept"] = True
     _save_cache(root, cache)
     return {"kept": list(slugs)}
 
@@ -816,6 +1017,24 @@ def main(argv=None) -> int:
     cl.add_argument("--reason", default="")
     cl.add_argument("--declined", action="store_true", help="closed without completion (outcome: declined)")
     cl.add_argument("--json", action="store_true")
+    ro = sub.add_parser("reopen", help="the inverse of close: back to work/tasks/, status, note, board, log row")
+    ro.add_argument("slug")
+    ro.add_argument("--as", dest="as_status", choices=REOPEN_STATUSES, default="doing")
+    ro.add_argument("--note", default="")
+    ro.add_argument("--json", action="store_true")
+    wt = sub.add_parser("wait", help="runs on: waits on a person or a run until a day, nobody asks before")
+    wt.add_argument("slug")
+    wt.add_argument("--until", help="YYYY-MM-DD, the day to look again")
+    wt.add_argument("--on", default=None, help="what it waits on; without it simply \"runs on\"")
+    wt.add_argument("--clear", action="store_true", help="running again: blocked_by and quiet_until go")
+    wt.add_argument("--json", action="store_true")
+    nw = sub.add_parser("new", help="a new task in work/tasks/, also from an inbox item (which then closes)")
+    nw.add_argument("slug", nargs="?")
+    nw.add_argument("--headline")
+    nw.add_argument("--from-inbox", dest="from_inbox")
+    nw.add_argument("--status", choices=NEW_STATUSES, default="backlog")
+    nw.add_argument("--type", dest="task_type", default="admin")
+    nw.add_argument("--json", action="store_true")
     rv = sub.add_parser("review", help="recommend close/continue/waiting/stale/unclear per open task")
     rv.add_argument("slugs", nargs="*")
     rv.add_argument("--all", action="store_true", help="every task in doing or review (the default without slugs)")
@@ -833,6 +1052,24 @@ def main(argv=None) -> int:
         if args.cmd == "close":
             out = close_task(root, args.slug, reason=args.reason, declined=args.declined)
             print(json.dumps(out, ensure_ascii=False) if args.json else f"closed {out['slug']} -> {out['moved_to']}")
+            for warning in out["warnings"]:
+                print(f"task: warning: {warning}", file=sys.stderr)
+            return 0
+        if args.cmd == "reopen":
+            out = reopen_task(root, args.slug, status=args.as_status, note=args.note)
+            print(json.dumps(out, ensure_ascii=False) if args.json else f"reopened {out['slug']} <- {out['moved_from']}")
+            for warning in out["warnings"]:
+                print(f"task: warning: {warning}", file=sys.stderr)
+            return 0
+        if args.cmd == "wait":
+            out = wait_task(root, args.slug, until=args.until, on=args.on, clear=args.clear)
+            print(json.dumps(out, ensure_ascii=False) if args.json else
+                  (f"{out['slug']} running again" if args.clear else f"{out['slug']} runs on until {out['quiet_until']}"))
+            return 0
+        if args.cmd == "new":
+            out = new_task(root, args.slug, headline=args.headline, status=args.status, from_inbox=args.from_inbox,
+                           task_type=args.task_type)
+            print(json.dumps(out, ensure_ascii=False) if args.json else f"new task {out['slug']} ({out['status']})")
             for warning in out["warnings"]:
                 print(f"task: warning: {warning}", file=sys.stderr)
             return 0
@@ -855,7 +1092,10 @@ def main(argv=None) -> int:
         print(f"task: {exc}", file=sys.stderr)
         return 1
     path.write_bytes(new.encode("utf-8"))
-    regenerate_board(root)
+    try:
+        regenerate_board(root)
+    except Exception as exc:  # noqa: BLE001 - the file is written; a stale board is a warning
+        print(f"task: written, but the board failed: {exc}", file=sys.stderr)
     return 0
 
 

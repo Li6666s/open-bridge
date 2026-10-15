@@ -100,6 +100,7 @@ searches again.
 | What still needs me, and how does an open item get closed? | [`docs/inbox.md`](inbox.md) |
 | What does my briefing show, from which trackers, and how do I change it? | [`docs/briefings.md`](briefings.md) |
 | How do I set up the clickable briefing dashboard in Claude Code (tabs, columns, marks, language)? | [`docs/briefing-dashboard.md`](briefing-dashboard.md) |
+| How do I see and steer the whole Bridge in a browser (inbox, tasks, agent tabs, machines)? | [`docs/bridge-cockpit.md`](bridge-cockpit.md) (early version) |
 | What is in `mods/`, and how do I install or test a mod? | [`mods/README.md`](../mods/README.md) |
 | How do the day's agent tabs get planned and steered, with or without a terminal tool? | [`docs/workplace.md`](workplace.md) |
 | How does a machine that is always on become the arm of my Bridge? | [`docs/always-on-machine.md`](always-on-machine.md) |

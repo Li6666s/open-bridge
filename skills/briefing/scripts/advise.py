@@ -73,11 +73,30 @@ def _load_inbox_locked():
     return module
 
 
+# the words of a finding in the instance's conversation language (bridge-config.yaml language.conversation);
+# a language not here reads English
+TEXTS = {
+    "en": {"collides": "“{item}” at {start} collides with “{event}” {e_start} to {e_end}",
+           "blocked": "{slug} blocked for {idle} days: nudge? ({why})",
+           "quiet": "{slug} untouched for {idle} days", "quiet_customer": " (customer: push or park?)",
+           "quiet_park": " (park?)", "wip": "{n} tasks active, cap {cap}: close or park one",
+           "waiting": "waits on you since {day}: {item}", "due": "due {day}: {item}"},
+    "de": {"collides": "„{item}“ am {start} überschneidet sich mit „{event}“ {e_start} bis {e_end}",
+           "blocked": "{slug} seit {idle} Tagen blockiert: nachhaken? ({why})",
+           "quiet": "{slug} seit {idle} Tagen unberührt", "quiet_customer": " (Kunde: anschieben oder parken?)",
+           "quiet_park": " (parken?)", "wip": "{n} Aufgaben aktiv, Grenze {cap}: eine schließen oder parken",
+           "waiting": "wartet seit {day} auf dich: {item}", "due": "fällig {day}: {item}"},
+}
+
+
 def _config(root: Path) -> tuple[dict, int | None]:
     path = root / "bridge-config.yaml"
     data = yaml.safe_load(path.read_text(encoding="utf-8")) if path.is_file() else {}
     data = data or {}
     advise_cfg = {**DEFAULTS, **(((data.get("briefing") or {}).get("advise")) or {})}
+    lang = data.get("language")
+    code = str((lang.get("conversation") if isinstance(lang, dict) else lang) or "en").strip().lower()
+    advise_cfg["_words"] = TEXTS.get(code, TEXTS["en"])
     return advise_cfg, (data.get("work") or {}).get("max_active")
 
 
@@ -114,7 +133,8 @@ def _tasks(root: Path) -> list:
         fm = _frontmatter(status.read_text(encoding="utf-8"))
         if fm.get("status") in ("doing", "review"):
             out.append({"slug": fm.get("slug") or status.parent.name, "context": fm.get("context"),
-                        "blocked_by": fm.get("blocked_by"), "updated": _day(fm.get("last_updated"))})
+                        "blocked_by": fm.get("blocked_by"), "updated": _day(fm.get("last_updated")),
+                        "quiet_until": _day(fm.get("quiet_until"))})
     return out
 
 
@@ -130,6 +150,7 @@ def advise(root: Path, *, now: dt.datetime | None = None, calendar: list | None 
     now = now or dt.datetime.now()
     today = now.date()
     cfg, max_active = _config(root)
+    w = cfg["_words"]
     inbox = inbox or _load_inbox()
     box = inbox.Inbox(root / "work" / "inbox", actor="briefing", clock=lambda: now)
     items = box.open_items()
@@ -150,28 +171,30 @@ def advise(root: Path, *, now: dt.datetime | None = None, calendar: list | None 
             if start < e_end and e_start < start + window:
                 found.append(_finding(
                     "collision", f"{item.id}:{inbox._slug(str(event.get('title')), 30)}",
-                    f"“{item.summary}” at {start:%a %d.%m %H:%M} collides with "
-                    f"“{event.get('title')}” {e_start:%H:%M} to {e_end:%H:%M}",
+                    w["collides"].format(item=item.summary, start=f"{start:%a %d.%m %H:%M}", event=event.get("title"),
+                                         e_start=f"{e_start:%H:%M}", e_end=f"{e_end:%H:%M}"),
                     "now" if start.date() == today else "today", item.task))
 
     tasks = _tasks(root)
     for t in tasks:
         if not t["updated"]:
             continue
+        if t["quiet_until"] and t["quiet_until"] >= today:    # "runs on": nobody asks before the day it names
+            continue
         idle = (today - t["updated"]).days
         if t["blocked_by"]:
             if idle >= int(cfg["blocked_days"]):
                 found.append(_finding("blocked", t["slug"],
-                                      f"{t['slug']} blocked for {idle} days: nudge? ({str(t['blocked_by'])[:80]})",
+                                      w["blocked"].format(slug=t["slug"], idle=idle, why=str(t["blocked_by"])[:80]),
                                       "later", t["slug"]))
         elif idle >= int(cfg["stale_days"]):
             customer = t["context"] in (cfg["customer_contexts"] or [])
             found.append(_finding("quiet", t["slug"],
-                                  f"{t['slug']} untouched for {idle} days"
-                                  + (" (customer: push or park?)" if customer else " (park?)"),
+                                  w["quiet"].format(slug=t["slug"], idle=idle)
+                                  + (w["quiet_customer"] if customer else w["quiet_park"]),
                                   "today" if customer else "later", t["slug"]))
     if max_active and len(tasks) > int(max_active):
-        found.append(_finding("wip", "cap", f"{len(tasks)} tasks active, cap {max_active}: close or park one",
+        found.append(_finding("wip", "cap", w["wip"].format(n=len(tasks), cap=max_active),
                               "later"))
 
     own_keys = {f["key"] for f in found}
@@ -181,11 +204,11 @@ def advise(root: Path, *, now: dt.datetime | None = None, calendar: list | None 
         created = _day(item.created)
         if item.kind in ("decision", "draft", "question") and created and \
                 (today - created).days >= int(cfg["waiting_days"]):
-            found.append(_finding("waiting", item.id, f"waits on you since {created:%d.%m}: {item.summary}",
+            found.append(_finding("waiting", item.id, w["waiting"].format(day=f"{created:%d.%m}", item=item.summary),
                                   item.urgency, item.task, file=False))
         due = _day(item.due)
         if due and 0 <= (due - today).days <= 1:
-            found.append(_finding("due", item.id, f"due {due:%d.%m}: {item.summary}", item.urgency,
+            found.append(_finding("due", item.id, w["due"].format(day=f"{due:%d.%m}", item=item.summary), item.urgency,
                                   item.task, file=False))
     return found
 

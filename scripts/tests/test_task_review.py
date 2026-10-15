@@ -241,6 +241,15 @@ def test_keep_dismisses_until_the_evidence_changes(repo):
     assert len(fake.model_calls()) == 1 and out["tasks"][0]["kept"] is False
 
 
+def test_keep_shows_in_the_last_run_at_once(repo):
+    add(repo, "alpha")
+    add(repo, "beta")
+    review(repo, Fake(answers={HAIKU: verdicts(["alpha", "beta"], "close")}))
+    task.keep(repo, ["alpha"])
+    last = json.loads((repo / ".bridge" / "task-review.json").read_text(encoding="utf-8"))["last"]
+    assert {t["slug"]: t["kept"] for t in last["tasks"]} == {"alpha": True, "beta": False}
+
+
 def test_a_task_the_model_does_not_answer_is_unclear_and_not_cached(repo):
     add(repo, "alpha")
     add(repo, "beta")
@@ -512,3 +521,12 @@ def test_the_price_of_one_closer_look_is_measured_or_the_known_default(repo):
     out = task.review(repo, ["alpha"], run=Fake(answers={SONNET: verdicts(["alpha"])}, cost=0.03), now=NOW,
                       escalate=True)
     assert out["escalate_call_usd"] == pytest.approx(0.03)
+
+
+def test_a_task_that_runs_on_is_left_out_of_a_check_of_all_until_its_day(repo):
+    add(repo, "alpha")
+    add(repo, "waits", extra='blocked_by: "an answer from the vendor"\nquiet_until: 2026-10-20\n')
+    slugs = [t["slug"] for t in task.gather(repo, None, Fake(), now_day=NOW.date())]
+    assert slugs == ["alpha"]
+    assert [t["slug"] for t in task.gather(repo, ["waits"], Fake(), now_day=NOW.date())] == ["waits"]   # named: checked
+    assert {t["slug"] for t in task.gather(repo, None, Fake(), now_day=dt.date(2026, 10, 21))} == {"alpha", "waits"}

@@ -157,3 +157,21 @@ def test_an_info_event_never_collides(repo):
     box(repo).add(source="session", kind="decision", summary="Post the launch", due="2026-10-06T15:00")
     calendar = [{"title": "School play", "start": "2026-10-06T15:30", "end": "2026-10-06T16:15", "info": True}]
     assert "collision" not in checks(advise.advise(repo, now=NOW, calendar=calendar))
+
+
+def test_a_finding_speaks_the_configured_language(repo):
+    cfg = repo / "bridge-config.yaml"
+    cfg.write_text(cfg.read_text(encoding="utf-8") + "language:\n  conversation: de\n", encoding="utf-8")
+    for i in range(4):
+        task(repo, f"t{i}", last_updated="2026-10-05")
+    wip = next(f for f in advise.advise(repo, now=NOW) if f["check"] == "wip")
+    assert wip["summary"] == "4 Aufgaben aktiv, Grenze 3: eine schließen oder parken"
+
+
+def test_a_task_that_runs_on_is_quiet_until_its_day(repo):
+    # task.py wait: blocked_by + quiet_until; no "blocked" and no "quiet" advice before that day, both after it
+    task(repo, "vendor-wait", blocked_by="vendor answers", last_updated="2026-09-10", quiet_until="2026-10-20")
+    task(repo, "long-run", last_updated="2026-09-10", quiet_until="2026-10-20")
+    assert advise.advise(repo, now=NOW) == []
+    later = NOW.replace(month=10, day=21)
+    assert checks(advise.advise(repo, now=later)) == ["blocked", "quiet"]

@@ -233,6 +233,10 @@ ties a tab to the task row it works on. It also reads `BRIDGE_TAB_SLUG` itself: 
 a launched tab it shows no band above the prompt and no morning hint, and it does
 not poll the agent tabs.
 
+The cockpit ([`bridge-cockpit.md`](bridge-cockpit.md), an early version) uses the same
+driver verbs for its tab buttons. Without a driver it starts nothing and hands over the
+command to start by hand.
+
 `workplace.py tasks [--json]` lists every active task flat, sorted by priority and then
 activity: label, area, priority, score, `blocked_by`, and `stale` (no activity for longer
 than `limits.stale_days`). `propose` decides which of them get a tab today; `tasks` is the

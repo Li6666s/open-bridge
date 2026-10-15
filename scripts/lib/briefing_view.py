@@ -30,7 +30,7 @@ from pathlib import Path
 STYLES = ("sources", "triage", "brevity", "plan", "report")
 BUCKETS = ("do", "plan", "delegate", "waiting", "drop")
 VIEW_KEYS = {"style", "headline", "dayline", "agenda", "overview", "report", "since_last", "lookahead_days", "max_items", "answer_keys", "hygiene", "color",
-             "width", "labels", "buckets", "plan", "pages", "page_rest", "marks"}
+             "width", "labels", "buckets", "plan", "pages", "page_rest", "page_skip", "marks"}
 MARK_KEYS = {"label", "match", "color"}
 MARK_COLORS = ("red", "green", "yellow", "blue", "magenta", "cyan", "gray", "white")
 # Where a mark looks: the row's own words and what names its source, never a body.
@@ -57,6 +57,7 @@ LABELS = {
     "only_you": "only you",
     "collides": "collides with the calendar",
     "waiting_days": "waiting {n} days",
+    "look_again": "look again {when}",
     "with": "with {who}",
     "task": "task {slug}",
     "nudge": "nudge?",
@@ -106,21 +107,120 @@ LABELS = {
     "page_status": "Status",
     "page_dates": "Dates",
     "page_trackers": "Trackers",
-    "page_today": "Today",
+    "page_today": "What happened today",
     "page_more": "More",
     "page_empty": "nothing",
+    "page_work": "Work",
+    "section_inbox": "Inbox",
+    "section_runs_on": "Runs on",
+    "section_tasks": "Tasks",
+    "section_next_up": "Next up",
+    "section_advise": "Hints",
+    "section_calendar": "Calendar",
+    "section_activity": "Activity",
+    "section_workplace": "Workplace",
     "until": "until {time}",
     "commits_today": "{n} today",
 }
+# The same words in German (rules/language-policy.md section 3: one table per language, identical keys,
+# English the default and the fallback). The language is bridge-config.yaml language.conversation; a
+# profile's own `view.labels` still win over both.
+LABELS_DE = {
+    "yours_today": "{n} für dich heute",
+    "free_until": "frei bis {time}",
+    "free_rest": "frei für den Rest des Tages",
+    "busy_until": "in {title} bis {time}",
+    "next_date": "als Nächstes: {when} {title}",
+    "since": "seit {time}: {new} neu, {changed} geändert",
+    "today": "heute",
+    "tomorrow": "morgen",
+    "due": "fällig {when}",
+    "back_on": "zurück am {date}",
+    "only_you": "nur du",
+    "collides": "kollidiert mit dem Kalender",
+    "waiting_days": "wartet seit {n} Tagen",
+    "look_again": "nachsehen {when}",
+    "with": "bei {who}",
+    "task": "Aufgabe {slug}",
+    "nudge": "nachfassen?",
+    "new": "neu",
+    "housekeeping": "Pflege",
+    "no_next": "{n} Aufgaben ohne nächsten Schritt: {slugs}",
+    "muted": "{n} stummgeschaltet",
+    "hidden": "{n} ausgeblendet (Fach nicht gezeigt: {ids})",
+    "error": "{title} fehlgeschlagen: {reason}",
+    "workplace": "Tabs: {n} vorgeschlagen ({new} neu, {resume} fortsetzen). Öffnen?",
+    "more": "+{n} weitere",
+    "end": "Das war's für heute.",
+    "why": "warum",
+    "meanwhile": "Parallel mache ich",
+    "later": "Später",
+    "shutdown": "Feierabend {time}",
+    "activity_title": "Aktivität ({days} Tage)",
+    "commits": "{n} Commits",
+    "boards_title": "Boards",
+    "st_new": "neu",
+    "st_ready": "bereit",
+    "st_in_progress": "in Arbeit",
+    "st_review": "Review",
+    "st_blocked": "blockiert",
+    "capped": "(erste {n} Karten)",
+    "repos_skipped": "{n} Repos nicht lesbar: {names}",
+    "agenda_title": "Termine",
+    "clashes": "überschneidet sich mit {title}",
+    "clash_row": "{first} und {second} überschneiden sich ({when})",
+    "parallel": "parallel zu {title}",
+    "info_tag": "Info",
+    "all_clear": "{title}: alles in Ordnung",
+    "owed": "Nicht im Profil, noch von Hand: {streams} (briefing.py owed)",
+    "overview_file": "Boards und Aktivität: {path}",
+    "report_title": "Briefing {date}",
+    "lage": "Lage",
+    "first_title": "Zuerst",
+    "bucket_more": "+{n} weitere",
+    "col_when": "Wann",
+    "col_what": "Was",
+    "col_note": "Hinweis",
+    "col_board": "Board",
+    "col_repo": "Repository",
+    "col_branch": "Branch",
+    "col_days": "{days} Tage",
+    "col_commits": "Commits",
+    "page_status": "Status",
+    "page_dates": "Termine",
+    "page_trackers": "Tracker",
+    "page_today": "Was heute geschah",
+    "page_more": "Weitere",
+    "page_empty": "nichts",
+    "page_work": "Arbeit",
+    "section_inbox": "Posteingang",
+    "section_runs_on": "Läuft",
+    "section_tasks": "Aufgaben",
+    "section_next_up": "Als Nächstes",
+    "section_advise": "Hinweise",
+    "section_calendar": "Termine",
+    "section_activity": "Aktivität",
+    "section_workplace": "Arbeitsplatz",
+    "until": "bis {time}",
+    "commits_today": "{n} heute",
+}
+LABEL_TABLES = {"en": LABELS, "de": LABELS_DE}
 # Dashboard pages (`view.pages`): the briefing page itself shows these kinds; every
 # other section gets a page by its kind unless the profile places it.
 BRIEFING_KINDS = ("inbox", "advise", "tasks")
-PAGE_OF_KIND = {"command": "status", "calendar": "dates", "tracker": "trackers", "commits": "today",
-                "activity": "today"}
-DEFAULT_PAGES = ("status", "dates", "trackers", "today")
+PAGE_OF_KIND = {"inbox": "work", "tasks": "work", "command": "status", "calendar": "dates", "tracker": "trackers",
+                "commits": "today", "activity": "today"}
+DEFAULT_PAGES = ("work", "status", "dates", "trackers", "today")
+# where a default page sits: work and status in front, the rest behind More, today's activity under the day list
+DEFAULT_PAGE_GROUP = {"work": "main", "status": "main", "dates": "more", "trackers": "more", "today": "day"}
 REST_PAGE = "more"
-PAGE_KEYS = {"id", "title", "sections"}
-PAGE_SECTION_KEYS = {"id", "when", "detail", "link", "empty", "alarm", "badge"}
+PAGE_KEYS = {"id", "title", "sections", "group", "overview", "jev"}
+JEV_KEYS = {"skip_sections", "private"}
+# where a page sits in a dashboard's page bar: in front, or behind a "More" menu
+PAGE_GROUPS = ("main", "more", "day")   # day: no tab, its sections stand under the day list
+PAGE_SECTION_KEYS = {"id", "when", "detail", "link", "empty", "alarm", "badge", "view", "hide_empty"}
+# how a dashboard draws a section: rows in a table (default), cards, or a mosaic of every row
+PAGE_VIEWS = ("table", "tiles", "mosaic", "groups")
 BOARD_STATES = ("new", "ready", "in_progress", "review", "blocked")
 HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 # An id that names its repository is the same thing wherever it comes from; any
@@ -338,6 +438,9 @@ def _page_problems(view: dict) -> list:
     out = []
     if view.get("page_rest", "show") not in ("show", "hide"):
         out.append("view.page_rest must be show or hide")
+    skip = view.get("page_skip", [])
+    if not isinstance(skip, list) or not all(isinstance(x, str) for x in skip):
+        out.append("view.page_skip must be a list of section ids")
     pages = view.get("pages")
     if pages is None:
         return out
@@ -363,6 +466,20 @@ def _page_problems(view: dict) -> list:
             out.append(f"{where}: unknown key {key}")
         if "title" in page and not isinstance(page["title"], str):
             out.append(f"{where}: title must be text")
+        if "group" in page and page["group"] not in PAGE_GROUPS:
+            out.append(f"{where}: group must be main, more or day")
+        if "overview" in page and not isinstance(page["overview"], bool):
+            out.append(f"{where}: overview must be true or false")
+        if "jev" in page:
+            if not isinstance(page["jev"], dict):
+                out.append(f"{where}: jev must be a mapping")
+            else:
+                for key, what in (("skip_sections", "section ids"), ("private", "words")):
+                    v = page["jev"].get(key)
+                    if v is not None and not (isinstance(v, list) and all(isinstance(x, str) for x in v)):
+                        out.append(f"{where}: jev.{key} must be a list of {what}")
+                for key in sorted(set(page["jev"]) - JEV_KEYS):
+                    out.append(f"{where}: jev: unknown key {key}")
         sections = page.get("sections")
         if not isinstance(sections, list) or not sections:
             out.append(f"{where}: sections must be a non-empty list")
@@ -387,9 +504,11 @@ def _page_problems(view: dict) -> list:
             detail = entry.get("detail", [])
             if not (isinstance(detail, str) or (isinstance(detail, list) and all(isinstance(d, str) for d in detail))):
                 out.append(f"{at}: detail must be a field name or a list of them")
-            for key in ("alarm", "badge"):
+            for key in ("alarm", "badge", "hide_empty"):
                 if key in entry and not isinstance(entry[key], bool):
                     out.append(f"{at}: {key} must be true or false")
+            if "view" in entry and entry["view"] not in PAGE_VIEWS:
+                out.append(f"{at}: view must be one of {', '.join(PAGE_VIEWS)}")
     return out
 
 
@@ -404,9 +523,14 @@ def page_section_ids(view: dict) -> list:
     return out
 
 
-def _labels(view: dict) -> dict:
-    """The profile's words over the defaults; a label that would not format keeps the default."""
-    out = dict(LABELS)
+def labels_for(language: str | None) -> dict:
+    """The default words of a language: German for de..., English for everything else."""
+    return LABEL_TABLES["de" if str(language or "").lower().startswith("de") else "en"]
+
+
+def _labels(view: dict, language: str | None = None) -> dict:
+    """The profile's words over the defaults of its language; a label that would not format keeps the default."""
+    out = dict(labels_for(language))
     given = view.get("labels") if isinstance(view.get("labels"), dict) else {}
     for key, text in given.items():
         if key not in LABELS or not isinstance(text, str):
@@ -515,6 +639,12 @@ def _bucket_cfg(view: dict) -> tuple:
     return shown, [b for b in BUCKETS if b not in ids]
 
 
+def _shortened(short: str, full: str) -> bool:
+    """`short` is `full` cut off with an ellipsis (a tab label such as "A2A: Anfragen an den…")."""
+    stem = short[:-1] if short.endswith("…") else short[:-3] if short.endswith("...") else None
+    return bool(stem) and len(full) > len(stem) and full.startswith(stem.rstrip())
+
+
 def _short(text, limit: int) -> str:
     """At most `limit` characters, marked with an ellipsis; cut at a word when the text has one."""
     text = " ".join(str(text or "").split())
@@ -595,6 +725,8 @@ def _rows(result: dict, profile: dict, view: dict, labels: dict, now: dt.datetim
             if have.get("filed") and not row.get("filed"):
                 have["title"] = row["title"]   # the source's wording today, not the day it was filed
                 have["filed"] = False
+            elif _shortened(have["title"], row["title"]):
+                have["title"] = row["title"]   # a short tab label gives way to the full title of the same thing
             have["new"] = have["new"] or row["new"]
             have["changed"] = have["changed"] or row["changed"]
             return
@@ -724,6 +856,11 @@ def _rows(result: dict, profile: dict, view: dict, labels: dict, now: dt.datetim
                     why = [labels["waiting_days"].format(n=age) if age is not None else "",
                            _short(item["blocked_by"], 60)]
                     nudge = iid in blocked or (age is not None and age >= nudge_days)
+                    look = _when(item.get("quiet_until"))
+                    if look is not None:
+                        # "runs on" (task.py wait): quiet until the day it names, from that day on it asks
+                        why.append(labels["look_again"].format(when=_fmt_when(item["quiet_until"], now, labels)))
+                        nudge = look.date() <= now.date()
                     add(f"task:{iid}", row(sid, item, forced or "waiting", item.get("title"), why, 3, nudge=nudge,
                                            task=iid, priority=item.get("priority")))
                 elif isinstance(nxt, dict) and nxt.get("what"):
@@ -780,7 +917,7 @@ def build(result: dict, profile: dict, style: str | None = None) -> dict:
     """The view of one collected briefing: plain data, drawn by `draw`, read by an agent."""
     style = style_of(profile, style)
     view = _cfg(profile)
-    labels = _labels(view)
+    labels = _labels(view, profile.get("_language"))
     now = _when(result.get("collected_at")) or dt.datetime.now()
     data = _rows(result, profile, view, labels, now)
     shown, hidden_ids = _bucket_cfg(view)
@@ -1326,6 +1463,34 @@ def _safe_link(link, root: Path | None) -> str | None:
     return path.as_uri() if path.exists() else None
 
 
+def meter_of(value) -> dict | None:
+    """A row's optional gauge, as a source hands it: `value` (a number from 0), `max` (above 0; without
+    it a dashboard scales the rows of a section against each other), `unit` (up to 8 characters) and
+    `elapsed` (0 to 1: how much of the time window behind the value has passed), `window_h` (how long
+    that window is, in hours, up to a year: with it a dashboard reckons the share per day), and against a max
+    `warn` and `bad`, where those ranges begin. A dashboard draws it as
+    a bar; a field it cannot trust becomes None, a value it cannot read drops the whole gauge."""
+    if not isinstance(value, dict):
+        return None
+    def num(x):
+        return float(x) if isinstance(x, (int, float)) and not isinstance(x, bool) and x == x and abs(x) != float("inf") else None
+    v = num(value.get("value"))
+    if v is None or v < 0:
+        return None
+    top, elapsed, unit = num(value.get("max")), num(value.get("elapsed")), value.get("unit")
+    window = num(value.get("window_h"))
+    top = top if top is not None and top > 0 else None
+    # where warning and bad begin, in the value's unit: only against a max, inside it, warn before bad
+    warn, bad = (num(value.get(k)) for k in ("warn", "bad"))
+    warn, bad = (x if top is not None and x is not None and 0 <= x <= top else None for x in (warn, bad))
+    if warn is not None and bad is not None and bad <= warn:
+        warn = bad = None
+    return {"value": v, "max": top,
+            "unit": unit if isinstance(unit, str) and 0 < len(unit) <= 8 else None,
+            "elapsed": elapsed if elapsed is not None and 0 <= elapsed <= 1 else None,
+            "warn": warn, "bad": bad, "window_h": window if window is not None and 0 < window <= 24 * 366 else None}
+
+
 def _page_row(kind: str, item: dict, entry: dict, now: dt.datetime, labels: dict, root: Path | None = None,
               marks: list = ()) -> dict:
     """One row as every page draws it: when, title, detail, tone, url; plus what it leads to:
@@ -1363,6 +1528,10 @@ def _page_row(kind: str, item: dict, entry: dict, now: dt.datetime, labels: dict
         parts = [f"{_text(item.get('spark'))} {_text(item.get('branch'))}".strip()]
     elif kind in ("activity", "workplace"):
         parts = [_text(item.get("project"))]
+    elif kind == "inbox" and _text(item.get("waiting_on")):
+        # runs on: what it waits on and the day to look again say more than kind and gate
+        parts = [_short(_text(item["waiting_on"]), 40), labels["look_again"].format(
+            when=_fmt_when(item.get("until"), now, labels)) if _text(item.get("until")) else ""]
     elif kind == "inbox":
         parts = [_text(item.get("kind")), _text(item.get("gate"))]
     elif kind == "tasks":
@@ -1400,7 +1569,55 @@ def _page_row(kind: str, item: dict, entry: dict, now: dt.datetime, labels: dict
     if kind == "tasks":
         row.update(priority=_text(item.get("priority")) or None, state=_text(item.get("state")) or None,
                    lines=_task_lines(item))
+    elif kind == "inbox" and _text(item.get("waiting_on")):
+        row.update(lines=[{"kind": "blocked", "text": _text(item["waiting_on"])},
+                                        {"kind": "look", "text": _text(item.get("until"))}])
+    meter = meter_of(item.get("meter"))
+    if meter:
+        row["meter"] = meter
+    if kind == "calendar" and stamp is not None:     # when it begins, for a countdown
+        row["at"] = stamp.isoformat(timespec="minutes")
+    # optional hints for a drawn section: which group a row belongs to, which symbol it wears
+    for key, cap in (("group", 80), ("icon", 24)):
+        if isinstance(item.get(key), str) and item[key].strip():
+            row[key] = item[key].strip()[:cap]
+    # a log row belongs to its context (task or repository): `view: groups` lists the rows under it
+    if kind == "activity" and "group" not in row and _text(item.get("project")):
+        row["group"] = _text(item.get("project"))[:80]
+    if kind == "inbox" and iid:      # the item's id: a dashboard joins its triage and its close by it
+        row["inbox"] = iid[:160]
+    # a command row's own steps (docs/briefings.md, actions_argv); the row id says which row they act on
+    steps = [{"id": a["id"], "label": a["label"].strip()[:40]} for a in item.get("actions") or []
+             if isinstance(item.get("actions"), list) and isinstance(a, dict) and isinstance(a.get("id"), str)
+             and ACTION_ID_RE.match(a["id"]) and isinstance(a.get("label"), str) and a["label"].strip()][:8]
+    if kind == "command" and steps and isinstance(item.get("id"), str):
+        row["actions"], row["row_id"] = steps, item["id"][:200]
+    tags = tags_of(item.get("tags"))
+    if tags:
+        row["tags"] = tags
+    account = item.get("account")
+    if isinstance(account, dict) and isinstance(account.get("id"), str) and ACCOUNT_ID_RE.match(account["id"]):
+        row["account"] = {"id": account["id"]}
+        if isinstance(account.get("status"), str) and 0 < len(account["status"]) <= 24:
+            row["account"]["status"] = account["status"]
     return row
+
+
+ACTION_ID_RE = re.compile(r"^[a-z][a-z0-9_-]{0,39}\Z")      # the same rule as briefing.py ACTION_RE
+ACCOUNT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,79}\Z")
+
+
+def tags_of(value: object) -> dict | None:
+    """A row's {label: value} for a dashboard's filter chips: up to 6 short strings, the rest dropped."""
+    if not isinstance(value, dict):
+        return None
+    out = {}
+    for k, v in value.items():
+        if isinstance(k, str) and isinstance(v, str) and 0 < len(k.strip()) <= 24 and v.strip():
+            out[k.strip()] = v.strip()[:60]
+        if len(out) == 6:
+            break
+    return out or None
 
 
 def _task_lines(item: dict) -> list:
@@ -1419,6 +1636,8 @@ def _task_lines(item: dict) -> list:
     if _text(item.get("blocked_by")):
         since = _text(item.get("blocked_since"))
         lines.append({"kind": "blocked", "text": _text(item["blocked_by"]) + (f" · {since}" if since else "")})
+    if _text(item.get("quiet_until")):
+        lines.append({"kind": "look", "text": _text(item["quiet_until"])})
     lines += [{"kind": "step", "text": _text(x)} for x in item.get("steps") or [] if _text(x)]
     lines += [{"kind": "log", "text": _text(x)} for x in item.get("log") or [] if _text(x)]
     return lines
@@ -1443,19 +1662,31 @@ def _page_section(section: dict, entry: dict, now: dt.datetime, labels: dict, ro
             "total": section.get("total", len(rows)), "weight": weight,
             "bad": sum(1 for r in rows if r["tone"] == "bad"),
             # From the section's cache (`cache_minutes`): the time its source last answered.
-            "as_of": _page_when(section["cached_at"], now, labels) if section.get("cached_at") else None}
+            "as_of": _page_when(section["cached_at"], now, labels) if section.get("cached_at") else None,
+            **({"view": entry["view"]} if entry.get("view") in PAGE_VIEWS[1:] else {}),
+            # nothing to say when it is empty: a dashboard leaves the section out instead of "nothing"
+            **({"hide_empty": True} if entry.get("hide_empty") is True else {})}
 
+
+
+def _jev_of(page: dict) -> dict | None:
+    """`jev:` of a page as {skip_sections, private}, text only; None when the page asks for no order"""
+    jev = page.get("jev")
+    if not isinstance(jev, dict):
+        return None
+    return {k: [x for x in jev.get(k) or [] if isinstance(x, str)] if isinstance(jev.get(k), list) else []
+            for k in ("skip_sections", "private")}
 
 def pages(result: dict, profile: dict, root: Path | None = None) -> list:
     """The dashboard's pages beside the briefing: which section on which page, every row
     in the same columns. `view.pages` decides; without it a section's kind does, and a
     section no page names lands on the rest page, so nothing collected goes unseen."""
     view = _cfg(profile)
-    labels = _labels(view)
+    labels = _labels(view, profile.get("_language"))
     marks = marks_of(view)
     now = _when(result.get("collected_at")) or dt.datetime.now()
     sections = {s.get("id"): s for s in result.get("sections") or [] if isinstance(s, dict) and s.get("id")}
-    plan = []   # (id, title, [entry])
+    plan = []   # (id, title, [entry], group, overview, jev)
     configured = view.get("pages") if isinstance(view.get("pages"), list) else None
     if configured is not None:
         for page in configured:
@@ -1465,19 +1696,24 @@ def pages(result: dict, profile: dict, root: Path | None = None) -> list:
                        if isinstance(e, str) or (isinstance(e, dict) and isinstance(e.get("id"), str))]
             title = page.get("title") if isinstance(page.get("title"), str) else \
                 labels.get(f"page_{page['id']}", page["id"])
-            plan.append((page["id"], title, entries))
+            plan.append((page["id"], title, entries, page.get("group") if page.get("group") in PAGE_GROUPS else "main",
+                         page.get("overview") is True, _jev_of(page)))
     else:
         for pid in DEFAULT_PAGES:
             plan.append((pid, labels[f"page_{pid}"],
-                         [{"id": sid} for sid, s in sections.items() if PAGE_OF_KIND.get(s.get("kind")) == pid]))
-    placed = {e["id"] for _, _, entries in plan for e in entries}
+                         [{"id": sid} for sid, s in sections.items() if PAGE_OF_KIND.get(s.get("kind")) == pid],
+                         DEFAULT_PAGE_GROUP[pid], False, None))
+    # collected for something else (a file another page reads), shown nowhere
+    skip = view.get("page_skip") if isinstance(view.get("page_skip"), list) else []
+    placed = {e["id"] for _, _, entries, _, _, _ in plan for e in entries} | {x for x in skip if isinstance(x, str)}
     if configured is None or view.get("page_rest", "show") != "hide":
         rest = [{"id": sid} for sid, s in sections.items()
                 if sid not in placed and s.get("kind") not in BRIEFING_KINDS]
-        plan.append((REST_PAGE, labels["page_more"], rest))
+        plan.append((REST_PAGE, labels["page_more"], rest, "more", False, None))
     out = []
-    for pid, title, entries in plan:
+    for pid, title, entries, group, overview, jev in plan:
         built = [_page_section(sections[e["id"]], e, now, labels, root, marks) for e in entries if e["id"] in sections]
         if built:
-            out.append({"id": pid, "title": title, "sections": built})
+            out.append({"id": pid, "title": title, "sections": built, "group": group, **({"overview": True} if overview else {}),
+                        **({"jev": jev} if jev is not None else {})})
     return out

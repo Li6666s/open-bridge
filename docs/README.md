@@ -76,6 +76,8 @@ on the left, the file that answers it on the right.
 - [`tool-mapping.md`](tool-mapping.md): how this repo's tool names map onto Codex, Copilot, Gemini CLI and Cursor.
 - [`skill-learnings.md`](skill-learnings.md): where a lesson about one skill lands, inside that skill.
 - [`okf-export.md`](okf-export.md): exporting the knowledge surfaces as an Open Knowledge Format bundle for external tooling.
+- [`bridge-cockpit.md`](bridge-cockpit.md): the Bridge cockpit, an optional local web page that watches and steers the Bridge; an early version (alpha) that is still being extended. Changing its code: [`bridge-cockpit-dev.md`](bridge-cockpit-dev.md).
+- [`ai-services.md`](ai-services.md): which local AI CLI (Claude by default, or Codex) a service such as the cockpit chat uses.
 - [`bridge-deck.md`](bridge-deck.md): Bridge Deck, an optional pixel-art visualizer that is not public yet.
 - [`changelog.html`](changelog.html): every release, pulled from GitHub Releases.
 

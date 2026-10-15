@@ -1,0 +1,57 @@
+/* SPDX-License-Identifier: MIT */
+/*
+ * Design tokens of the cockpit that do not change per Bridge: spacing, radius, type
+ * sizes, motion and layout (DESIGN.md `rounded:`, `spacing:`, `typography:`).
+ *
+ * The colours and the two font families come from the Bridge's own DESIGN.md at run
+ * time: the server renders them as colors.css (scripts/lib/bridge_cockpit/design.py),
+ * so every fork shows its own brand. No hex value lives here; the frontend test holds that.
+ */
+
+/* the two families of DESIGN.md, served by the cockpit itself (copies of docs/assets/fonts) */
+@font-face { font-family: "Inter"; src: url("fonts/inter-latin-wght.woff2") format("woff2"); font-weight: 100 900; font-style: normal; font-display: swap; }
+@font-face { font-family: "Playfair Display"; src: url("fonts/playfair-display-latin-500.woff2") format("woff2"); font-weight: 500; font-style: normal; font-display: swap; }
+
+:root {
+  /* spacing (DESIGN.md spacing:) */
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 16px;
+  --space-lg: 24px;
+  --space-xl: 32px;
+  --space-2xl: 48px;
+  --space-3xl: 64px;
+  --space-4xl: 96px;
+  --space-5xl: 128px;
+
+  /* radius (DESIGN.md rounded:) */
+  --radius-none: 0px;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
+  --radius-full: 9999px;
+
+  /* type (DESIGN.md typography:; self-hosted from fonts/, nothing is fetched from elsewhere) */
+  --font-mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+  --text-h3: 20px;
+  --text-h4: 17px;
+  --text-body: 15px;
+  --text-sm: 13px;
+  --text-label: 12px;
+  --text-mono-label: 11px;
+  --text-code: 13px;
+
+  /* elevation (DESIGN.md Elevation & Depth): the only two shadows */
+  --shadow-hover: 0 8px 20px -6px rgb(15 42 74 / 0.10);
+  --shadow-float: 0 18px 44px rgba(4, 14, 26, 0.42);
+
+  /* motion */
+  --motion: 200ms ease-out;
+
+  /* layout */
+  --header-h: 56px;
+  --pagebar-h: 44px;
+  --col-left: clamp(380px, 28vw, 600px);   /* grows with the screen, so the rows to work on keep their titles */
+  --col-right: 400px;
+}

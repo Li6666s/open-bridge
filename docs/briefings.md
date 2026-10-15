@@ -308,6 +308,9 @@ so a mute never makes something disappear without a trace.
 
 Setting the dashboard up, step by step: [`briefing-dashboard.md`](briefing-dashboard.md).
 
+The cockpit ([`bridge-cockpit.md`](bridge-cockpit.md), an early version) shows the same
+profile as a local web page, with the tabs, the columns and the row actions below.
+
 A dashboard (the briefing-ui mod for Claude Code in `mods/briefing-ui`, later a web tab) shows the
 briefing as one page and every other section on tabs beside it. Which section
 stands on which tab differs per person, so the profile says it:

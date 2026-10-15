@@ -12,6 +12,12 @@
       "description": "The briefing as a clickable dashboard in Claude Code (German or English): decide with buttons, hand topics to new cmux tabs, watch running tabs. Active only with briefing.claude_code_ui.enabled in bridge-config.yaml; tabs, columns and marks come from the briefing profile.",
       "source": "./briefing-ui",
       "category": "productivity"
+    },
+    {
+      "name": "cockpit-relay",
+      "description": "Lets the Bridge cockpit ask this Claude Code session: heartbeat, signed questions from the cockpit as prompts, answers written back, in any terminal (cmux, tmux or plain). Active only with cockpit.enabled and cockpit.relay in bridge-config.yaml; never in an agent tab.",
+      "source": "./cockpit-relay",
+      "category": "productivity"
     }
   ]
 }

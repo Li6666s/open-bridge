@@ -433,6 +433,10 @@ Full doc: [`docs/workspaces.md`](workspaces.md).
 - **`themes/`**: vocabulary themes (`professional`, `professional-de`, `professional-fr`).
   Set via `bridge-config.yaml` `theme:`. Themes change user-facing wording
   only, never tools, delegation, or protocol logic.
+- **The cockpit** (optional, early version): `cockpit.enabled: true` in `bridge-config.yaml`,
+  then `/cockpit`. A local web page over much of this tour: inbox, tasks,
+  briefing, agent tabs, machines, in the colours of your `DESIGN.md`. It is
+  an alpha and still being extended. See [`bridge-cockpit.md`](bridge-cockpit.md).
 - **`DESIGN.md`**: design-system manifest (palette, typography, spacing).
   Skills generating HTML, PDF, slides, or styled email MUST pull tokens
   from here instead of inventing palettes. Editing rules: `DESIGN.md`
