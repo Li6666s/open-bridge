@@ -80,7 +80,7 @@ code, .mono{
 /* ---- hero: title and pitch, then the live demo across the full width ---- */
 .page-hero{padding-block:64px 56px}
 .ck-top{display:grid;gap:28px;max-width:var(--hero-w);margin-inline:auto}
-@media (min-width:1100px){ .ck-top{grid-template-columns:minmax(0,1.1fr) minmax(0,.9fr);gap:56px;align-items:end} }
+@media (min-width:1100px){ .ck-top{grid-template-columns:minmax(0,1.1fr) minmax(0,.9fr);gap:56px;align-items:start} }
 .ck-top .lede{max-width:60ch}
 .alpha{
   display:inline-flex;align-items:center;gap:8px;margin-bottom:16px;
@@ -114,7 +114,7 @@ html.dark .ck-win{box-shadow:0 1px 2px rgba(0,0,0,.4),0 28px 70px -28px rgba(0,0
 .ck-addr b{font-weight:600;color:var(--attention-text);font-family:var(--font-sans);font-size:11.5px;letter-spacing:.04em;text-transform:uppercase}
 .ck-full{flex:none;font-size:13px;font-weight:500;text-decoration:none;color:var(--accent-text);white-space:nowrap}
 .ck-full:hover{text-decoration:underline}
-.ck-frame{display:block;width:100%;height:760px;border:0;background:var(--surface)}
+.ck-frame{display:block;width:100%;height:908px;border:0;background:var(--surface)}
 .ck-demo figcaption{display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px 24px;margin-top:14px;font-size:14px;line-height:1.6;color:var(--secondary)}
 .ck-demo figcaption strong{color:var(--primary);font-weight:600}
 .ck-demo figcaption a{color:var(--accent-text);font-weight:500;text-decoration:none;white-space:nowrap}
@@ -141,6 +141,7 @@ html.dark .ck-win{box-shadow:0 1px 2px rgba(0,0,0,.4),0 28px 70px -28px rgba(0,0
   box-shadow:0 1px 2px rgba(15,23,42,.05),0 18px 44px -26px rgba(15,23,42,.30)}
 html.dark .shot .frame{box-shadow:0 1px 2px rgba(0,0,0,.35),0 22px 50px -28px rgba(0,0,0,.7)}
 .shot img{width:100%;height:auto;display:block}
+.shot .frame > [data-lang]{line-height:0}
 .shot .shot-dark{display:none}
 html.dark .shot .shot-dark{display:block}
 html.dark .shot .shot-light{display:none}
@@ -212,7 +213,7 @@ html.dark .code{background:var(--code-bg)}
 .ck-steps p{font-size:15px;line-height:1.65;color:var(--on-surface);margin:0}
 
 /* ---- read on ---- */
-.ck-links{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(min(100%,12.5rem),1fr))}
+.ck-links{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(min(100%,17rem),1fr))}
 .ck-links a{display:block;text-decoration:none;border:1px solid var(--border);border-radius:var(--r-lg);background:var(--surface);padding:20px 22px;transition:border-color .2s ease,background .2s ease}
 .ck-links a:hover{border-color:var(--accent-text);background:var(--surface-subtle)}
 .ck-links a code{display:table;margin-bottom:10px;color:var(--accent-text)}
@@ -292,16 +293,16 @@ html.dark .code{background:var(--code-bg)}
           <p class="eyebrow" data-lang="de">Feature</p>
           <h1 class="h1">Cockpit</h1>
           <p class="lede" data-lang="en">One browser tab that shows what is going on in your Bridge and lets you act on it: the briefing, your inbox and tasks, the agent tabs that wait for a yes, your Claude sessions, the workers and the tokens of the week. It runs on your own computer, answers only on <code>127.0.0.1</code>, and every button goes through a script the Bridge already has.</p>
-          <p class="lede" data-lang="de">Ein Browser-Tab, der zeigt, was in deiner Bridge los ist, und dich direkt handeln lässt: das Briefing, deine Inbox und Aufgaben, die Agent-Tabs, die auf ein Ja warten, deine Claude-Sitzungen, die Worker und die Tokens der Woche. Es läuft auf deinem eigenen Rechner, antwortet nur auf <code>127.0.0.1</code>, und jeder Knopf geht über ein Skript, das die Bridge ohnehin hat.</p>
+          <p class="lede" data-lang="de">Ein Browser-Tab, der zeigt, was in deiner Bridge los ist, und dich direkt handeln lässt: das Briefing, deinen Posteingang und deine Aufgaben, die Agent-Tabs, die auf ein Ja warten, deine Claude-Sitzungen, die Worker und die Tokens der Woche. Das Cockpit läuft auf deinem eigenen Rechner, antwortet nur auf <code>127.0.0.1</code>, und jeder Knopf geht über ein Skript, das die Bridge ohnehin hat.</p>
         </div>
         <div class="lead-def" data-reveal>
           <div class="k" data-lang="en">Try it right here</div>
           <div class="k" data-lang="de">Gleich hier ausprobieren</div>
-          <p class="def" data-lang="en">Below runs the real cockpit page with invented data. Click the tabs, open a row, ask the chat. Nothing reaches a server, so nothing can break.</p>
-          <p class="def" data-lang="de">Unten läuft die echte Cockpit-Seite mit erfundenen Daten. Klick die Tabs durch, öffne eine Zeile, frag den Chat. Nichts erreicht einen Server, also kann nichts kaputtgehen.</p>
+          <p class="def" data-lang="en">Below runs the real cockpit page with invented data. Click the tabs, open a row, ask the chat. The demo itself sends nothing, so nothing can break.</p>
+          <p class="def" data-lang="de">Unten läuft die echte Cockpit-Seite mit erfundenen Daten. Klick die Tabs durch, öffne eine Zeile, frag den Chat. Die Demo selbst sendet nichts, also kann nichts kaputtgehen.</p>
           <p class="more">
-            <a href="cockpit-demo/index.html"><span data-lang="en">Open the demo full screen →</span><span data-lang="de">Demo im Vollbild öffnen →</span></a>
-            <a href="https://github.com/bks-lab/open-bridge/blob/main/docs/bridge-cockpit.md" target="_blank" rel="noopener"><span data-lang="en">Read the full guide →</span><span data-lang="de">Den ganzen Guide lesen →</span></a>
+            <a class="ck-demo-link" href="cockpit-demo/index.html"><span data-lang="en">Open the demo full screen →</span><span data-lang="de">Demo im Vollbild öffnen →</span></a>
+            <a href="https://github.com/bks-lab/open-bridge/blob/main/docs/bridge-cockpit.md" target="_blank" rel="noopener"><span data-lang="en">Read the full guide →</span><span data-lang="de">Die ganze Anleitung lesen →</span></a>
           </p>
         </div>
       </div>
@@ -311,25 +312,36 @@ html.dark .code{background:var(--code-bg)}
           <div class="ck-bar">
             <span class="ck-dots" aria-hidden="true"><i></i><i></i><i></i></span>
             <span class="ck-addr"><b data-lang="en">Demo</b><b data-lang="de">Demo</b><span>cockpit-demo/</span></span>
-            <a class="ck-full" href="cockpit-demo/index.html"><span data-lang="en">Full screen ↗</span><span data-lang="de">Vollbild ↗</span></a>
+            <a class="ck-full ck-demo-link" href="cockpit-demo/index.html"><span data-lang="en">Full screen ↗</span><span data-lang="de">Vollbild ↗</span></a>
           </div>
           <iframe class="ck-frame" id="ck-demo-frame" src="cockpit-demo/index.html" loading="lazy" title="Bridge cockpit demo with invented data"></iframe>
           <script>
           /* The demo follows the site: theme from html.dark, language from
              data-active-lang. The address is built here so the link checker
-             never sees a query; without JS the plain src above still opens the
-             demo, which switches mock mode on by itself. A toggle swaps the src. */
+             never sees a query; without JS the plain src and hrefs still open
+             the demo, which switches mock mode on by itself. The first address
+             goes into src; a later toggle replaces the frame's location, so it
+             adds no history entry and Back leaves the page. The full-screen
+             links carry the same language and theme. */
           (function(){
             var f = document.getElementById("ck-demo-frame");
             if(!f) return;
-            var r = document.documentElement, cur = "";
+            var r = document.documentElement, cur = "", loaded = false;
             var TITLE = { en:"Bridge cockpit demo with invented data", de:"Bridge-Cockpit-Demo mit erfundenen Daten" };
+            f.addEventListener("load", function(){ loaded = true; });
             function sync(){
               var lang = r.getAttribute("data-active-lang") === "de" ? "de" : "en";
               var theme = r.classList.contains("dark") ? "dark" : "light";
               var u = "cockpit-demo/index.html?mock=1&lang=" + lang + "&theme=" + theme;
               f.setAttribute("title", TITLE[lang]);
-              if(u !== cur){ cur = u; f.setAttribute("src", u); }
+              var links = document.querySelectorAll("a.ck-demo-link");
+              for(var i = 0; i < links.length; i++){ links[i].setAttribute("href", u); }
+              if(u === cur) return;
+              cur = u;
+              var w = null;
+              try { w = loaded ? f.contentWindow : null; if(w){ w.location.replace(new URL(u, location.href).href); } }
+              catch(e){ w = null; }
+              if(!w){ f.setAttribute("src", u); }
             }
             sync();
             if("MutationObserver" in window){
@@ -339,9 +351,8 @@ html.dark .code{background:var(--code-bg)}
           </script>
         </div>
         <figcaption>
-          <span data-lang="en"><strong>Live demo.</strong> Invented demo data, nothing runs: every page, button and chat answer comes from a script in your browser.</span>
-          <span data-lang="de"><strong>Live-Demo.</strong> Erfundene Demodaten, nichts läuft: jede Seite, jeder Knopf und jede Chat-Antwort kommt aus einem Skript in deinem Browser.</span>
-          <a href="cockpit-demo/index.html"><span data-lang="en">Open the demo full screen →</span><span data-lang="de">Demo im Vollbild öffnen →</span></a>
+          <span data-lang="en"><strong>Live demo.</strong> Invented demo data: the demo itself sends nothing and saves nothing. Every page, button and chat answer comes from a script in your browser.</span>
+          <span data-lang="de"><strong>Live-Demo.</strong> Erfundene Demodaten: die Demo selbst sendet nichts und speichert nichts. Jede Seite, jeder Knopf und jede Chat-Antwort kommt aus einem Skript in deinem Browser.</span>
         </figcaption>
       </figure>
 
@@ -362,12 +373,12 @@ html.dark .code{background:var(--code-bg)}
         <div class="ck-stat">
           <span class="v" data-count="2">2</span>
           <p data-lang="en">languages for the page's own words, English and German, read from your config</p>
-          <p data-lang="de">Sprachen für die Worte der Seite, Englisch und Deutsch, aus deiner Config gelesen</p>
+          <p data-lang="de">Sprachen für die Texte der Seite, Englisch und Deutsch, aus deinen Einstellungen</p>
         </div>
         <div class="ck-stat">
           <span class="v" data-count="4">4</span>
-          <p data-lang="en">things that send something or run by themselves, all off until you switch them on</p>
-          <p data-lang="de">Dinge, die etwas versenden oder von allein laufen, alle aus, bis du sie einschaltest</p>
+          <p data-lang="en">switches that send something out or act for you, all off until you switch them on</p>
+          <p data-lang="de">Schalter, die etwas nach außen senden oder für dich handeln, alle aus, bis du sie einschaltest</p>
         </div>
       </div>
     </div>
@@ -387,7 +398,7 @@ html.dark .code{background:var(--code-bg)}
 
       <!-- Two drawings of the same five steps: wide, and tall for phones. -->
       <figure class="steps-fig ck-fig" data-steps>
-        <svg class="ck-wide" viewBox="0 0 800 400" role="img" aria-label="The path of one click. A browser page on 127.0.0.1 sends one verb. The local server bridge-cockpit.py checks the token, the host and the origin, accepts only verbs from a fixed list and writes one audit line per write. It runs the Bridge's own scripts, task.py, inbox.py and workplace.py, which change the files under work and the inbox, and open agent tabs in cmux or tmux. All of this stays on your computer. Outside it there is only Jev, off by default, and a Claude answer when you press Ask.">
+        <svg class="ck-wide" viewBox="0 0 800 400" role="img" aria-label="The path of one click. A browser page on 127.0.0.1 sends one verb. The local server bridge-cockpit.py checks the token, the host and the origin, accepts only verbs from a fixed list and writes one audit line per write. It runs the Bridge's own scripts, task.py, inbox.py and workplace.py, which change the files under work and the inbox, and open agent tabs in cmux or tmux. All of this stays on your computer. Outside it, besides the agents you start yourself, there is Jev, off by default, and a Claude answer when you press Ask." data-aria-label-en="The path of one click. A browser page on 127.0.0.1 sends one verb. The local server bridge-cockpit.py checks the token, the host and the origin, accepts only verbs from a fixed list and writes one audit line per write. It runs the Bridge's own scripts, task.py, inbox.py and workplace.py, which change the files under work and the inbox, and open agent tabs in cmux or tmux. All of this stays on your computer. Outside it, besides the agents you start yourself, there is Jev, off by default, and a Claude answer when you press Ask." data-aria-label-de="Der Weg eines Klicks. Eine Browser-Seite auf 127.0.0.1 sendet ein Verb. Der lokale Server bridge-cockpit.py prüft den Schlüssel, den Host und die Herkunft, nimmt nur Verben aus einer festen Liste an und schreibt je Schreibaktion eine Zeile ins Audit-Log. Er startet die eigenen Skripte der Bridge, task.py, inbox.py und workplace.py. Sie ändern die Dateien unter work und den Posteingang und öffnen Agent-Tabs in cmux oder tmux. All das bleibt auf deinem Rechner. Außerhalb davon gibt es, neben den Agenten, die du selbst startest, Jev, standardmäßig aus, und eine Antwort von Claude, wenn du auf „Fragen“ drückst.">
           <defs>
             <marker id="ckArr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--accent-text)"/></marker>
             <marker id="ckArrM" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--muted)"/></marker>
@@ -410,7 +421,7 @@ html.dark .code{background:var(--code-bg)}
             <text class="sf-mono" x="238" y="100">bridge-cockpit.py</text>
             <text class="sf-sub" x="238" y="122">token · host · origin</text>
             <text class="sf-sub" x="238" y="140"><tspan data-lang="en">fixed verb list</tspan><tspan data-lang="de">feste Verbliste</tspan></text>
-            <text class="sf-sub" x="238" y="158"><tspan data-lang="en">audit.log per write</tspan><tspan data-lang="de">audit.log je Aktion</tspan></text>
+            <text class="sf-sub" x="238" y="158"><tspan data-lang="en">audit.log per write</tspan><tspan data-lang="de">audit.log je Schreibaktion</tspan></text>
           </g>
 
           <path class="sf-line" data-step="3" data-draw d="M386 114 H410" marker-end="url(#ckArr)"/>
@@ -442,11 +453,11 @@ html.dark .code{background:var(--code-bg)}
             <text class="sf-sub" x="44" y="355"><tspan data-lang="en">api.typesafe.ai · off by default</tspan><tspan data-lang="de">api.typesafe.ai · standardmäßig aus</tspan></text>
             <rect class="sf-box" x="412" y="310" width="360" height="62" rx="10"/>
             <text class="sf-lbl" x="428" y="334"><tspan data-lang="en">Claude answers a question</tspan><tspan data-lang="de">Claude beantwortet eine Frage</tspan></text>
-            <text class="sf-sub" x="428" y="355"><tspan data-lang="en">only when you press Ask</tspan><tspan data-lang="de">nur wenn du Fragen drückst</tspan></text>
+            <text class="sf-sub" x="428" y="355"><tspan data-lang="en">only when you press Ask</tspan><tspan data-lang="de">nur wenn du auf „Fragen“ drückst</tspan></text>
           </g>
         </svg>
 
-        <svg class="ck-tall" viewBox="0 0 360 720" role="img" aria-label="The path of one click. A browser page on 127.0.0.1 sends one verb. The local server checks token, host and origin, accepts only a fixed list of verbs and writes an audit line per write. It runs the Bridge's own scripts, which change the files and open agent tabs. Outside your computer there is only Jev, off by default, and a Claude answer when you press Ask.">
+        <svg class="ck-tall" viewBox="0 0 360 720" role="img" aria-label="The path of one click. A browser page on 127.0.0.1 sends one verb. The local server checks token, host and origin, accepts only a fixed list of verbs and writes an audit line per write. It runs the Bridge's own scripts, which change the files and open agent tabs. Outside your computer, besides the agents you start yourself, there is Jev, off by default, and a Claude answer when you press Ask." data-aria-label-en="The path of one click. A browser page on 127.0.0.1 sends one verb. The local server checks token, host and origin, accepts only a fixed list of verbs and writes an audit line per write. It runs the Bridge's own scripts, which change the files and open agent tabs. Outside your computer, besides the agents you start yourself, there is Jev, off by default, and a Claude answer when you press Ask." data-aria-label-de="Der Weg eines Klicks. Eine Browser-Seite auf 127.0.0.1 sendet ein Verb. Der lokale Server prüft Schlüssel, Host und Herkunft, nimmt nur Verben aus einer festen Liste an und schreibt je Schreibaktion eine Zeile ins Audit-Log. Er startet die eigenen Skripte der Bridge, die die Dateien ändern und Agent-Tabs öffnen. Außerhalb deines Rechners gibt es, neben den Agenten, die du selbst startest, Jev, standardmäßig aus, und eine Antwort von Claude, wenn du auf „Fragen“ drückst.">
           <defs>
             <marker id="ckArrT" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--accent-text)"/></marker>
             <marker id="ckArrTM" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--muted)"/></marker>
@@ -466,7 +477,7 @@ html.dark .code{background:var(--code-bg)}
             <text class="sf-mono" x="36" y="202">bridge-cockpit.py</text>
             <text class="sf-sub" x="36" y="222">token · host · origin</text>
             <text class="sf-sub" x="36" y="238"><tspan data-lang="en">fixed verb list</tspan><tspan data-lang="de">feste Verbliste</tspan></text>
-            <text class="sf-sub" x="36" y="254"><tspan data-lang="en">audit.log per write</tspan><tspan data-lang="de">audit.log je Aktion</tspan></text>
+            <text class="sf-sub" x="36" y="254"><tspan data-lang="en">audit.log per write</tspan><tspan data-lang="de">audit.log je Schreibaktion</tspan></text>
           </g>
           <path class="sf-line" data-step="3" data-draw d="M170 268 V290" marker-end="url(#ckArrT)"/>
           <g data-step="3">
@@ -486,13 +497,13 @@ html.dark .code{background:var(--code-bg)}
           <path class="sf-line soft" data-step="5" data-draw d="M320 212 H352 V612 H326" marker-end="url(#ckArrTM)"/>
           <g data-step="5">
             <rect class="sf-zone" x="8" y="552" width="336" height="160" rx="12"/>
-            <text class="sf-sub" x="20" y="574"><tspan data-lang="en">OUTSIDE · ONLY WHEN SWITCHED ON</tspan><tspan data-lang="de">DRAUSSEN · NUR WENN EINGESCHALTET</tspan></text>
+            <text class="sf-sub" x="20" y="574"><tspan data-lang="en">OUTSIDE YOUR COMPUTER</tspan><tspan data-lang="de">AUSSERHALB DEINES RECHNERS</tspan></text>
             <rect class="sf-box" x="20" y="586" width="300" height="54" rx="10"/>
             <text class="sf-lbl" x="36" y="608"><tspan data-lang="en">Jev ranks your rows</tspan><tspan data-lang="de">Jev ordnet deine Zeilen</tspan></text>
             <text class="sf-sub" x="36" y="627"><tspan data-lang="en">api.typesafe.ai · off by default</tspan><tspan data-lang="de">api.typesafe.ai · standardmäßig aus</tspan></text>
             <rect class="sf-box" x="20" y="648" width="300" height="54" rx="10"/>
             <text class="sf-lbl" x="36" y="670"><tspan data-lang="en">Claude answers a question</tspan><tspan data-lang="de">Claude beantwortet eine Frage</tspan></text>
-            <text class="sf-sub" x="36" y="689"><tspan data-lang="en">only when you press Ask</tspan><tspan data-lang="de">nur wenn du Fragen drückst</tspan></text>
+            <text class="sf-sub" x="36" y="689"><tspan data-lang="en">only when you press Ask</tspan><tspan data-lang="de">nur wenn du auf „Fragen“ drückst</tspan></text>
           </g>
         </svg>
 
@@ -501,7 +512,7 @@ html.dark .code{background:var(--code-bg)}
           <li data-step="2"><b>2</b><span data-lang="en">The local server checks</span><span data-lang="de">Der lokale Server prüft</span></li>
           <li data-step="3"><b>3</b><span data-lang="en">A Bridge script runs</span><span data-lang="de">Ein Bridge-Skript läuft</span></li>
           <li data-step="4"><b>4</b><span data-lang="en">Files and tabs change</span><span data-lang="de">Dateien und Tabs ändern sich</span></li>
-          <li data-step="5"><b>5</b><span data-lang="en">Nothing leaves unless switched on</span><span data-lang="de">Nichts geht raus, außer eingeschaltet</span></li>
+          <li data-step="5"><b>5</b><span data-lang="en">Nothing leaves unless switched on</span><span data-lang="de">Nichts geht raus, solange du es nicht einschaltest</span></li>
         </ol>
       </figure>
 
@@ -512,7 +523,7 @@ html.dark .code{background:var(--code-bg)}
         </div>
         <div class="ck-note" data-reveal>
           <span data-lang="en">Nothing on the page costs tokens until you press a button that asks Claude or opens an agent tab. An inbox action you approve still runs only at the next <code>inbox.py run</code>.</span>
-          <span data-lang="de">Nichts auf der Seite kostet Tokens, bis du einen Knopf drückst, der Claude fragt oder einen Agent-Tab öffnet. Eine Inbox-Aktion, die du freigibst, läuft trotzdem erst beim nächsten <code>inbox.py run</code>.</span>
+          <span data-lang="de">Nichts auf der Seite kostet Tokens, bis du einen Knopf drückst, der Claude fragt oder einen Agent-Tab öffnet. Eine Posteingangs-Aktion, die du freigibst, läuft trotzdem erst beim nächsten <code>inbox.py run</code>.</span>
         </div>
       </div>
     </div></div>
@@ -533,8 +544,14 @@ html.dark .code{background:var(--code-bg)}
       <div class="ck-row" data-reveal>
         <figure class="shot">
           <div class="frame">
-            <img class="shot-light" src="assets/cockpit/light-today.jpg" width="1600" height="1000" loading="lazy" decoding="async" alt="The Today page: on the left what waits for you and what you can hand off, each row with its main button; in the middle the day at a glance; on the right the agent tabs, one asking for a yes with Yes and No buttons.">
-            <img class="shot-dark" src="assets/cockpit/dark-today.jpg" width="1600" height="1000" loading="lazy" decoding="async" alt="The Today page in dark mode: what waits for you and what you can hand off on the left, the day at a glance in the middle, the agent tabs on the right, one asking for a yes.">
+            <div data-lang="en">
+              <img class="shot-light" src="assets/cockpit/light-today.jpg" width="1600" height="1000" loading="lazy" decoding="async" alt="The Today page: on the left what waits for you and what you can hand off, each row with its main button; in the middle the day at a glance; on the right the agent tabs, one asking for a yes with Yes and No buttons.">
+              <img class="shot-dark" src="assets/cockpit/dark-today.jpg" width="1600" height="1000" loading="lazy" decoding="async" alt="The Today page in dark mode: what waits for you and what you can hand off on the left, the day at a glance in the middle, the agent tabs on the right, one asking for a yes.">
+            </div>
+            <div data-lang="de">
+              <img class="shot-light" src="assets/cockpit/de-light-today.jpg" width="1600" height="1000" loading="lazy" decoding="async" alt="Die Seite Heute: links, was auf dich wartet und was du übergeben kannst, jede Zeile mit ihrem Hauptknopf; in der Mitte der Tag im Überblick; rechts die Agent-Tabs, einer fragt nach einem Ja, mit Knöpfen Ja und Nein.">
+              <img class="shot-dark" src="assets/cockpit/de-dark-today.jpg" width="1600" height="1000" loading="lazy" decoding="async" alt="Die Seite Heute im dunklen Design: links, was auf dich wartet und was du übergeben kannst, in der Mitte der Tag im Überblick, rechts die Agent-Tabs, einer fragt nach einem Ja.">
+            </div>
           </div>
           <figcaption><span data-lang="en">Today, with invented demo data.</span><span data-lang="de">Heute, mit erfundenen Demodaten.</span></figcaption>
         </figure>
@@ -549,7 +566,7 @@ html.dark .code{background:var(--code-bg)}
             <li><b data-lang="en">Get it done</b><b data-lang="de">Erledigen lassen</b></li>
             <li><b data-lang="en">Advise</b><b data-lang="de">Beraten</b></li>
             <li><b data-lang="en">Ask</b><b data-lang="de">Fragen</b></li>
-            <li><b data-lang="en">Close</b><b data-lang="de">Schließen</b></li>
+            <li><b data-lang="en">Close</b><b data-lang="de">Abhaken</b></li>
           </ul>
         </div>
       </div>
@@ -557,8 +574,14 @@ html.dark .code{background:var(--code-bg)}
       <div class="ck-row flip" data-reveal>
         <figure class="shot">
           <div class="frame">
-            <img class="shot-light" src="assets/cockpit/light-sessions.jpg" width="1600" height="760" loading="lazy" decoding="async" alt="The Sessions page: three counters for sessions, working and subagents, then one card per Claude Code session with its state, its tab and the subagents it started.">
-            <img class="shot-dark" src="assets/cockpit/dark-sessions.jpg" width="1600" height="760" loading="lazy" decoding="async" alt="The Sessions page in dark mode: counters for sessions, working and subagents, and one card per Claude Code session with its subagents.">
+            <div data-lang="en">
+              <img class="shot-light" src="assets/cockpit/light-sessions.jpg" width="1600" height="760" loading="lazy" decoding="async" alt="The Sessions page: three counters for sessions, working and subagents, then one card per Claude Code session with its state, its tab and the subagents it started.">
+              <img class="shot-dark" src="assets/cockpit/dark-sessions.jpg" width="1600" height="760" loading="lazy" decoding="async" alt="The Sessions page in dark mode: counters for sessions, working and subagents, and one card per Claude Code session with its subagents.">
+            </div>
+            <div data-lang="de">
+              <img class="shot-light" src="assets/cockpit/de-light-sessions.jpg" width="1600" height="760" loading="lazy" decoding="async" alt="Die Seite Sitzungen: drei Zähler für Sitzungen, arbeitende und Subagenten, dann je Claude-Code-Sitzung eine Karte mit ihrem Zustand, ihrem Tab und den Subagenten, die sie gestartet hat.">
+              <img class="shot-dark" src="assets/cockpit/de-dark-sessions.jpg" width="1600" height="760" loading="lazy" decoding="async" alt="Die Seite Sitzungen im dunklen Design: Zähler für Sitzungen, arbeitende und Subagenten, und je Claude-Code-Sitzung eine Karte mit ihren Subagenten.">
+            </div>
           </div>
           <figcaption><span data-lang="en">Sessions, with invented demo data.</span><span data-lang="de">Sitzungen, mit erfundenen Demodaten.</span></figcaption>
         </figure>
@@ -575,8 +598,14 @@ html.dark .code{background:var(--code-bg)}
       <div class="ck-row" data-reveal>
         <figure class="shot">
           <div class="frame">
-            <img class="shot-light" src="assets/cockpit/light-usage.jpg" width="1600" height="1000" loading="lazy" decoding="async" alt="A usage page: two gauges for the session quota and the weekly quota, each with how much of its time window has passed, and below them the day's sessions with their cost.">
-            <img class="shot-dark" src="assets/cockpit/dark-usage.jpg" width="1600" height="1000" loading="lazy" decoding="async" alt="The usage page in dark mode: gauges for the session and the weekly quota against their time windows, and the day's sessions with their cost.">
+            <div data-lang="en">
+              <img class="shot-light" src="assets/cockpit/light-usage.jpg" width="1600" height="1074" loading="lazy" decoding="async" alt="A usage page: two gauges for the session quota and the weekly quota, each with how much of its time window has passed, and below them the day's sessions with their cost.">
+              <img class="shot-dark" src="assets/cockpit/dark-usage.jpg" width="1600" height="1074" loading="lazy" decoding="async" alt="The usage page in dark mode: gauges for the session and the weekly quota against their time windows, and the day's sessions with their cost.">
+            </div>
+            <div data-lang="de">
+              <img class="shot-light" src="assets/cockpit/de-light-usage.jpg" width="1600" height="1074" loading="lazy" decoding="async" alt="Eine Verbrauchsseite: zwei Anzeigen für das Kontingent der Sitzung und der Woche, jede mit dem Teil ihres Zeitfensters, der schon vorbei ist, darunter die Sitzungen des Tages mit ihren Kosten.">
+              <img class="shot-dark" src="assets/cockpit/de-dark-usage.jpg" width="1600" height="1074" loading="lazy" decoding="async" alt="Die Verbrauchsseite im dunklen Design: Anzeigen für das Kontingent der Sitzung und der Woche gegen ihre Zeitfenster, darunter die Sitzungen des Tages mit ihren Kosten.">
+            </div>
           </div>
           <figcaption><span data-lang="en">A usage page, with invented demo data.</span><span data-lang="de">Eine Verbrauchsseite, mit erfundenen Demodaten.</span></figcaption>
         </figure>
@@ -585,16 +614,22 @@ html.dark .code{background:var(--code-bg)}
           <p class="eyebrow" data-lang="de">Deine eigenen Seiten</p>
           <h3 data-lang="en">A quota against the clock</h3>
           <h3 data-lang="de">Ein Kontingent gegen die Uhr</h3>
-          <p data-lang="en">Every page past Today comes from your briefing profile. This one shows the quotas of the session and the week, each against how much of its window has passed, so you see at once whether 84 % is on pace or ahead of the time.</p>
-          <p data-lang="de">Jede Seite nach Heute kommt aus deinem Briefing-Profil. Diese zeigt die Kontingente der Sitzung und der Woche, jedes gegen den Teil seines Zeitfensters, der schon vorbei ist. So siehst du sofort, ob 84 % im Plan liegen oder der Zeit voraus sind.</p>
+          <p data-lang="en">Pages like this one come from your briefing profile. This one shows the quotas of the session and the week, each against how much of its window has passed, so you see at once whether 84 % is on pace or ahead of the time.</p>
+          <p data-lang="de">Seiten wie diese kommen aus deinem Briefing-Profil. Diese zeigt die Kontingente der Sitzung und der Woche, jedes gegen den Teil seines Zeitfensters, der schon vorbei ist. So siehst du sofort, ob 84 % im Plan liegen oder der Zeit voraus sind.</p>
         </div>
       </div>
 
       <div class="ck-row phone-row" data-reveal>
           <figure class="shot phone">
             <div class="frame">
-              <img class="shot-light" src="assets/cockpit/light-phone-today.jpg" width="780" height="1688" loading="lazy" decoding="async" alt="The Today page on a phone, 390 pixels wide: one column with Day, Detail and Tabs to switch between, the waiting tabs on top with Yes and No.">
-              <img class="shot-dark" src="assets/cockpit/dark-phone-today.jpg" width="780" height="1688" loading="lazy" decoding="async" alt="The Today page on a phone in dark mode: one column with Day, Detail and Tabs, the waiting tabs on top with Yes and No.">
+              <div data-lang="en">
+                <img class="shot-light" src="assets/cockpit/light-phone-today.jpg" width="780" height="1688" loading="lazy" decoding="async" alt="The Today page on a phone, 390 pixels wide: one column with Day, Detail and Tabs to switch between, the waiting tabs on top with Yes and No.">
+                <img class="shot-dark" src="assets/cockpit/dark-phone-today.jpg" width="780" height="1688" loading="lazy" decoding="async" alt="The Today page on a phone in dark mode: one column with Day, Detail and Tabs, the waiting tabs on top with Yes and No.">
+              </div>
+              <div data-lang="de">
+                <img class="shot-light" src="assets/cockpit/de-light-phone-today.jpg" width="780" height="1688" loading="lazy" decoding="async" alt="Die Seite Heute auf einem Handy, 390 Pixel breit: eine Spalte mit Tag, Detail und Tabs zum Umschalten, die wartenden Tabs oben mit Ja und Nein.">
+                <img class="shot-dark" src="assets/cockpit/de-dark-phone-today.jpg" width="780" height="1688" loading="lazy" decoding="async" alt="Die Seite Heute auf einem Handy im dunklen Design: eine Spalte mit Tag, Detail und Tabs, die wartenden Tabs oben mit Ja und Nein.">
+              </div>
             </div>
             <figcaption><span data-lang="en">Today at 390 px.</span><span data-lang="de">Heute bei 390 px.</span></figcaption>
           </figure>
@@ -625,13 +660,13 @@ html.dark .code{background:var(--code-bg)}
         <ol class="ck-parts" data-reveal="stagger">
           <li><b>1</b><h4><span data-lang="en">Colours and fonts</span><span data-lang="de">Farben und Schriften</span></h4>
             <p data-lang="en">Taken from the <code>DESIGN.md</code> of that Bridge. A Bridge without one gets neutral defaults. The demo above uses the open-bridge one.</p>
-            <p data-lang="de">Aus der <code>DESIGN.md</code> dieser Bridge übernommen. Eine Bridge ohne eine bekommt neutrale Vorgaben. Die Demo oben nutzt die von open-bridge.</p></li>
+            <p data-lang="de">Aus der <code>DESIGN.md</code> dieser Bridge übernommen. Eine Bridge ohne diese Datei bekommt neutrale Vorgaben. Die Demo oben nutzt die von open-bridge.</p></li>
           <li><b>2</b><h4><span data-lang="en">Language</span><span data-lang="de">Sprache</span></h4>
             <p data-lang="en"><code>cockpit.language</code>, else your conversation language, else English.</p>
             <p data-lang="de"><code>cockpit.language</code>, sonst deine Gesprächssprache, sonst Englisch.</p></li>
           <li><b>3</b><h4><span data-lang="en">Your own briefing</span><span data-lang="de">Dein eigenes Briefing</span></h4>
             <p data-lang="en">The pages and what stands on them come from your briefing profile. Without one of your own, a built-in profile runs.</p>
-            <p data-lang="de">Die Seiten und was darauf steht kommen aus deinem Briefing-Profil. Ohne eigenes läuft ein eingebautes Profil.</p></li>
+            <p data-lang="de">Die Seiten und was darauf steht, kommen aus deinem Briefing-Profil. Ohne eigenes läuft ein eingebautes Profil.</p></li>
         </ol>
       </div>
     </div></div>
@@ -646,7 +681,7 @@ html.dark .code{background:var(--code-bg)}
         <h2 class="h2" data-lang="en">Local only, and nothing goes out by itself</h2>
         <h2 class="h2" data-lang="de">Nur lokal, und nichts geht von allein raus</h2>
         <p class="intro" data-lang="en">The page can approve inbox entries and start agents, so it is built to do nothing a stranger could trigger.</p>
-        <p class="intro" data-lang="de">Die Seite kann Inbox-Einträge freigeben und Agenten starten. Deshalb ist sie so gebaut, dass kein Fremder etwas auslösen kann.</p>
+        <p class="intro" data-lang="de">Die Seite kann Posteingangs-Einträge freigeben und Agenten starten. Deshalb ist sie so gebaut, dass kein Fremder etwas auslösen kann.</p>
       </div>
 
       <div class="ck-two">
@@ -665,11 +700,11 @@ html.dark .code{background:var(--code-bg)}
           <div class="ck-off">
             <div class="k" data-lang="en">Off by default</div>
             <div class="k" data-lang="de">Standardmäßig aus</div>
-            <p data-lang="en">Anything that sends something or runs by itself stays off until you switch it on.</p>
-            <p data-lang="de">Alles, was etwas versendet oder von allein läuft, bleibt aus, bis du es einschaltest.</p>
+            <p data-lang="en">These four stay off until you switch them on.</p>
+            <p data-lang="de">Diese vier bleiben aus, bis du sie einschaltest.</p>
             <ul>
               <li><span class="n">relay</span><span><span data-lang="en">Hands questions from the page to your control session. Needs the optional mod <code>cockpit-relay</code>.</span><span data-lang="de">Reicht Fragen von der Seite an deine Steuer-Sitzung weiter. Braucht den optionalen Mod <code>cockpit-relay</code>.</span></span></li>
-              <li><span class="n">triage_daily</span><span><span data-lang="en">Sorts every task and inbox item once a day by itself, with a small model call. Otherwise only on a click.</span><span data-lang="de">Sortiert jede Aufgabe und jeden Inbox-Eintrag einmal am Tag von allein, mit einem kleinen Modellaufruf. Sonst nur auf Klick.</span></span></li>
+              <li><span class="n">triage_daily</span><span><span data-lang="en">Sorts every task and inbox item once a day by itself, with a small model call. Otherwise only on a click.</span><span data-lang="de">Sortiert jede Aufgabe und jeden Posteingangs-Eintrag einmal am Tag von allein, mit einem kleinen Modellaufruf. Sonst nur auf Klick.</span></span></li>
               <li><span class="n">Jev</span><span><span data-lang="en">Orders your rows by urgency through an external API. Details below.</span><span data-lang="de">Ordnet deine Zeilen über eine externe API nach Dringlichkeit. Details unten.</span></span></li>
               <li><span class="n">autostart</span><span><span data-lang="en">Starts the cockpit when you log in on macOS and again after a crash, never after <code>stop</code>.</span><span data-lang="de">Startet das Cockpit beim Anmelden unter macOS und nach einem Absturz neu, nie nach <code>stop</code>.</span></span></li>
             </ul>
@@ -682,14 +717,14 @@ html.dark .code{background:var(--code-bg)}
             <p data-lang="de">Eine Anfrage an <code>api.typesafe.ai</code> trägt das heutige Datum, den Namen aus <code>cockpit.person_name</code> (sonst „the user“), einen Satz über dich, falls gesetzt, und Zeilen der Seite. Der Jev-Tab sendet bis zu 20 Zeilen mit nur diesen Feldern, wo eine Zeile sie hat:</p>
             <div class="fields"><code>title</code><code>why</code><code>priority</code><code>urgency</code><code>due</code><code>area</code><code>gate</code><code>bucket</code><code>section</code><code>task type</code><code>inbox state</code></div>
             <p data-lang="en">Never a detail text, a file, a path, a log line or an inbox event. The Jev tab has no private filter, so keep rows that must not leave your computer off its page, or leave Jev off.</p>
-            <p data-lang="de">Nie einen Detailtext, eine Datei, einen Pfad, eine Logzeile oder ein Inbox-Ereignis. Der Jev-Tab hat keinen Privat-Filter. Halte Zeilen, die deinen Rechner nicht verlassen dürfen, von seiner Seite fern, oder lass Jev aus.</p>
+            <p data-lang="de">Nie einen Detailtext, eine Datei, einen Pfad, eine Logzeile oder ein Posteingangs-Ereignis. Der Jev-Tab hat keinen Privat-Filter. Halte Zeilen, die deinen Rechner nicht verlassen dürfen, von seiner Seite fern, oder lass Jev aus.</p>
           </div>
         </div>
       </div>
 
       <p class="ck-limit" data-reveal>
         <span data-lang="en"><strong>One limit.</strong> Browsers send a cookie to every server on <code>127.0.0.1</code>, whatever its port. Another local web server you open could read the key. Stop the cockpit (<code>bridge-cockpit.py stop</code>) while you test web code you do not trust on this computer.</span>
-        <span data-lang="de"><strong>Eine Grenze.</strong> Browser senden ein Cookie an jeden Server auf <code>127.0.0.1</code>, egal welcher Port. Ein anderer lokaler Webserver, den du öffnest, könnte den Schlüssel lesen. Stopp das Cockpit (<code>bridge-cockpit.py stop</code>), solange du Web-Code testest, dem du auf diesem Rechner nicht traust.</span>
+        <span data-lang="de"><strong>Eine Grenze.</strong> Browser senden ein Cookie an jeden Server auf <code>127.0.0.1</code>, egal welcher Port. Ein anderer lokaler Webserver, den du öffnest, könnte den Schlüssel lesen. Halte das Cockpit an (<code>bridge-cockpit.py stop</code>), solange du Web-Code testest, dem du auf diesem Rechner nicht traust.</span>
       </p>
     </div></div>
   </section>
@@ -698,8 +733,8 @@ html.dark .code{background:var(--code-bg)}
   <section class="alt ck-sec" id="switch-on">
     <div class="container"><div class="ck-wrap">
       <div class="ck-head" data-reveal>
-        <p class="eyebrow" data-lang="en">Get started</p>
-        <p class="eyebrow" data-lang="de">Loslegen</p>
+        <p class="eyebrow" data-lang="en">Set it up</p>
+        <p class="eyebrow" data-lang="de">Einrichten</p>
         <h2 class="h2" data-lang="en">Switch it on in three steps</h2>
         <h2 class="h2" data-lang="de">In drei Schritten einschalten</h2>
         <p class="intro" data-lang="en">You need an onboarded Bridge, so a <code>bridge-config.yaml</code> in the repo root, and <code>python3</code> with PyYAML.</p>
@@ -741,7 +776,7 @@ python3 scripts/bridge-cockpit.py open</pre>
         <h2 class="h2" data-lang="de">Weiterlesen</h2>
       </div>
       <div class="ck-links" data-reveal="stagger">
-        <a href="https://github.com/bks-lab/open-bridge/blob/main/docs/bridge-cockpit.md" target="_blank" rel="noopener"><code>docs/bridge-cockpit.md</code><span data-lang="en">The full guide: every page, the keyboard, the safety model, the relay and the files.</span><span data-lang="de">Der ganze Guide: jede Seite, die Tastatur, das Sicherheitsmodell, das Relay und die Dateien.</span></a>
+        <a href="https://github.com/bks-lab/open-bridge/blob/main/docs/bridge-cockpit.md" target="_blank" rel="noopener"><code>docs/bridge-cockpit.md</code><span data-lang="en">The full guide: every page, the keyboard, the safety model, the relay and the files.</span><span data-lang="de">Die ganze Anleitung: jede Seite, die Tastatur, das Sicherheitsmodell, das Relay und die Dateien.</span></a>
         <a href="https://github.com/bks-lab/open-bridge/blob/main/docs/bridge-cockpit-dev.md" target="_blank" rel="noopener"><code>docs/bridge-cockpit-dev.md</code><span data-lang="en">Changing the code, the tests and how the demo is rebuilt.</span><span data-lang="de">Den Code ändern, die Tests und wie die Demo neu gebaut wird.</span></a>
         <a href="https://github.com/bks-lab/open-bridge/blob/main/docs/briefings.md" target="_blank" rel="noopener"><code>docs/briefings.md</code><span data-lang="en">The briefing profile that decides what the pages show.</span><span data-lang="de">Das Briefing-Profil, das bestimmt, was die Seiten zeigen.</span></a>
         <a href="https://github.com/bks-lab/open-bridge/blob/main/docs/workplace.md" target="_blank" rel="noopener"><code>docs/workplace.md</code><span data-lang="en">Agent tabs and the terminal drivers for cmux and tmux.</span><span data-lang="de">Agent-Tabs und die Terminal-Treiber für cmux und tmux.</span></a>
@@ -754,7 +789,7 @@ python3 scripts/bridge-cockpit.py open</pre>
     <p class="eyebrow"><span data-lang="en">Get started</span><span data-lang="de">Loslegen</span></p>
     <h2><span data-lang="en">One prompt. Your own private bridge.</span><span data-lang="de">Ein Prompt. Deine eigene, private Bridge.</span></h2>
     <p><span data-lang="en">Paste it into Claude Code, Codex or Copilot CLI. Your agent follows SETUP.md, shows you its plan and waits for your go.</span><span data-lang="de">Kopier ihn in Claude Code, Codex oder Copilot CLI. Dein Agent folgt SETUP.md, zeigt dir seinen Plan und wartet auf dein Go.</span></p>
-    <div class="cta-row"><a class="btn btn-primary" href="index.html#get-started"><span data-lang="en">Get the prompt</span><span data-lang="de">Zum Prompt</span> <span class="arrow">→</span></a><a class="btn btn-secondary" href="cockpit-demo/index.html"><span data-lang="en">Open the cockpit demo</span><span data-lang="de">Cockpit-Demo öffnen</span></a></div>
+    <div class="cta-row"><a class="btn btn-primary" href="index.html#get-started"><span data-lang="en">Get the prompt</span><span data-lang="de">Zum Prompt</span> <span class="arrow">→</span></a><a class="btn btn-secondary ck-demo-link" href="cockpit-demo/index.html"><span data-lang="en">Open the cockpit demo</span><span data-lang="de">Cockpit-Demo öffnen</span></a></div>
   </div></section>
 
 </main>
@@ -792,7 +827,7 @@ python3 scripts/bridge-cockpit.py open</pre>
       <a href="https://github.com/bks-lab/open-bridge/blob/main/README.md" target="_blank" rel="noopener">README</a>
       <a href="https://github.com/bks-lab/open-bridge/tree/main/docs" target="_blank" rel="noopener">docs/</a>
       <a href="https://github.com/bks-lab/open-bridge/blob/main/docs/workspaces.md" target="_blank" rel="noopener"><span data-lang="en">Workspaces guide</span><span data-lang="de">Workspaces-Guide</span></a>
-      <a href="https://github.com/bks-lab/open-bridge/blob/main/docs/bridge-cockpit.md" target="_blank" rel="noopener"><span data-lang="en">Cockpit guide</span><span data-lang="de">Cockpit-Guide</span></a>
+      <a href="https://github.com/bks-lab/open-bridge/blob/main/docs/bridge-cockpit.md" target="_blank" rel="noopener"><span data-lang="en">Cockpit guide</span><span data-lang="de">Cockpit-Anleitung</span></a>
     </div>
   </div>
 
@@ -866,10 +901,17 @@ python3 scripts/bridge-cockpit.py open</pre>
   }catch(e){}
   labelTheme();
 
+  /* Words a screen reader hears but CSS cannot swap: an aria-label carries
+     data-aria-label-en and data-aria-label-de, and the active one is copied in. */
+  function labelAria(lang){
+    var els = document.querySelectorAll("[data-aria-label-" + lang + "]");
+    for(var i = 0; i < els.length; i++){ els[i].setAttribute("aria-label", els[i].getAttribute("data-aria-label-" + lang)); }
+  }
   function applyLang(lang){
     root.setAttribute("data-active-lang", lang);
     root.setAttribute("lang", lang);
     labelTheme();          // the theme tooltip is bilingual too
+    labelAria(lang);
     var en = document.getElementById("lang-en");
     var de = document.getElementById("lang-de");
     if(en){ en.setAttribute("aria-pressed", lang === "en" ? "true" : "false"); }

@@ -529,7 +529,7 @@ html.dark .ckt-win{box-shadow:0 1px 2px rgba(0,0,0,.4),0 28px 70px -28px rgba(0,
 .ckt-addr{flex:1;min-width:0;font-family:var(--mono);font-size:12px;color:var(--secondary);background:var(--surface);border:1px solid var(--border);
   border-radius:var(--r-full);padding:4px 12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ckt-addr b{font-family:var(--font-sans);font-weight:600;font-size:11.5px;letter-spacing:.04em;text-transform:uppercase;color:var(--attention-text);margin-right:8px}
-.ckt-frame{display:block;width:100%;height:760px;border:0;background:var(--surface)}
+.ckt-frame{display:block;width:100%;height:908px;border:0;background:var(--surface)}
 .ckt-cap{max-width:var(--hero-w);margin:14px auto 0;font-size:14px;line-height:1.6;color:var(--secondary)}
 .ckt-links{display:flex;flex-wrap:wrap;justify-content:center;gap:12px;margin-top:28px}
 @media (max-width:640px){
@@ -1137,8 +1137,8 @@ html.story-static .story-list{display:flex;flex-wrap:wrap;gap:10px;justify-conte
     <div class="sec-head ckt-head reveal">
       <p class="eyebrow"><span data-lang="en">Cockpit · try it here</span><span data-lang="de">Cockpit · gleich hier ausprobieren</span></p>
       <h2 class="h1"><span data-lang="en">The whole Bridge in one browser tab.</span><span data-lang="de">Die ganze Bridge in einem Browser-Tab.</span></h2>
-      <p class="lede-2"><span data-lang="en">A local page that shows your briefing, inbox and tasks, agent tabs, sessions and tokens, and acts on them with a click through the Bridge's own scripts. Below runs the real page with invented data: click around, nothing reaches a server.</span><span data-lang="de">Eine lokale Seite, die dein Briefing, Inbox und Aufgaben, Agent-Tabs, Sitzungen und Tokens zeigt und per Klick über die eigenen Skripte der Bridge handelt. Unten läuft die echte Seite mit erfundenen Daten: klick dich durch, nichts erreicht einen Server.</span></p>
-      <span class="ckt-alpha"><span data-lang="en">Early version (alpha)</span><span data-lang="de">Frühe Version (Alpha)</span></span>
+      <p class="lede-2"><span data-lang="en">A local page that shows your briefing, inbox and tasks, agent tabs, sessions and tokens, and acts on them with a click through the Bridge's own scripts. Below runs the real page with invented data: click around, the demo itself sends nothing.</span><span data-lang="de">Eine lokale Seite, die dein Briefing, deinen Posteingang und deine Aufgaben, Agent-Tabs, Sitzungen und Tokens zeigt und dich per Klick darauf reagieren lässt, über die Skripte, die die Bridge schon hat. Unten läuft die echte Seite mit erfundenen Daten: klick dich durch, die Demo selbst sendet nichts.</span></p>
+      <span class="ckt-alpha"><span data-lang="en">Early version (alpha), still being extended</span><span data-lang="de">Frühe Version (Alpha), wird noch ausgebaut</span></span>
     </div>
 
     <figure class="reveal" style="margin:0">
@@ -1151,18 +1151,28 @@ html.story-static .story-list{display:flex;flex-wrap:wrap;gap:10px;justify-conte
         <script>
         /* Same rule as on cockpit.html: the demo follows the site's theme
            (html.dark) and language (data-active-lang). The address is built
-           here, so no link carries a query; a toggle swaps the src. */
+           here, so no static link carries a query. The first address goes
+           into src; a later toggle replaces the frame's location, which adds
+           no history entry. The full-screen link carries the same address. */
         (function(){
           var f = document.getElementById("ckt-demo-frame");
           if(!f) return;
-          var r = document.documentElement, cur = "";
+          var r = document.documentElement, cur = "", loaded = false;
           var TITLE = { en:"Bridge cockpit demo with invented data", de:"Bridge-Cockpit-Demo mit erfundenen Daten" };
+          f.addEventListener("load", function(){ loaded = true; });
           function sync(){
             var lang = r.getAttribute("data-active-lang") === "de" ? "de" : "en";
             var theme = r.classList.contains("dark") ? "dark" : "light";
             var u = "cockpit-demo/index.html?mock=1&lang=" + lang + "&theme=" + theme;
             f.setAttribute("title", TITLE[lang]);
-            if(u !== cur){ cur = u; f.setAttribute("src", u); }
+            var links = document.querySelectorAll("a.ckt-demo-link");
+            for(var i = 0; i < links.length; i++){ links[i].setAttribute("href", u); }
+            if(u === cur) return;
+            cur = u;
+            var w = null;
+            try { w = loaded ? f.contentWindow : null; if(w){ w.location.replace(new URL(u, location.href).href); } }
+            catch(e){ w = null; }
+            if(!w){ f.setAttribute("src", u); }
           }
           sync();
           if("MutationObserver" in window){
@@ -1171,12 +1181,12 @@ html.story-static .story-list{display:flex;flex-wrap:wrap;gap:10px;justify-conte
         })();
         </script>
       </div>
-      <figcaption class="ckt-cap"><span data-lang="en">Invented demo data, nothing runs. The cockpit itself answers only on 127.0.0.1 on your own computer.</span><span data-lang="de">Erfundene Demodaten, nichts läuft. Das Cockpit selbst antwortet nur auf 127.0.0.1 auf deinem eigenen Rechner.</span></figcaption>
+      <figcaption class="ckt-cap"><span data-lang="en">Invented demo data: nothing is sent and nothing is saved. The cockpit itself answers only on 127.0.0.1 on your own computer.</span><span data-lang="de">Erfundene Demodaten: nichts wird gesendet, nichts gespeichert. Das Cockpit selbst antwortet nur auf 127.0.0.1 auf deinem eigenen Rechner.</span></figcaption>
     </figure>
 
     <div class="ckt-links reveal">
       <a class="btn btn-primary" href="cockpit.html"><span data-lang="en">About the cockpit</span><span data-lang="de">Mehr zum Cockpit</span> <span class="arrow">→</span></a>
-      <a class="btn btn-secondary" href="cockpit-demo/index.html"><span data-lang="en">Open the demo full screen</span><span data-lang="de">Demo im Vollbild öffnen</span></a>
+      <a class="btn btn-secondary ckt-demo-link" href="cockpit-demo/index.html"><span data-lang="en">Open the demo full screen</span><span data-lang="de">Demo im Vollbild öffnen</span></a>
     </div>
   </div>
 </section>
