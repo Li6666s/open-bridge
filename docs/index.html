@@ -514,6 +514,30 @@ html.dark .hero-term .code{background:transparent}
 .uc-strip a.cap-item:hover{border-color:var(--accent);box-shadow:var(--shadow-hover)}
 .uc-strip .cap-benefit{color:var(--on-surface)}
 
+/* ---- Cockpit teaser: the live demo in a browser frame (synced to theme + language) ---- */
+.ckt-head .lede-2{margin:16px auto 0;max-width:40rem;font-size:17px;line-height:1.65;color:var(--on-surface)}
+.ckt-alpha{display:inline-flex;align-items:center;gap:8px;margin-top:18px;font-size:12px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;
+  padding:4px 11px;border-radius:var(--r-full);border:1px solid var(--attention);color:var(--attention-text);
+  background:color-mix(in srgb,var(--attention) 10%,var(--surface))}
+.ckt-alpha::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--attention)}
+.ckt-win{max-width:var(--hero-w);margin:0 auto;border:1px solid var(--border);border-radius:14px;overflow:hidden;background:var(--surface);
+  box-shadow:0 1px 2px rgba(15,23,42,.06),0 24px 60px -24px rgba(15,23,42,.28)}
+html.dark .ckt-win{box-shadow:0 1px 2px rgba(0,0,0,.4),0 28px 70px -28px rgba(0,0,0,.75)}
+.ckt-bar{display:flex;align-items:center;gap:12px;padding:10px 14px;border-bottom:1px solid var(--border);background:var(--surface-subtle)}
+.ckt-dots{display:flex;gap:6px;flex:none}
+.ckt-dots i{width:10px;height:10px;border-radius:50%;background:var(--line);display:block}
+.ckt-addr{flex:1;min-width:0;font-family:var(--mono);font-size:12px;color:var(--secondary);background:var(--surface);border:1px solid var(--border);
+  border-radius:var(--r-full);padding:4px 12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ckt-addr b{font-family:var(--font-sans);font-weight:600;font-size:11.5px;letter-spacing:.04em;text-transform:uppercase;color:var(--attention-text);margin-right:8px}
+.ckt-frame{display:block;width:100%;height:760px;border:0;background:var(--surface)}
+.ckt-cap{max-width:var(--hero-w);margin:14px auto 0;font-size:14px;line-height:1.6;color:var(--secondary)}
+.ckt-links{display:flex;flex-wrap:wrap;justify-content:center;gap:12px;margin-top:28px}
+@media (max-width:640px){
+  .ckt-frame{height:640px}
+  .ckt-dots{display:none}
+  .ckt-bar{padding:8px 10px}
+}
+
 /* ---- Get-started dual path (Try | Adopt): stacks on mobile ---- */
 #get-started{scroll-margin-top:112px}
 .path-grid{display:grid;grid-template-columns:1fr 1fr;gap:32px;align-items:stretch}
@@ -1105,6 +1129,55 @@ html.story-static .story-list{display:flex;flex-wrap:wrap;gap:10px;justify-conte
     </div>
 
     <p class="cap-more reveal"><a href="use-cases.html"><span data-lang="en">All eight jobs, with the primitives behind each →</span><span data-lang="de">Alle acht Aufgaben, mit den Primitiven dahinter →</span></a></p>
+  </div>
+</section>
+
+<section id="cockpit" class="alt">
+  <div class="container">
+    <div class="sec-head ckt-head reveal">
+      <p class="eyebrow"><span data-lang="en">Cockpit · try it here</span><span data-lang="de">Cockpit · gleich hier ausprobieren</span></p>
+      <h2 class="h1"><span data-lang="en">The whole Bridge in one browser tab.</span><span data-lang="de">Die ganze Bridge in einem Browser-Tab.</span></h2>
+      <p class="lede-2"><span data-lang="en">A local page that shows your briefing, inbox and tasks, agent tabs, sessions and tokens, and acts on them with a click through the Bridge's own scripts. Below runs the real page with invented data: click around, nothing reaches a server.</span><span data-lang="de">Eine lokale Seite, die dein Briefing, Inbox und Aufgaben, Agent-Tabs, Sitzungen und Tokens zeigt und per Klick über die eigenen Skripte der Bridge handelt. Unten läuft die echte Seite mit erfundenen Daten: klick dich durch, nichts erreicht einen Server.</span></p>
+      <span class="ckt-alpha"><span data-lang="en">Early version (alpha)</span><span data-lang="de">Frühe Version (Alpha)</span></span>
+    </div>
+
+    <figure class="reveal" style="margin:0">
+      <div class="ckt-win">
+        <div class="ckt-bar">
+          <span class="ckt-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+          <span class="ckt-addr"><b>Demo</b>cockpit-demo/</span>
+        </div>
+        <iframe class="ckt-frame" id="ckt-demo-frame" src="cockpit-demo/index.html" loading="lazy" title="Bridge cockpit demo with invented data"></iframe>
+        <script>
+        /* Same rule as on cockpit.html: the demo follows the site's theme
+           (html.dark) and language (data-active-lang). The address is built
+           here, so no link carries a query; a toggle swaps the src. */
+        (function(){
+          var f = document.getElementById("ckt-demo-frame");
+          if(!f) return;
+          var r = document.documentElement, cur = "";
+          var TITLE = { en:"Bridge cockpit demo with invented data", de:"Bridge-Cockpit-Demo mit erfundenen Daten" };
+          function sync(){
+            var lang = r.getAttribute("data-active-lang") === "de" ? "de" : "en";
+            var theme = r.classList.contains("dark") ? "dark" : "light";
+            var u = "cockpit-demo/index.html?mock=1&lang=" + lang + "&theme=" + theme;
+            f.setAttribute("title", TITLE[lang]);
+            if(u !== cur){ cur = u; f.setAttribute("src", u); }
+          }
+          sync();
+          if("MutationObserver" in window){
+            new MutationObserver(sync).observe(r, { attributes:true, attributeFilter:["class","data-active-lang"] });
+          }
+        })();
+        </script>
+      </div>
+      <figcaption class="ckt-cap"><span data-lang="en">Invented demo data, nothing runs. The cockpit itself answers only on 127.0.0.1 on your own computer.</span><span data-lang="de">Erfundene Demodaten, nichts läuft. Das Cockpit selbst antwortet nur auf 127.0.0.1 auf deinem eigenen Rechner.</span></figcaption>
+    </figure>
+
+    <div class="ckt-links reveal">
+      <a class="btn btn-primary" href="cockpit.html"><span data-lang="en">About the cockpit</span><span data-lang="de">Mehr zum Cockpit</span> <span class="arrow">→</span></a>
+      <a class="btn btn-secondary" href="cockpit-demo/index.html"><span data-lang="en">Open the demo full screen</span><span data-lang="de">Demo im Vollbild öffnen</span></a>
+    </div>
   </div>
 </section>
 
