@@ -218,7 +218,7 @@ PAGE_KEYS = {"id", "title", "sections", "group", "overview", "jev"}
 JEV_KEYS = {"skip_sections", "private"}
 # where a page sits in a dashboard's page bar: in front, or behind a "More" menu
 PAGE_GROUPS = ("main", "more", "day")   # day: no tab, its sections stand under the day list
-PAGE_SECTION_KEYS = {"id", "when", "detail", "link", "empty", "alarm", "badge", "view", "hide_empty"}
+PAGE_SECTION_KEYS = {"id", "when", "detail", "link", "empty", "alarm", "badge", "view", "hide_empty", "actionable"}
 # how a dashboard draws a section: rows in a table (default), cards, or a mosaic of every row
 PAGE_VIEWS = ("table", "tiles", "mosaic", "groups")
 BOARD_STATES = ("new", "ready", "in_progress", "review", "blocked")
@@ -504,7 +504,7 @@ def _page_problems(view: dict) -> list:
             detail = entry.get("detail", [])
             if not (isinstance(detail, str) or (isinstance(detail, list) and all(isinstance(d, str) for d in detail))):
                 out.append(f"{at}: detail must be a field name or a list of them")
-            for key in ("alarm", "badge", "hide_empty"):
+            for key in ("alarm", "badge", "hide_empty", "actionable"):
                 if key in entry and not isinstance(entry[key], bool):
                     out.append(f"{at}: {key} must be true or false")
             if "view" in entry and entry["view"] not in PAGE_VIEWS:
@@ -1586,6 +1586,12 @@ def _page_row(kind: str, item: dict, entry: dict, now: dt.datetime, labels: dict
         row["group"] = _text(item.get("project"))[:80]
     if kind == "inbox" and iid:      # the item's id: a dashboard joins its triage and its close by it
         row["inbox"] = iid[:160]
+    # whether a person can hand this row on (Do it, Advise, Later, Settle): a finding or a tracker row by
+    # default, whatever the page entry says otherwise; a row with an inbox item or a task has its own path
+    row["actionable"] = not (row.get("inbox") or row["task"]) and (
+        entry["actionable"] if isinstance(entry.get("actionable"), bool) else tone in ("bad", "warn") or kind == "tracker")
+    if iid:      # the source's own id: the cockpit keys the row by it, the inbox item it files too
+        row["id"] = iid[:200]
     # a command row's own steps (docs/briefings.md, actions_argv); the row id says which row they act on
     steps = [{"id": a["id"], "label": a["label"].strip()[:40]} for a in item.get("actions") or []
              if isinstance(item.get("actions"), list) and isinstance(a, dict) and isinstance(a.get("id"), str)

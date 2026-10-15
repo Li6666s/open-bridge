@@ -423,7 +423,11 @@ A page entry overrides that per section: `when` and `link` name an item field,
 an empty section that reads as good news, set `empty:` too, for example
 `empty: "all green"`); `badge: false`
 keeps a section out of the number on its tab; `hide_empty: true` leaves a section off its tab
-while it has no rows (an empty section without it shows as one quiet line).
+while it has no rows (an empty section without it shows as one quiet line);
+`actionable: true|false` says whether the dashboard offers Get it done, Advise and Close
+on every row of the section. Without it, a row is actionable when it is a finding (red or
+yellow) or a tracker row; a row that already has an inbox item or a task keeps that path.
+Every row also carries `id`, its source id, which keys the item the dashboard files for it.
 `view.page_skip: [<section id>, ...]` keeps sections off every page, the rest page
 included, while they still run: a section that only feeds a file another page reads. Each section
 also says what it adds to its tab's badge (`weight`: rows not dimmed, for

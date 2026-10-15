@@ -1426,3 +1426,14 @@ test('short cuts a title at a word, not in the middle of one', () => {
   assert.equal(logic.short('kurz', 10), 'kurz')
   assert.equal(logic.short('Donaudampfschifffahrtsgesellschaft', 10), 'Donaudamp…')   // one long word: cut it
 })
+
+test('a page item a person can act on gets the same row as an inbox item: Do it, Advise, Settle', () => {
+  const it = { title: 'Backup stale', key: 'item:systems/checks/backup', actionable: true }
+  assert.deepEqual(logic.actionRow(it, new Map()), { key: 'item:systems/checks/backup', title: 'Backup stale', settle: ['done', 'not_doing'] })
+  assert.equal(logic.pageItemActs(it), true)
+  // nothing to do on it, or it has an inbox item or a task of its own (their path stays): no buttons
+  assert.equal(logic.pageItemActs({ ...it, actionable: false }), false)
+  assert.equal(logic.pageItemActs({ ...it, inbox: 'x' }), false)
+  assert.equal(logic.pageItemActs({ ...it, task: 't' }), false)
+  assert.equal(logic.actionRow({ title: 'plain', key: 'item:a/b/c', actionable: false }, new Map()), null)
+})
