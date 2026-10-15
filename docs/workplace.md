@@ -8,7 +8,7 @@ related:
   - inbox.md
   - ../skills/briefing/references/control.md
   - ../skills/cmux/SKILL.md
-  - briefing-dashboard.md
+  - bridge-cockpit.md
 ---
 
 # Workplace
@@ -71,9 +71,9 @@ side by side: workspaces with colors, tab status the agent itself reports (worki
 waiting, needs you), notifications, and an API for all of it. It is also the driver
 that ships and is tested, and so far the only one: every workplace feature,
 `launch`, teams and the tab steering (`status`, `send`, `adopt`) included, and the
-dashboard's tab actions built on them (setup in
-[`briefing-dashboard.md`](briefing-dashboard.md)), has run only with Claude Code as
-the agent and cmux as the terminal; `skills/tmux` ships a second driver. Other agents and
+cockpit's tab actions built on them ([`bridge-cockpit.md`](bridge-cockpit.md)), has run
+with Claude Code as the agent and cmux as the terminal; `skills/tmux` ships a
+second driver. Other agents and
 terminals are untested until an issue for that combination says otherwise. The
 others are good choices too; their driver is a small program speaking the protocol
 below, and the plan, the briefing and the inbox stay exactly the same.
@@ -84,8 +84,8 @@ below, and the plan, the briefing and the inbox stay exactly the same.
 workplace:
   driver: none                       # or {command: ["python3", "path/to/driver.py"]}
   control: {name: Control}           # the workspace whose session steers the others; the
-                                     # dashboard in that session polls the agent tabs, the
-                                     # others read its state; optional `command:` starts an
+                                     # cockpit hands it questions through the relay;
+                                     # optional `command:` starts an
                                      # agent there when a driver creates the workspace
   workspaces:
     - {name: Bigcorp, contexts: [bigcorp], color: "#1565C0", description: "client work for Bigcorp"}
@@ -241,15 +241,12 @@ Every agent tab, launched or opened by the plan, starts with `BRIDGE_TAB_SLUG=<s
 its environment, so a session, or any tool running in that tab, can tell it was started for
 one item rather than as a free session. `status` names the task (`slug`) or open inbox item (`item`) a tab works on.
 A task tab's slug is the task slug; an inbox item's tab gets `inbox-<short id>`.
-The briefing-ui dashboard ([`briefing-dashboard.md`](briefing-dashboard.md)) reads
-both from `status`: `is_self` keeps its own tab out of the tabs it lists, and `slug`
-ties a tab to the task row it works on. It also reads `BRIDGE_TAB_SLUG` itself: in
-a launched tab it shows no band above the prompt and no morning hint, and it does
-not poll the agent tabs.
-
-The cockpit ([`bridge-cockpit.md`](bridge-cockpit.md), an early version) uses the same
-driver verbs for its tab buttons. Without a driver it starts nothing and hands over the
-command to start by hand.
+The cockpit ([`bridge-cockpit.md`](bridge-cockpit.md)) reads `slug` and `item` from
+`status` to tie a tab to the task or inbox row it works on, and uses the same driver
+verbs for its tab buttons; without a driver it starts nothing and hands over the
+command to start by hand. The relay mod `mods/cockpit-relay` reads `BRIDGE_TAB_SLUG`
+itself: in a launched tab it never heartbeats, so an agent tab never takes the
+cockpit's questions.
 
 `workplace.py tasks [--json]` lists every active task flat, sorted by priority and then
 activity: label, area, priority, score, `blocked_by`, and `stale` (no activity for longer

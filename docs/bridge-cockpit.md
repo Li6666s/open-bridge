@@ -29,8 +29,7 @@ on a click), the agent tabs and sessions, the workers, the machines and the
 tokens of the week. It runs on your own computer, answers only on
 `127.0.0.1`, and acts only through the Bridge scripts (`inbox.py`, `task.py`,
 `workplace.py` and its terminal driver). Nothing on it costs tokens until you
-press a button that asks Claude or opens an agent tab. The briefing card
-inside Claude Code is a separate mod (`briefing-ui`); the relay that hands the
+press a button that asks Claude or opens an agent tab. The relay that hands the
 cockpit's questions to your control session is the mod `cockpit-relay`.
 
 Two parts work together:

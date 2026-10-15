@@ -794,18 +794,6 @@ def test_briefing_profiles_route_by_their_declaration(synth_repo):
 SHIPPED_MODS = [
     "mods/README.md",
     "mods/.claude-plugin/marketplace.json",
-    "mods/briefing-ui/.claude-plugin/plugin.json",
-    "mods/briefing-ui/hooks/hooks.json",
-    "mods/briefing-ui/hooks/register.tsx",
-    "mods/briefing-ui/hooks/logic.ts",
-    "mods/briefing-ui/hooks/text.ts",
-    "mods/briefing-ui/types/index.d.ts",
-    "mods/briefing-ui/tests/pure.test.mjs",
-    "mods/briefing-ui/tests/world.ts",
-    "mods/briefing-ui/tests/card.test.tsx",
-    "mods/briefing-ui/tests/tabs.test.tsx",
-    "mods/briefing-ui/tests/actions.test.tsx",
-    "mods/briefing-ui/tests/setup.test.tsx",
     "mods/cockpit-relay/.claude-plugin/plugin.json",
     "mods/cockpit-relay/README.md",
     "mods/cockpit-relay/hooks/hooks.json",
@@ -827,7 +815,7 @@ UNREGISTERED_MODS = [
     "mods/my-usage-panel/.claude-plugin/plugin.json",
     "mods/my-usage-panel/hooks/register.tsx",
     "mods/.claude-plugin/marketplace.local.json",
-    "mods/briefing-ui-fork/hooks/register.tsx",   # a prefix of a shipped name is not that name
+    "mods/cockpit-relay-fork/hooks/register.tsx",   # a prefix of a shipped name is not that name
 ]
 
 

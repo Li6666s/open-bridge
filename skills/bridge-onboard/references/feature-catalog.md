@@ -1,7 +1,7 @@
 ---
 description: Read-only catalogue of every Bridge feature with "when you need it" + how to activate. Surfaced in Phase E of onboarding (no questions, just info) and as the body of /bridge-onboard --features. Source of truth for what Bridge can do without making the user feel quizzed.
 type: reference
-last_updated: 2026-10-09
+last_updated: 2026-10-13
 ---
 
 # Feature Catalogue — What Bridge Can Do
@@ -269,22 +269,6 @@ skills.
 **When you need it:** You run multiple agents and want a live "office view" — not for the work, for the joy. Or you do demos.
 
 **Activate:** Install on a chosen remote per `docs/bridge-deck.md` — its collectors poll your Bridge files directly, nothing else to wire.
-
-### Bridge Dashboard (ops view)
-**What:** Single-file HTML dashboard via `/bridge-dashboard` — fleet status, work board, calendar 24h, channels, git activity, upstream drift. Operational, not pixel-art.
-
-**When you need it:** You want a "everything at a glance" view in a browser tab, not via CLI commands.
-
-**Activate:** Run `/bridge-dashboard`; skill autoloads.
-
-### Briefing Dashboard in Claude Code (mod, early access)
-**What:** The briefing as a clickable card in the conversation: what waits for you, what you can hand off, your tasks, and tabs for health checks, dates, trackers and today's commits. Tabs, columns and customer marks come from the briefing profile; German or English. Claude Code only (function hooks, 2.1.291+); agent tabs need cmux.
-
-**When you need it:** You run `/briefing` daily and would rather click than type, or you steer several agent tabs and want to see which one waits for you.
-
-**Activate:** `docs/briefing-dashboard.md` (install the mod from `mods/` with `claude plugin marketplace add ./mods --scope local` and `claude plugin install briefing-ui@open-bridge-mods --scope local`, set `briefing.claude_code_ui.enabled: true`, copy the profile template with `cp workflow/briefings/_template.yaml workflow/briefings/morning.yaml` and adjust it, then `/briefing-ui`; without a profile the card still shows inbox, advice and tasks).
-
-**Offer only when** the session runs in Claude Code and `mods/briefing-ui/` exists in this Bridge.
 
 ### Bridge Cockpit (watch and steer, early version)
 **What:** A local web page (127.0.0.1 only) that watches and steers the whole Bridge: the briefing, your work (inbox and tasks), agent tabs and sessions, workers, machines and token use, with buttons that act. Operational, not pixel-art. An early version (alpha) that is still being extended: say so when offering it.

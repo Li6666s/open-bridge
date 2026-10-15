@@ -123,7 +123,7 @@ work:
     - { symbol: "🧪", name: "Testing" }
     - { symbol: "📁", name: "Documents" }
     - { symbol: "🐛", name: "Bug / Incident" }
-  # review:                  # `task.py review` / the dashboard's "check all" (docs/briefing-dashboard.md)
+  # review:                  # `task.py review` / the dashboard's "check all" (docs/bridge-cockpit.md § 3)
   #   command: "claude -p --model {model} ..."   # any agent: prompt on stdin, JSON array on stdout
   #   max_age_days: 7        # a cached verdict with unchanged evidence is reused this long
   #   stale_days: 21         # no activity this long and no blocker: the model may say stale
@@ -146,7 +146,7 @@ work:
 #   driver: none             # or {command: ["python3", "path/to/driver.py"]}
 #   # cmux users (optional skill, skills/cmux):
 #   # driver: {command: ["python3", "${root}/skills/cmux/scripts/cmux_driver.py"]}
-#   control: {name: Control} # the workspace whose session steers the others (briefing-ui polls tabs there)
+#   control: {name: Control} # the workspace whose session steers the others (the cockpit finds the control session there)
 #   workspaces:              # optional per entry: description (read by the router), aliases (other titles)
 #     - {name: Bigcorp, contexts: [bigcorp], description: "client work for Bigcorp"}
 #     - {name: Misc, default: true}
@@ -165,21 +165,6 @@ work:
 # briefing:
 #   default: morning         # which workflow/briefings/<id>.yaml plain /briefing runs
 #                            # (wins over `default: true` in a shared profile file)
-#   claude_code_ui:          # the briefing-ui mod (mods/briefing-ui, docs/briefing-dashboard.md); tested only with Claude Code + cmux
-#                            # its tabs and columns come from the briefing profile: view.pages (docs/briefings.md)
-#     enabled: false         # the mod does nothing until this is true
-#     surface: chat          # chat = the dashboard as a card in the conversation | pane = side panel
-#     band: true             # a line above the prompt: waiting tabs, now, to hand off (never in launched tabs)
-#     shortcuts: true        # "1a 3b" settled without a model turn
-#     morning_hint: true     # first session of the day points at the briefing
-#     voice: false           # a tab that waits for you is also spoken (macOS say)
-#     status_seconds: 60     # how often the tab state is re-read
-#     full_minutes: 10       # on open, run the full briefing (trackers, checks) again when the last is older
-#     snapshot_minutes: 60   # save the cmux layout (only on change) while the session is open; 0 = never
-#     language: en           # de | en for the mod's own words; default language.conversation, else en
-#     launch:
-#       target: area         # area = the workspace of the item's area (workplace.workspaces) | tab = here | workspace = one each
-#                            # | auto = a small model picks the area or a workspace of its own (workplace.router)
 #   advise:
 #     stale_days: 7
 #     blocked_days: 14

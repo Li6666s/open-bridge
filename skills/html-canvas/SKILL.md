@@ -11,7 +11,7 @@ description: >-
   'language toggle', 'analyze this repo as an explainer' — even if unnamed. Ships a
   copy-paste shell, a section-block catalog, an animation layer, optional JS
   behaviours, a DESIGN.md→CSS token generator, and a parallel-builder workflow.
-  NOT for live Bridge ops dashboards (bridge-dashboard), repo/ecosystem maps
+  NOT for live Bridge ops dashboards (the cockpit), repo/ecosystem maps
   (bridge-explorer), or slide decks / styled emails / PDFs / marketing
   landing pages (use the dedicated skills if your Bridge ships them).
 metadata:

@@ -20,7 +20,7 @@ Daily and on-demand briefing. Read the referenced file ONLY when triggered.
 | `--skip-trackers` | All streams except Stream B (offline-friendly); Phase 2 still runs | false |
 | `--commits YYYY-MM-DD` | Detailed commit analysis for one day (sessions, time est., types) — see `references/commit-analysis.md` | — |
 | `--style <s>` | Show this run as `sources`, `triage`, `brevity` or `plan` instead of the profile's `view.style` (`briefing.py render --style`) | profile's view |
-| `--html` | After terminal output, delegate to `/bridge-dashboard` to render the operational HTML dashboard | false |
+| `--html` | After terminal output, open the cockpit (`/cockpit`), the live web page of the Bridge | false |
 
 ### Mode × Phase matrix
 
@@ -85,7 +85,7 @@ User wants to...
 | Memory drift, doc-link health, branch/config sanity | `/bridge-status` |
 | Live service status of channels/remotes (launchd, processes, ports) | `/remote` |
 | Detailed GitHub/ADO board view (per-project) | `/dashboard` |
-| Visual ops dashboard (Fleet + Board + Calendar + Channels) | `/bridge-dashboard` (also the target of `--html`) |
+| Live web view of the whole Bridge (work, tabs, machines, tokens) | `/cockpit` (also the target of `--html`) |
 | Weekly archive | `/archive` |
 
 `/briefing` is a **daily** rollup. The skills above are deeper dives into

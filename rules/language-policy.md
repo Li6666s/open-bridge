@@ -59,8 +59,7 @@ Everything in the `core` tier:
   Their non-English *vocabulary values* are the entire point; the theme's
   structural keys and comments stay English.
 - **Per-language UI string tables** inside a CORE program that has its own
-  user-facing words (today: the `briefing-ui` mod,
-  `mods/briefing-ui/hooks/text.ts`; the cockpit, `scripts/web/text.js`,
+  user-facing words (today: the cockpit, `scripts/web/text.js`,
   `scripts/web/jev/page.js` and `scripts/lib/bridge_cockpit/text.py`; the
   `cockpit-relay` mod, `TABLES` in `mods/cockpit-relay/hooks/relay.ts`; and
   the smaller tables beside the data they word: `scripts/lib/briefing_view.py`,
@@ -105,7 +104,6 @@ These sites *emit* locale-formatted dates — they are output, not parsers.
 Do NOT add weekday/month translation tables to them:
 
 - `work/templates/day.md` (`date '+%a %d.%m'`)
-- `scripts/bridge-dashboard.py` strftime (`%a`) at the daily-render sites
 - `skills/bridge-greeting/scripts/render-motd.sh` (`strftime %b` + the
   English literal `at`)
 

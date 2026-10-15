@@ -122,7 +122,7 @@ USER_PATTERNS = [
     # lives in .claude/mods/, its own folder marketplace, and never promotes.
     # ENUMERATED like agents/ above: a new shipped mod is added to the
     # lookahead deliberately, and anything else in mods/ fails closed.
-    r"^mods/(?!README\.md$|\.claude-plugin/marketplace\.json$|briefing-ui/|cockpit-relay/)",
+    r"^mods/(?!README\.md$|\.claude-plugin/marketplace\.json$|cockpit-relay/)",
     r"^\.claude/mods/",
 ]
 
@@ -253,7 +253,6 @@ _SCOPE_MAP = {**_BASE_SCOPE_MAP, **_instance_scope_aliases()}
 # is an irreversible push into a public MIT repo.
 SCRIPTS_CORE_ALLOWLIST = frozenset({
     "scripts/bin/gh",
-    "scripts/bridge-dashboard.py",
     "scripts/categorize-commits.py",
     "scripts/check-commands-doc.py",
     "scripts/check-figure-counts.py",

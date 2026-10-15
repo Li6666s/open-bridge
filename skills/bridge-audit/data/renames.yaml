@@ -103,3 +103,39 @@ vocabulary_renames:
     exceptions:
       - "skills/bridge-leak-check/"      # documents the pattern as a leak example
       - "skills/bridge-audit/data/renames.yaml"  # this registry — self-ref
+
+  - id: briefing-ui-to-cockpit
+    old: "briefing-ui"
+    new: "cockpit-relay"
+    reason: "The briefing-ui mod (the briefing as a card in Claude Code) was retired on 2026-10-15: the cockpit does its work, its relay lives on as mods/cockpit-relay."
+    since: 2026-10-15
+    exceptions:
+      - "work/"
+      - "CHANGELOG.md"
+      - "skills/bridge-audit/data/renames.yaml"
+      - "scripts/lib/bridge_cockpit/"      # code comments: what was ported from the mod
+      - "scripts/web/"
+      - "scripts/tests/"
+      - "mods/cockpit-relay/"              # names where its relay came from
+      - "mods/README.md"                   # says the mod was retired
+      - "bridge-config.yaml.template"      # the old block is still read
+
+  - id: briefing-dashboard-doc-to-cockpit
+    old: "briefing-dashboard"
+    new: "bridge-cockpit"
+    reason: "docs/briefing-dashboard.md (the briefing-ui card guide) was retired on 2026-10-15; what still holds lives in docs/bridge-cockpit.md."
+    since: 2026-10-15
+    exceptions:
+      - "work/"
+      - "CHANGELOG.md"
+      - "skills/bridge-audit/data/renames.yaml"
+
+  - id: bridge-dashboard-to-cockpit
+    old: "bridge-dashboard"
+    new: "bridge-cockpit"
+    reason: "The static Control Center (skill + scripts/bridge-dashboard.py) retired in favour of the live cockpit (2026-10-15)."
+    since: 2026-10-15
+    exceptions:
+      - "work/"
+      - "CHANGELOG.md"
+      - "skills/bridge-audit/data/renames.yaml"

@@ -77,7 +77,7 @@ P0 — License (1 finding)
 
 P1 — Skill tree (3 findings)
   README lists `cockpit-office/`, `bks-context/`, `bridge-bks-export/` — none exist in skills/.
-  Existing but unlisted: `bridge-dashboard`, `bridge-sync`.
+  Existing but unlisted: `bridge-sync`.
   → Update README skill tree.
 
 ...
