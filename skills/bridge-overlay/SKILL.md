@@ -60,7 +60,7 @@ inline scope and **inherit the tier of their SKILL.md** (resolved from the overl
 SOURCE, so a fresh `add` ships the scripts too — they are NOT refused as CORE).
 A markdown-only skill and a script-bearing skill both transfer whole. **Exception:**
 this only covers scripts living inside the skill's own directory
-(`skills/<name>/scripts/`). Several `scope: core` skills (e.g. `bridge-dashboard`,
+(`skills/<name>/scripts/`). Several `scope: core` skills (e.g.
 `tracker-sync`, `workspace`, this skill) instead call a shared **repo-root**
 engine (`scripts/<name>.py`) that ships with the Bridge repo itself, outside any
 skill folder — that script is not part of the skill directory and is not

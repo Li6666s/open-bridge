@@ -22,5 +22,5 @@ be expanded with setup and configuration details.
 A config template for a standard Bridge layout already ships here:
 [`examples/bridge-deck.config.yaml.template`](../examples/bridge-deck.config.yaml.template).
 
-For now, use `/bridge-dashboard` or `/briefing` to get an overview of
+For now, use `/cockpit` or `/briefing` to get an overview of
 your Bridge.

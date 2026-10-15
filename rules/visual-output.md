@@ -10,7 +10,7 @@ decks, dashboards, reports) obeys these gates — on top of the palette,
 typography, and spacing tokens in [`../DESIGN.md`](../DESIGN.md). `DESIGN.md`
 governs *how it looks*; this rule governs *two behaviours it must have*. The
 gates apply to **every** such deliverable, including hand-built ones — not
-only the output of `html-slides`, `creative-design-stack`, or `bridge-dashboard`.
+only the output of `html-slides` or `creative-design-stack`.
 
 ## Gate 1 — every HTML page has a user-selectable light/dark toggle
 

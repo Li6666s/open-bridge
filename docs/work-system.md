@@ -137,7 +137,14 @@ all three for a finite task: it sets `status: done` and `closed: "YYYY-MM-DD"`
 board and writes one row into today's day block. It refuses a stream (streams
 never close), an unknown slug and a task already under `work/done/`. The
 briefing dashboard's Done button runs it; `task.py review` recommends which
-tasks are finished ([`briefing-dashboard.md`](briefing-dashboard.md)).
+tasks are finished ([`bridge-cockpit.md`](bridge-cockpit.md) § 3).
+
+`python3 scripts/task.py reopen <slug> [--as doing|backlog] [--note TEXT] [--json]`
+takes a close back: the newest `work/done/*/<slug>/` moves to `work/tasks/<slug>/`,
+`status` becomes `doing` (or `backlog`, for a task that only should still be done),
+`closed:` and `outcome:` go, a dated "Reopened" note joins the notes under the close
+note, the board is regenerated and one log row is written. It refuses a slug that is
+open. The dashboard's history and its undo run it.
 
 ## Log format — one file per period, daily blocks
 

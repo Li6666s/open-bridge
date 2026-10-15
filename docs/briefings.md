@@ -3,7 +3,7 @@ summary: "Briefing profiles: each person describes the briefing they want in wor
 type: guide
 last_updated: 2026-10-09
 related:
-  - briefing-dashboard.md
+  - bridge-cockpit.md
   - ../workflow/briefings/_schema.yaml
   - ../workflow/briefings/_template.yaml
   - ../scripts/briefing.py
@@ -317,12 +317,10 @@ so a mute never makes something disappear without a trace.
 
 ## Dashboard pages
 
-Setting the dashboard up, step by step: [`briefing-dashboard.md`](briefing-dashboard.md).
+Setting the dashboard up, step by step: [`bridge-cockpit.md`](bridge-cockpit.md)
+(section 8 builds the profile).
 
-The cockpit ([`bridge-cockpit.md`](bridge-cockpit.md), an early version) shows the same
-profile as a local web page, with the tabs, the columns and the row actions below.
-
-A dashboard (the briefing-ui mod for Claude Code in `mods/briefing-ui`, later a web tab) shows the
+A dashboard (the cockpit, `scripts/bridge-cockpit.py`, a local web page) shows the
 briefing as one page and every other section on tabs beside it. Which section
 stands on which tab differs per person, so the profile says it:
 
@@ -450,7 +448,7 @@ needs it. Sections run side by side, so the full run is no slower than one with
 and the calendar together. `collect` keeps no rows from an earlier run: a section
 a run leaves out comes back `skipped` with no items, so a dashboard that wants to
 show the earlier rows meanwhile keeps them itself.
-The briefing-ui mod (`mods/briefing-ui`) does exactly that: after a click it
+The cockpit (`scripts/lib/bridge_cockpit/collector.py`) does exactly that: after a click it
 runs only the first part again and keeps every section it left out, the headline
 included, from the earlier run, so a click never waits for a tracker.
 
@@ -484,8 +482,7 @@ and projects come and go, so they belong in the profile, never in code.
 
 Everything a person tunes lives in their own files (USER tier); the code reads
 it and carries no names or customers of its own. A few display defaults stay
-fixed in the mod: rows per block before "+N more", ten rows per section on a
-tab, an hour before a tab counts as long-running.
+fixed in the cockpit, for example an hour before a tab counts as long-running.
 
 | What | Where |
 |---|---|
@@ -493,21 +490,20 @@ tab, an hour before a tab counts as long-running.
 | Tabs and their columns (`when`, `detail`, `link`, `empty`, `alarm`, `badge`) | same profile, `view.pages`, `view.page_rest` |
 | Marks in front of rows (customers, projects) | same profile, `view.marks` |
 | Wording of the briefing (headline, tab names, "today") | same profile, `view.labels` |
-| Dashboard on or off, card or side panel, band, voice, poll interval, how old the full run may be, layout backup, launch target | `bridge-config.yaml` `briefing.claude_code_ui` |
-| Language of the dashboard's own words (`de`, `en`) | `briefing.claude_code_ui.language`, else `language.conversation`, else English |
-| The cockpit: on or off, port, profile, voice, poll interval, launch target | `bridge-config.yaml` `cockpit:` ([`bridge-cockpit.md`](bridge-cockpit.md)) |
-| Name of the control workspace: the workspace whose session steers the others; the dashboard in that session polls the agent tabs, the others read its state | `bridge-config.yaml` `workplace.control.name` ([workplace](workplace.md)) |
+| Cockpit on or off, port, profile, voice, poll interval, how old the full run may be, layout backup, launch target | `bridge-config.yaml` `cockpit:` (a key it leaves out is still read from the former `briefing.claude_code_ui`) |
+| Language of the cockpit's own words (`de`, `en`) | `cockpit.language`, else `language.conversation`, else English |
+| Name of the control workspace: the workspace whose session steers the others and takes the cockpit's questions through the relay | `bridge-config.yaml` `workplace.control.name` ([workplace](workplace.md)) |
 
-The dashboard's own words (buttons, help, the prompts it sends) sit in one
-German and one English table inside the mod (`mods/briefing-ui/hooks/text.ts`);
-a profile's labels never mix with them. `bridge-config.yaml.template` lists
-every `claude_code_ui` key with its default.
+The cockpit's own words (buttons, help) sit in one German and one English
+table in `scripts/web/text.js`, the prompts it sends in
+`scripts/lib/bridge_cockpit/text.py`; a profile's labels never mix with them.
+`bridge-config.yaml.template` lists every `cockpit:` key with its default.
 
-**Tested so far only with Claude Code and cmux.** The pages are plain data, but
-the one dashboard that draws them is a Claude Code mod, and its tab actions go
-through the cmux driver. Other agents (Codex, Gemini CLI, Copilot) and other
-terminals (tmux, WezTerm, kitty) have not been tried; that work is to be
-tracked as issues, one per combination.
+**Works with Claude Code, in cmux or tmux.** The pages are plain
+data; the cockpit draws them in the browser, and its tab actions go through
+the terminal driver of [`workplace.md`](workplace.md). Other agents (Codex,
+Gemini CLI, Copilot) and other terminals (WezTerm, kitty) have not been tried;
+that work is to be tracked as issues, one per combination.
 
 ## Change marks
 

@@ -8,7 +8,7 @@ nothing else in the Bridge depends on one.
 
 | Mod | What it does | Guide |
 |---|---|---|
-| [`briefing-ui`](briefing-ui/) | the briefing as a clickable dashboard: decide with buttons, hand topics to agent tabs (cmux), watch running tabs | [`docs/briefing-dashboard.md`](../docs/briefing-dashboard.md) |
+| [`cockpit-relay`](cockpit-relay/) | lets the cockpit hand a question to the Claude Code session that steers the others, in any terminal | [`docs/bridge-cockpit.md`](../docs/bridge-cockpit.md) |
 
 ## Layout
 
@@ -33,17 +33,20 @@ From the Bridge folder, for this Bridge only:
 
 ```bash
 claude plugin marketplace add ./mods --scope local
-claude plugin install briefing-ui@open-bridge-mods --scope local
+claude plugin install cockpit-relay@open-bridge-mods --scope local
 ```
 
 Claude Code reads an installed mod straight from its folder here
 (`claude plugin list` shows "Read from"). After a pull or an edit, start a new
 session or run `/reload-plugins`. If `claude plugin list` shows no "Read from"
 line, your Claude Code keeps a copy: run
-`claude plugin update briefing-ui@open-bridge-mods --scope local` first.
+`claude plugin update cockpit-relay@open-bridge-mods --scope local` first.
 
 Each mod stays inert until its own switch in `bridge-config.yaml` is on (for
-`briefing-ui`: `briefing.claude_code_ui.enabled: true`).
+`cockpit-relay`: `cockpit.enabled: true`, the relay on unless `cockpit.relay: false`).
+The former `briefing-ui` mod (the briefing as a card in Claude Code) was retired on
+2026-10-13: the cockpit (`docs/bridge-cockpit.md`) does its work, and its relay lives on
+in `cockpit-relay`.
 
 ## Tests
 
@@ -51,8 +54,8 @@ Two suites per mod, run from the Bridge folder:
 
 | Suite | Command | Where it runs |
 |---|---|---|
-| pure functions and text tables (node, no Claude Code) | `npx -y -p typescript@5.6.3 -c 'node mods/briefing-ui/tests/pure.test.mjs'` | CI (`validate.yml`, job `script-suites`) and locally |
-| engine tests: the mod loaded in a simulated Claude Code over a fake Bridge (`*.test.tsx`) | `claude plugin test mods/briefing-ui` | locally only, they need the `claude` CLI |
+| pure functions and text tables (node, no Claude Code) | `npx -y -p typescript@5.6.3 -c 'node mods/cockpit-relay/tests/pure.test.mjs'` | CI (`validate.yml`, job `script-suites`) and locally |
+| engine tests: the mod loaded in a simulated Claude Code over a fake Bridge (`*.test.tsx`) | `claude plugin test mods/cockpit-relay` | locally only, they need the `claude` CLI |
 
 The pure tests compile the hooks with the pinned TypeScript, replace the import
 from `claude-code` with stand-ins and check the exported functions with
@@ -61,7 +64,7 @@ from `claude-code` with stand-ins and check the exported functions with
 
 The engine tests are not a CI gate because the runner has no Claude Code. Run
 them before a pull request that touches a mod, together with
-`claude plugin validate mods` and `claude plugin validate mods/briefing-ui`.
+`claude plugin validate mods` and `claude plugin validate mods/cockpit-relay`.
 
 ## Words
 

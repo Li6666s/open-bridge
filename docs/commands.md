@@ -35,7 +35,6 @@ which ones is per-instance, so the live list is the skill listing itself.
 | `/briefing` | | `briefing` | Daily briefing: the inbox first (what needs you, with approve, defer, drop and agent tabs to steer the day), then board, git activity, goals, alerts |
 | `/bridge-status` | | `bridge-status` | Status dashboard: ecosystem, agents, work, remotes |
 | `/dashboard` | | `dashboard` | Project dashboard for the current project: GitHub or ADO tasks, git activity, deployment status (`--all`, `--html`) |
-| `/bridge-dashboard` | | `bridge-dashboard` | Control Center: one HTML page with fleet, board, the next 24h of calendar, channels, git activity and upstream drift |
 | `/cockpit` | | `cockpit` | The cockpit: a local web page (127.0.0.1) that watches and steers the whole Bridge, with the briefing, your work, agent tabs and sessions, workers, machines and tokens |
 | `/archive` | | `archive` | Archive the current period: summary, durable facts distilled into memory, `work/log.md` reset |
 | `/debrief` | | `debrief` | Process transcripts: 7-category insights, tasks, protocols (full / `--quick` / `--all` / `--date`) |
