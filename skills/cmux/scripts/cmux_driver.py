@@ -491,6 +491,39 @@ def open_plan(req: dict) -> list[str]:
     return notes + run_calls(calls, existing)
 
 
+def control_calls(ctl: dict, command: str, existing: dict[str, str], root: str) -> list[dict]:
+    """One new agent tab in the control workspace, the workspace created first when it is missing.
+    Nothing is moved or closed: a control tab that does not answer stays where it is."""
+    ref = resolve_workspace(ctl, existing)
+    calls: list[dict] = []
+    if not ref:
+        calls.append({"op": "create", "ws": ctl["name"], "cwd": root, "command": _with_shell(command),
+                      "slug": "control", "tab": ctl["name"]})
+        calls.append({"op": "decorate", "ws": ctl["name"], "ref": None, "color": ctl.get("color"),
+                      "description": ctl.get("description")})
+        calls.append({"op": "order", "ws": ctl["name"], "ref": None, "index": 0})
+    else:
+        calls.append({"op": "tab", "ws": ctl["name"], "ref": ref, "slug": "control",
+                      "command": _with_shell(command), "tab": ctl["name"]})
+    return calls
+
+
+def control(req: dict) -> list[str]:
+    """Start a new agent tab in the control workspace (the page's relay needs one that answers)."""
+    ctl = req.get("control") if isinstance(req.get("control"), dict) else {}
+    if not ctl.get("name"):
+        raise ValueError("control needs control.name")
+    command = str(req.get("command") or "").strip()
+    if not command:
+        raise ValueError("control needs a command")
+    try:
+        tree = read_tree()
+    except (DriverError, cl.CmuxError) as exc:
+        raise DriverError(f"cannot read cmux workspaces, nothing started ({exc})") from exc
+    existing = workspace_index(tree)
+    return run_calls(control_calls(ctl, command, existing, str(req.get("root") or ROOT)), existing)
+
+
 def caller_workspace(here: str | None, tree: dict) -> str | None:
     """The workspace of the calling tab: `here` first, else the tree's own `caller`.
     None when neither is known; the selected workspace is never a fallback."""
@@ -621,6 +654,47 @@ def rename(req: dict) -> list[str]:
     return [f"{req['tab']} is now named {req['title']!r}"]
 
 
+# the cockpit steers a tab with these (docs/workplace.md, the optional verbs); cmux serves them all
+CAPS = ["tabs", "sessions", "open", "launch", "send", "rename", "control", "focus", "key", "screen", "close"]
+# the one key set a driver takes; cmux's own names for the two that are not typed as they are
+KEYS = {"enter": "Enter", "escape": "escape", "y": "y", "n": "n", **{str(i): str(i) for i in range(1, 10)}}
+
+
+def _where(surface: str) -> list[str]:
+    ws_ref = _ws_ref_of(surface)
+    return ["--workspace", ws_ref] if ws_ref else []
+
+
+def focus(req: dict) -> list[str]:
+    surface = req["tab"]
+    where = _where(surface)
+    if where:
+        cl.cmux_checked("select-workspace", *where)
+    cl.cmux_checked("focus-panel", "--panel", surface, *where)
+    return [f"{surface} in front"]
+
+
+def key(req: dict) -> list[str]:
+    surface, name = req["tab"], req.get("key")
+    if name not in KEYS:
+        raise ValueError(f"key {name!r} is not one of {', '.join(KEYS)}")
+    cl.cmux_checked("send-key", *_where(surface), "--surface", surface, KEYS[name])
+    return [f"{name} into {surface}"]
+
+
+def screen(req: dict) -> str:
+    surface = req["tab"]
+    lines = max(1, min(int(req.get("lines") or 40), 500))
+    out = cl.cmux_checked("read-screen", *_where(surface), "--surface", surface, "--lines", str(lines))
+    return "\n".join(line.rstrip() for line in out.splitlines()).strip("\n")
+
+
+def close(req: dict) -> list[str]:
+    surface = req["tab"]
+    cl.cmux_checked("close-surface", "--surface", surface, *_where(surface))
+    return [f"{surface} closed"]
+
+
 def handle(req: dict) -> dict:
     if cl.cmux_bin() is None:
         raise DriverError("cmux is not installed (no CMUX_BIN, no `cmux` on PATH, no app bundle)")
@@ -637,6 +711,18 @@ def handle(req: dict) -> dict:
         return {"report": send(req)}
     if verb == "rename":
         return {"report": rename(req)}
+    if verb == "control":
+        return {"report": control(req)}
+    if verb == "caps":
+        return {"caps": CAPS}
+    if verb == "focus":
+        return {"report": focus(req)}
+    if verb == "key":
+        return {"report": key(req)}
+    if verb == "screen":
+        return {"text": screen(req)}
+    if verb == "close":
+        return {"report": close(req)}
     raise ValueError(f"unknown verb {verb!r}")
 
 

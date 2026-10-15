@@ -98,10 +98,11 @@ def collect_fixture(root: Path) -> dict:
             {"id": "systems", "title": "Systems", "sections": [
                 {"id": "checks", "kind": "command", "title": "Checks", "status": "ok", "alarm": True, "bad": 1,
                  "weight": 1, "total": 1, "items": [
-                     {"title": "Backup older than 2 days", "detail": "drift", "tone": "bad",
-                      "url": "https://example.org/backup", "ask": True}]},
+                     {"id": "backup-stale", "title": "Backup older than 2 days", "detail": "drift", "tone": "bad",
+                      "url": "https://example.org/backup", "ask": True, "actionable": True}]},
                 {"id": "upstream", "kind": "command", "title": "Upstreams (2)", "status": "ok", "weight": 1,
-                 "items": [{"title": "Upstream drift", "tone": "warn", "url": "file:///etc/passwd", "ask": True}]},
+                 "items": [{"id": "upstream-drift", "title": "Upstream drift", "tone": "warn", "url": "file:///etc/passwd", "ask": True,
+                           "actionable": True}]},
                 {"id": "accounts", "kind": "command", "title": "Accounts", "status": "ok", "weight": 1, "view": "tiles",
                  "items": [{"title": "Azure X", "tags": {"Provider": "azure"}, "account": {"id": "azure-x", "status": "active"}},
                            {"title": "Not an account"}]}]},
@@ -436,7 +437,7 @@ def test_parse_pages():
     assert s["items"][0] == {"title": "T", "detail": "open", "when": "09:30", "tone": "warn", "url": "https://x.test",
                              "task": "alpha", "ask": True, "mark": None, "priority": None, "state": None, "lines": [], "meter": None,
                              "group": None, "icon": None, "tags": None, "account": None, "inbox": None,
-                             "actions": None, "row_id": None, "at": None}
+                             "actions": None, "row_id": None, "at": None, "id": None, "actionable": False}
     assert s["as_of"] is None and s["empty"] == "nothing"
     assert pages[0]["overview"] is False
     ops = m.parse_pages({"pages": [{"id": "ops", "title": "Betrieb", "overview": True, "sections": [{"id": "a"}]}]})
@@ -1150,6 +1151,138 @@ def test_advise_on_a_foreign_row_files_it_and_starts_a_reporting_tab(world):
     assert world.runner.key(calls[0]) == "inbox.add"
     assert calls[1] == launch_argv(world, new_id, "report")
     assert "relay" not in res or res.get("relay") is None
+
+
+# ---------------------------------------------------------------- page items: the same buttons as the work rows
+
+CHECK_KEY = "item:systems/checks/backup-stale"
+CHECK_INBOX_KEY = "briefing:morning:checks:backup-stale"
+
+
+def test_a_page_item_carries_its_key_and_whether_a_person_can_act_on_it(world):
+    items, _ = world.app.collector.page_items("systems", "checks")
+    assert (items[0]["key"], items[0]["actionable"]) == (CHECK_KEY, True)
+    quiet, _ = world.app.collector.page_items("systems", "accounts")
+    assert [i["actionable"] for i in quiet] == [False, False]
+    assert quiet[0]["key"].startswith("item:systems/accounts/h")        # no source id: a hash of the title
+
+
+def test_do_it_on_a_page_item_files_it_under_the_briefing_key_and_starts_on_that(world):
+    new_id = "20261015-1200-backup-older-than-2-days-a1b2"
+    world.runner.handlers["inbox.add"] = lambda argv: ok(new_id + "\n")
+    world.runner.calls.clear()
+    res = world.act("do_it", keys=[CHECK_KEY])
+    assert writes(world) == [
+        I(world, "add", "--from", "bridge-cockpit", "--kind", "decision", "--gate", "free", "--closer", "reporter",
+          f"--key={CHECK_INBOX_KEY}", "--summary=Checks: Backup older than 2 days",
+          "--detail=drift https://example.org/backup"),
+        launch_argv(world, new_id, "go")]
+    assert res["settled"] == [CHECK_KEY]
+
+
+def test_do_it_on_a_page_item_reuses_the_inbox_item_the_briefing_already_filed(world):
+    """to_inbox filed it under the same key: a second item would be a duplicate"""
+    world.runner.handlers["inbox.list"] = lambda argv: ok([
+        {"id": YES_ID, "state": "open"}, {"id": FILED_ID, "state": "open", "key": CHECK_INBOX_KEY}])
+    world.app.inbox_cache = (0.0, None)
+    world.runner.calls.clear()
+    world.act("do_it", keys=[CHECK_KEY])
+    assert writes(world) == [launch_argv(world, FILED_ID, "go")]
+
+
+def test_advise_later_and_settle_work_on_a_page_item(world):
+    new_id = "20261015-1201-backup-older-than-2-days-c3d4"
+    world.runner.handlers["inbox.add"] = lambda argv: ok(new_id + "\n")
+    world.runner.calls.clear()
+    world.act("advise", keys=[CHECK_KEY])
+    assert launch_argv(world, new_id, "report") in writes(world)
+    world.runner.calls.clear()
+    world.act("later", key=CHECK_KEY, until=TOMORROW)
+    assert world.app.store.hidden()[CHECK_KEY] == TOMORROW
+
+
+def test_do_it_reuses_an_item_another_profile_filed_for_the_same_row(world):
+    """The cockpit's profile often extends the morning briefing: a `to_inbox` item filed by /briefing morning
+    carries that profile's name, and is still the same row"""
+    world.runner.handlers["inbox.list"] = lambda argv: ok([
+        {"id": FILED_ID, "state": "open", "key": "briefing:evening:checks:backup-stale"}])
+    world.app.inbox_cache = (0.0, None)
+    world.runner.calls.clear()
+    world.act("do_it", keys=[CHECK_KEY])
+    assert writes(world) == [launch_argv(world, FILED_ID, "go")]
+
+
+SWEPT_ID = "20261015-1300-checks-gone-row-e5f6"
+KEPT_ID = "20261015-1301-checks-backup-older-a7b8"
+
+
+def full_pass(world) -> None:
+    world.app.inbox_cache = (0.0, None)
+    world.runner.calls.clear()
+    world.app.collector.request("full")
+    world.app.collector.drain()
+
+
+def test_a_full_pass_closes_what_get_it_done_filed_once_its_row_is_gone(world):
+    """Get it done on a page row files an item the briefing would close when the row is gone, but the briefing
+    only sweeps with --file, and the cockpit collects without: so the cockpit sweeps its own items after a
+    full pass. Only its own, only in sections that answered in full"""
+    world.runner.handlers["inbox.list"] = lambda argv: ok([
+        {"id": SWEPT_ID, "state": "open", "from": "bridge-cockpit", "key": "briefing:morning:checks:gone-row"},
+        {"id": KEPT_ID, "state": "open", "from": "bridge-cockpit", "key": CHECK_INBOX_KEY},
+        {"id": YES_ID, "state": "open", "from": "briefing/morning", "key": "briefing:morning:checks:other"},
+        {"id": YES2_ID, "state": "open", "from": "bridge-cockpit", "key": "briefing:morning:nosuchsection:x"},
+        {"id": ONLY_ID, "state": "done", "from": "bridge-cockpit", "key": "briefing:morning:checks:old"}])
+    full_pass(world)
+    assert writes(world) == [I(world, "close", SWEPT_ID, "--note", "its row is no longer in the briefing")]
+
+
+def test_no_sweep_after_a_quick_pass_or_when_a_section_did_not_answer_in_full(world):
+    world.runner.handlers["inbox.list"] = lambda argv: ok([
+        {"id": SWEPT_ID, "state": "open", "from": "bridge-cockpit", "key": "briefing:morning:checks:gone-row"}])
+    world.app.inbox_cache = (0.0, None)
+    world.runner.calls.clear()
+    world.app.collector.request("quick")
+    world.app.collector.drain()
+    assert not any(world.runner.key(c) == "inbox.close" for c in world.runner.calls)
+    original = world.runner.handlers["briefing.collect"]
+
+    def failing(argv):
+        data = json.loads(original(argv).out)
+        for pg in data["pages"]:
+            for sec in pg["sections"]:
+                if sec["id"] == "checks":
+                    sec["status"] = "error"
+        return ok(data)
+    world.runner.handlers["briefing.collect"] = failing
+    full_pass(world)
+    assert not any(world.runner.key(c) == "inbox.close" for c in world.runner.calls)
+
+
+def test_a_page_item_put_off_or_handed_on_leaves_its_page_until_the_day_comes(world):
+    def listed():
+        sec = next(x for p in world.app.collector.model["pages"] if p["id"] == "systems"
+                   for x in p["sections"] if x["id"] == "checks")
+        return [i["key"] for i in sec["items"]]
+    assert listed() == [CHECK_KEY]
+    world.act("later", key=CHECK_KEY, until=TOMORROW)
+    assert listed() == []
+    items, _ = world.app.collector.page_items("systems", "checks")
+    assert items == []
+    world.act("unhide", key=CHECK_KEY)
+    assert listed() == [CHECK_KEY]
+
+
+def test_a_page_item_that_is_gone_or_not_actionable_is_refused(world):
+    with pytest.raises(ActionError) as err:
+        world.act("do_it", keys=["item:systems/checks/vanished"])
+    assert err.value.code == "stale_row"
+    quiet, _ = world.app.collector.page_items("systems", "accounts")
+    with pytest.raises(ActionError) as err:
+        world.act("do_it", keys=[quiet[0]["key"]])
+    assert err.value.code == "not_applicable"
+    with pytest.raises(ActionError):
+        world.act("do_it", keys=["item:../../etc/x"])
 
 
 RELAY_OFF = "cockpit:\n  enabled: true\n  language: en\n  relay: false\nworkplace:\n  control:\n    name: Control\n"

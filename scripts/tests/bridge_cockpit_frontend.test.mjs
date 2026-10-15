@@ -1495,3 +1495,14 @@ test('demo badge: a short text in both tables, shown in the header in mock mode 
   assert.match(header, /s\.mock \? html`<span class="hdr-demo" title=\$\{t\.mockNote\}>[^`]*\$\{t\.demoBadge\}[^`]*\$\{t\.demoBadgeShort\}/)
   assert.match(read('style.css'), /\.hdr-demo \{/)
 })
+
+test('a page item a person can act on gets the same row as an inbox item: Do it, Advise, Settle', () => {
+  const it = { title: 'Backup stale', key: 'item:systems/checks/backup', actionable: true }
+  assert.deepEqual(logic.actionRow(it, new Map()), { key: 'item:systems/checks/backup', title: 'Backup stale', settle: ['done', 'not_doing'] })
+  assert.equal(logic.pageItemActs(it), true)
+  // nothing to do on it, or it has an inbox item or a task of its own (their path stays): no buttons
+  assert.equal(logic.pageItemActs({ ...it, actionable: false }), false)
+  assert.equal(logic.pageItemActs({ ...it, inbox: 'x' }), false)
+  assert.equal(logic.pageItemActs({ ...it, task: 't' }), false)
+  assert.equal(logic.actionRow({ title: 'plain', key: 'item:a/b/c', actionable: false }, new Map()), null)
+})

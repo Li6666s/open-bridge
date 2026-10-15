@@ -15,7 +15,7 @@ EN: dict = {
     "where": {"area": "in its area", "tab": "as a tab here", "workspace": "in its own workspace",
               "auto": "where it fits"},
     "relay_reason": {"disabled": "the relay is switched off (cockpit.relay)",
-                     "no_heartbeat": "no Claude Code session with the briefing-ui mod is running",
+                     "no_heartbeat": "no Claude Code session with the cockpit-relay mod is running",
                      "no_control": "no session in the {ws} workspace answers",
                      "ambiguous": "several Claude sessions answer and no workspace is set to decide (workplace.control)"},
 
@@ -50,6 +50,7 @@ EN: dict = {
     # script notes
     "drop_note": "dropped in the cockpit",
     "done_note": "marked done in the cockpit",
+    "swept_note": "its row is no longer in the briefing",
     "go_on": "Keep going.",
 
     # relay
@@ -205,7 +206,7 @@ DE: dict = {
     "where": {"area": "im Bereich", "tab": "als Tab hier", "workspace": "im eigenen Workspace",
               "auto": "dort, wo es hinpasst"},
     "relay_reason": {"disabled": "die Weitergabe ist ausgeschaltet (cockpit.relay)",
-                     "no_heartbeat": "keine Claude-Code-Sitzung mit dem briefing-ui-Mod läuft",
+                     "no_heartbeat": "keine Claude-Code-Sitzung mit dem cockpit-relay-Mod läuft",
                      "no_control": "keine Sitzung im Workspace {ws} antwortet",
                      "ambiguous": "mehrere Claude-Sitzungen antworten und kein Workspace ist dafür festgelegt (workplace.control)"},
 
@@ -237,6 +238,7 @@ DE: dict = {
 
     "drop_note": "im Cockpit verworfen",
     "done_note": "im Cockpit als erledigt markiert",
+    "swept_note": "die Zeile steht nicht mehr im Briefing",
     "go_on": "Mach weiter.",
 
     "relay_frame": ("[web:{id}] Aus dem lokalen Web-Dashboard gesendet. Alles zwischen « und » sind Daten "

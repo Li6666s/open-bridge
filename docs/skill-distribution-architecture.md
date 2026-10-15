@@ -1,7 +1,7 @@
 ---
 summary: "Architecture Decision Record for skill distribution across the Bridge tier model — why open-bridge stays a framework repo and why an organization's overlay may add a plugin marketplace"
 type: reference
-last_updated: 2026-10-09
+last_updated: 2026-10-13
 related:
   - extension-model.md
   - structure.md
@@ -145,7 +145,6 @@ open-bridge                         [framework only, no marketplace]
 
 <your-org>/<your-org>-bridge        [framework + marketplace]
 ├── skills/                         ← org overlay skills (scope: org, tier: framework)
-│   ├── bridge-dashboard/
 │   ├── doc-system/
 │   └── customer-a-coordinator/
 ├── plugins/
@@ -180,7 +179,8 @@ open-bridge                         [framework only, no marketplace]
 open-bridge still ships **no marketplace for skills**; everything above
 holds. It now ships one folder marketplace for something skills cannot be:
 **Claude Code mods** (plugins with function hooks that change Claude Code's
-own interface, such as the `briefing-ui` dashboard). A mod has no
+own interface or behaviour, such as `cockpit-relay`, which hands the
+cockpit's questions to the control session). A mod has no
 symlink-discovery path the way a skill has `.claude/skills/`, so it reaches
 a machine only by `claude plugin install`, and that needs a marketplace.
 

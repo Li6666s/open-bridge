@@ -28,7 +28,8 @@ from .relay import KINDS as ASK_KINDS, RELAY_ID_RE
 from .history import item as history_item
 from .store import append_log
 
-ROW_KEY_RE = re.compile(r"^(inbox|task|ref|title):.{1,240}\Z")
+ACTIVE_INBOX_STATES = ("open", "approved", "waiting", "deferred")
+ROW_KEY_RE = re.compile(r"^(inbox|task|ref|title|item):.{1,240}\Z")
 INBOX_ID_RE = re.compile(r"^[0-9]{8}-[0-9]{4}-[a-z0-9][a-z0-9-]{0,119}\Z")
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,79}\Z")
 SESSION_ID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
@@ -253,6 +254,8 @@ class Actions:
                               inbox_key=it.get("key"), sources=["inbox"])
             row["key"] = key
             return {"row": row, "out": {"settle": list(m.SETTLE_OUTCOMES), "closable": False}, "hidden": False}
+        if key.startswith("item:"):
+            return self.page_item_entry(key)
         if key.startswith("task:"):
             slug = key[5:]
             if not SLUG_RE.match(slug) or not (root / "work" / "tasks" / slug / "STATUS.md").is_file():
@@ -260,6 +263,26 @@ class Actions:
             row = m.task_row(slug, slug)
             return {"row": row, "out": {"settle": list(m.SETTLE_OUTCOMES), "closable": True}, "hidden": False}
         return None
+
+    def page_item_entry(self, key: str) -> dict | None:
+        """A row of the Status, Dates, Trackers or More page, handed on like any other: built from the item as
+        the briefing shows it now (None once it is gone), and only when its section calls it actionable"""
+        found = self.app.collector.page_item_by_key(key)
+        if not found:
+            return None
+        pg, sec, it = found
+        if it.get("actionable") is not True:
+            raise self.not_applicable("a person has nothing to do on this row")
+        profile = self.app.collector.view_profile() or ""
+        url = it.get("url") if isinstance(it.get("url"), str) and re.match(r"https?://", it["url"]) else None
+        # an id of the source lets the briefing's own sweep close the item once the row is gone; a hash cannot
+        inbox_key = f"briefing:{profile}:{sec['id']}:{it['id']}" if it.get("id") and profile else None
+        row = m._base_row(title=it["title"], url=url, sources=[sec.get("title") or sec["id"]],
+                          page_item={"section": sec.get("title") or sec["id"], "detail": it.get("detail") or "",
+                                     "inbox_key": inbox_key, "row": f":{sec['id']}:{it['id']}" if it.get("id") else None})
+        row["key"] = key
+        hidden = (self.app.store.hidden().get(key) or "") > self.today().isoformat()
+        return {"row": row, "out": {"settle": list(m.SETTLE_OUTCOMES), "closable": False}, "hidden": hidden}
 
     def entries(self, keys: list[str]) -> list[dict]:
         return [self.entry(k, "keys") for k in keys]
@@ -651,9 +674,13 @@ class Actions:
         """A row without an inbox item or a task behind it (an issue, an application, a deadline) becomes
         an inbox item an agent can start on; the row itself leaves the briefing for 30 days, the inbox
         item stands for it. None when the inbox refused or answered with something that is no id."""
-        source = (row.get("sources") or ["briefing"])[0]
-        detail = " ".join(x for x in [f"{source}:", row.get("ref") or "", m.row_url(row) or ""] if x)
-        new_id = self.inbox_add(ctx, row["key"], row["title"], detail)
+        page = row.get("page_item")
+        if page:
+            new_id = self.file_page_item(ctx, row, page)
+        else:
+            source = (row.get("sources") or ["briefing"])[0]
+            detail = " ".join(x for x in [f"{source}:", row.get("ref") or "", m.row_url(row) or ""] if x)
+            new_id = self.inbox_add(ctx, row["key"], row["title"], detail)
         if new_id is None:
             return None
         until = (self.today() + dt.timedelta(days=30)).isoformat()
@@ -661,11 +688,32 @@ class Actions:
         ctx.settled.append(row["key"])
         return {"inbox_id": new_id, "title": row["title"], "area": row.get("area")}
 
-    def inbox_add(self, ctx: Ctx, key: str, summary: str, detail: str) -> str | None:
-        """File a free decision item for a person under `web:<key>`; its id, or None with a note."""
-        argv = self.inbox("add", "--from", "bridge-cockpit", "--kind", "decision", "--gate", "free", "--closer", "person",
-                          f"--key=web:{key}", f"--summary={m.short(summary, 200)}", f"--detail={detail}")
-        run = ctx.call("inbox.add", key, argv, SHORT_TIMEOUT)
+    def file_page_item(self, ctx: Ctx, row: dict, page: dict) -> str | None:
+        """The inbox item for a page row: the one the briefing's `to_inbox` already filed under its key, else a
+        new one under that key, which the briefing closes when the row is gone. A row without a source id
+        has no such key: it is filed for a person to close."""
+        inbox_key = page.get("inbox_key")
+        if inbox_key:
+            # the same row filed under any profile's name: the cockpit's profile often extends the briefing's
+            same = page["row"]
+            for e in self.app.inbox_listing() or []:
+                key = str(e.get("key") or "") if isinstance(e, dict) else ""
+                if ((key == inbox_key or key.startswith("briefing:") and key.endswith(same))
+                        and e.get("state") in ACTIVE_INBOX_STATES and INBOX_ID_RE.match(str(e.get("id")))):
+                    return e["id"]
+        detail = " ".join(x for x in [page.get("detail"), m.row_url(row) or ""] if x)
+        summary = f"{page['section']}: {row['title']}"
+        if inbox_key:
+            return self.inbox_add(ctx, row["key"], summary, detail, key=inbox_key, closer="reporter")
+        return self.inbox_add(ctx, row["key"], summary, detail)
+
+    def inbox_add(self, ctx: Ctx, row_key: str, summary: str, detail: str, key: str | None = None,
+                  closer: str = "person") -> str | None:
+        """File a free decision item for a person, under `web:<row key>` unless a key is given; its id, or None
+        with a note."""
+        argv = self.inbox("add", "--from", "bridge-cockpit", "--kind", "decision", "--gate", "free", "--closer", closer,
+                          f"--key={key or 'web:' + row_key}", f"--summary={m.short(summary, 200)}", f"--detail={detail}")
+        run = ctx.call("inbox.add", row_key, argv, SHORT_TIMEOUT)
         new_id = (run.out or "").strip().splitlines()[-1:] if run.ok else []
         if not run.ok or not new_id or not INBOX_ID_RE.match(new_id[0]):
             ctx.note(self.tx["file_failed"].format(err=m.short(run.err or run.out or "?", 100)), bad=True)

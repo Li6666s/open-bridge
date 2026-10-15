@@ -29,8 +29,7 @@ on a click), the agent tabs and sessions, the workers, the machines and the
 tokens of the week. It runs on your own computer, answers only on
 `127.0.0.1`, and acts only through the Bridge scripts (`inbox.py`, `task.py`,
 `workplace.py` and its terminal driver). Nothing on it costs tokens until you
-press a button that asks Claude or opens an agent tab. The briefing card
-inside Claude Code is a separate mod (`briefing-ui`); the relay that hands the
+press a button that asks Claude or opens an agent tab. The relay that hands the
 cockpit's questions to your control session is the mod `cockpit-relay`.
 
 Two parts work together:
@@ -576,6 +575,21 @@ files the row to the inbox first (`inbox.py add`, free, closed by a person,
 with the source and its link as detail), starts the agent on that item, and
 takes the row out of the briefing for 30 days, since the inbox item now stands
 for it. "Ask Claude" stays beside it for a quick look.
+
+**The same on the other pages.** A row on Status, Dates, Trackers or More that is a
+finding (red or yellow) or a tracker row has Get it done, Advise and Close as well,
+in the table and in its detail. It is keyed `item:<page>/<section>/<row id>` (a hash of
+the title when the source gives no id). Get it done files it to the inbox under the
+key `briefing:<profile>:<section>:<row id>`, the one `to_inbox` uses, so an item the
+briefing already filed for that row is reused instead of doubled (under any profile's
+name, since the cockpit's profile often extends the briefing's). After every full pass
+the cockpit closes the items it filed this way whose row is gone (the probe is green
+again); a section that failed or was cut short closes nothing. The briefing's own sweep
+does the same when it runs with `--file`. A row without a source id is filed for a
+person to close. The row leaves its page for 30 days, or for the day you choose with
+Later. Rows that need no one (a gauge, an appointment, a commit count, a log line) get no
+buttons; a section can switch it for all its rows with `actionable: true|false` in its
+page entry (docs/briefings.md).
 
 **Close in two clicks.** Every row of the Briefing that can end, its detail,
 a task row on a page and a selection carry "Close ▾" with two outcomes,

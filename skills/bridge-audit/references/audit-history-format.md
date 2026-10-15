@@ -188,7 +188,7 @@ The audit-history is read by:
 - `/bridge-learn trends` — surfaces recurring findings and per-check severity
   evolution
 - `/bridge-audit` itself — when checking for recurring patterns in current run
-- `bridge-dashboard` (optional, Phase 4) — could chart severity-over-time
+- the cockpit (`scripts/bridge-cockpit.py`, optional, Phase 4) could chart severity over time
 
 Files are JSON for stable parsing. **Do not modify by hand** — append-only
 from `/bridge-audit`.

@@ -149,13 +149,6 @@ jobs:
       - name: Run cmux skill test suite
         run: python3 -m pytest -q skills/cmux/tests
 
-      # The briefing-ui Claude Code mod (mods/briefing-ui): its pure functions
-      # and both text tables, compiled with a pinned TypeScript. No Claude Code
-      # on the runner; the test stubs the import from 'claude-code'. The engine
-      # tests (claude plugin test mods/briefing-ui) run locally, see mods/README.md.
-      - name: Run briefing-ui mod tests
-        run: npx -y -p typescript@5.6.3 -c 'node mods/briefing-ui/tests/pure.test.mjs'
-
       # The cockpit relay (mods/cockpit-relay): its pure functions, checked against the server's relay.py.
       - name: Run cockpit-relay mod tests
         run: npx -y -p typescript@5.6.3 -c 'node mods/cockpit-relay/tests/pure.test.mjs'

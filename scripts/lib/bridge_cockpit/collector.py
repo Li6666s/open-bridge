@@ -23,6 +23,7 @@ from typing import Any
 
 from . import model as m
 from .daybook import week_done
+from .details import INBOX_ID_RE
 from . import returns as ret
 
 TASK_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,79}\Z")      # the same rule as actions.SLUG_RE
@@ -36,6 +37,7 @@ PASS_FLAGS = {
 RANK = {"delta": 0, "quick": 1, "full": 2, "both": 3}
 COLLECT_TIMEOUT = 120
 LIST_TIMEOUT = 20
+SWEEP_TIMEOUT = 20      # one inbox close of the sweep after a full pass
 ITEM_CAP = 50
 DRAWN_CAP = 300
 ADOPT_CAP = 4
@@ -58,9 +60,10 @@ def make_link(url: str | None, root: Path) -> dict | None:
     return None
 
 
-def info_out(it: dict, index: int, root: Path, tabs: list[dict], view: dict | None, starting: set) -> dict:
+def info_out(it: dict, index: int, root: Path, tabs: list[dict], view: dict | None, starting: set,
+             page_id: str = "", section_id: str = "") -> dict:
     tab = m.tab_for({"task": it.get("task"), "inbox_id": None}, tabs) if it.get("task") else None
-    return {"index": index, "title": it["title"], "detail": it["detail"], "when": it["when"], "tone": it["tone"],
+    return {"index": index, "key": m.item_key(page_id, section_id, it), "actionable": it.get("actionable") is True, "title": it["title"], "detail": it["detail"], "when": it["when"], "tone": it["tone"],
             "link": make_link(it.get("url"), root), "task": it.get("task"), "ask": it["ask"], "mark": it["mark"],
             "priority": it.get("priority"), "state": it.get("state"), "lines": it.get("lines", []),
             "meter": it.get("meter"), "group": it.get("group"), "icon": it.get("icon"),
@@ -180,7 +183,8 @@ def build_model(view: dict, *, root: Path, tabs: list[dict], seen: dict, control
         secs = []
         for s in pg["sections"]:
             cap = DRAWN_CAP if s.get("view") in ("mosaic", "tiles", "groups") else ITEM_CAP    # drawn views filter every row
-            items = [info_out(it, i, root, tabs, view, starting) for i, it in enumerate(s["items"][:cap])]
+            items = [info_out(it, i, root, tabs, view, starting, pg["id"], s["id"]) for i, it in enumerate(s["items"][:cap])]
+            items = [i for i in items if not (i["actionable"] and (i["key"] in settled or (hidden.get(i["key"]) or "") > today))]
             secs.append({k: s[k] for k in ("id", "kind", "title", "status", "reason", "alarm", "empty", "count", "total",
                                            "weight", "bad", "as_of")} | {"items": items, "view": s.get("view"),
                                                                           "hide_empty": s.get("hide_empty") is True,
@@ -400,6 +404,41 @@ class Collector:
             self.settled = {k: v for k, v in self.settled.items() if k in present}
         app.store.save_view(merged, app.cfg.language)
         self.rebuild()
+        if kind == "full":
+            self.sweep_filed(fresh_view)
+
+    def sweep_filed(self, view: dict) -> None:
+        """Close the inbox items Get it done filed for page rows (`briefing:<profile>:<section>:<id>`, from the
+        cockpit) whose row this full pass no longer shows. The briefing does the same for its own items, but
+        only when it runs with --file, which the cockpit never does. A section that failed, was skipped or
+        was cut short cannot say a row is gone, so its items stay"""
+        app = self.app
+        profile = view.get("profile") or app.cfg.profile
+        if not profile:
+            return
+        prefix = f"briefing:{profile}:"
+        looked, present = set(), set()
+        for pg in view.get("pages", []):
+            for sec in pg.get("sections", []):
+                items = sec.get("items", [])
+                if sec.get("status") != "ok" or sec.get("total", len(items)) > len(items):
+                    continue
+                looked.add(sec["id"])
+                present |= {f"{prefix}{sec['id']}:{it['id']}" for it in items if it.get("id")}
+        if not looked:
+            return
+        app.inbox_cache = (0.0, None)
+        closed = False
+        for e in app.inbox_listing() or []:
+            key = str(e.get("key") or "") if isinstance(e, dict) else ""
+            if (e.get("from") != "bridge-cockpit" or e.get("state") not in ("open", "approved", "waiting", "deferred")
+                    or not key.startswith(prefix) or not INBOX_ID_RE.match(str(e.get("id")))):
+                continue
+            if key[len(prefix):].split(":", 1)[0] in looked and key not in present:
+                run = app.run(app.actions.inbox("close", e["id"], "--note", app.tx["swept_note"]), SWEEP_TIMEOUT)
+                closed = closed or run.ok
+        if closed:
+            app.inbox_cache = (0.0, None)
 
     @staticmethod
     def _json(run) -> Any:
@@ -526,8 +565,25 @@ class Collector:
                     if s["id"] == section_id:
                         tabs = self.app.tabs.tab_list()
                         starting = self.starting_items()
-                        items = [info_out(it, i, self.app.root, tabs, view, starting) for i, it in enumerate(s["items"])]
+                        items = [info_out(it, i, self.app.root, tabs, view, starting, page_id, section_id) for i, it in enumerate(s["items"])]
+                        out = {**self.app.store.hidden(), **{k: "9999-12-31" for k in self.app.store.dismissed()}}
+                        today = m.iso_date(self.app.clock())
+                        items = [i for i in items if not (i["actionable"] and (i["key"] in self.settled or (out.get(i["key"]) or "") > today))]
                         return items, s.get("total", len(items))
+        return None
+
+    def view_profile(self) -> str | None:
+        with self.lock:
+            return (self.view or {}).get("profile") or self.app.cfg.profile or None
+
+    def page_item_by_key(self, key: str) -> tuple[dict, dict, dict] | None:
+        """(page, section, raw info) of a page item by its `item:` key, in the whole section (not the capped list)"""
+        with self.lock:
+            for pg in (self.view or {}).get("pages", []):
+                for s in pg["sections"]:
+                    for it in s["items"]:
+                        if m.item_key(pg["id"], s["id"], it) == key:
+                            return pg, s, it
         return None
 
     def page_item(self, page_id: str, section_id: str, index: int) -> tuple[dict, dict] | None:

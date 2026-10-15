@@ -268,7 +268,7 @@ def test_socket_down_is_an_error_not_the_stale_session_file(fake):
 
 
 def test_unknown_verb_is_an_error(fake):
-    done = fake.call({"verb": "close"})
+    done = fake.call({"verb": "explode"})
     assert done.returncode == 1 and "unknown verb" in json.loads(done.stdout)["error"]
 
 
@@ -736,3 +736,54 @@ def test_launch_report_names_the_workspace_the_tab_went_to(fake, target, extra, 
                           "here": None})["report"]
     (line,) = [x for x in report if x.startswith("tab Alpha")]
     assert line.endswith(f" in {where}"), report
+
+
+def test_control_opens_a_new_agent_tab_in_an_existing_control_workspace(fake):
+    report = fake.answer({"verb": "control", "control": {"name": "Platform"}, "command": "claude",
+                          "root": "/tmp/x"})["report"]
+    tab = next(a for a in fake.argv() if a[:1] == ["new-surface"])
+    assert tab[tab.index("--workspace") + 1] == "workspace:3"
+    assert tab[tab.index("--command") + 1].startswith("claude")
+    assert not any(a[:2] == ["workspace", "create"] for a in fake.argv())
+    assert not any("close" in " ".join(a) for a in fake.argv())
+    assert any("tab Platform in Platform" in line for line in report)
+
+
+def test_control_creates_the_missing_control_workspace_with_the_agent(fake):
+    fake.answer({"verb": "control", "control": {"name": "Hub", "color": "#37474F"}, "command": "claude -n hub",
+                 "root": "/tmp/x"})
+    create = next(a for a in fake.argv() if a[:2] == ["workspace", "create"])
+    assert create[create.index("--name") + 1] == "Hub"
+    assert create[create.index("--command") + 1] == "claude -n hub" + drv.KEEP_SHELL
+
+
+def test_control_without_name_or_command_is_an_error(fake):
+    assert fake.call({"verb": "control", "control": {}, "command": "claude"}).returncode == 1
+    assert fake.call({"verb": "control", "control": {"name": "Hub"}, "command": " "}).returncode == 1
+
+
+# ---------------------------------------------------------------- the optional verbs the cockpit steers with
+
+def test_caps_name_every_verb_this_driver_serves(fake):
+    caps = fake.answer({"verb": "caps"})["caps"]
+    assert {"tabs", "sessions", "open", "launch", "send", "rename", "control", "focus", "key", "screen", "close"} <= set(caps)
+
+
+def test_focus_key_screen_and_close_address_the_tab_in_its_workspace(fake):
+    fake.answer({"verb": "focus", "tab": "surface:91"})
+    fake.answer({"verb": "key", "tab": "surface:91", "key": "1"})
+    fake.answer({"verb": "key", "tab": "surface:91", "key": "escape"})
+    assert fake.answer({"verb": "screen", "tab": "surface:91", "lines": 40})["text"] == "OK"
+    fake.answer({"verb": "close", "tab": "surface:91"})
+    argv = fake.argv()
+    assert ["select-workspace", "--workspace", "workspace:3"] in argv
+    assert ["focus-panel", "--panel", "surface:91", "--workspace", "workspace:3"] in argv
+    assert ["send-key", "--workspace", "workspace:3", "--surface", "surface:91", "1"] in argv
+    assert ["send-key", "--workspace", "workspace:3", "--surface", "surface:91", "escape"] in argv
+    assert ["read-screen", "--workspace", "workspace:3", "--surface", "surface:91", "--lines", "40"] in argv
+    assert ["close-surface", "--surface", "surface:91", "--workspace", "workspace:3"] in argv
+
+
+def test_a_key_outside_the_fixed_set_is_refused(fake):
+    done = fake.call({"verb": "key", "tab": "surface:91", "key": "ctrl-c"})
+    assert done.returncode == 1 and "key" in json.loads(done.stdout)["error"]

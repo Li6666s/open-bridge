@@ -1,14 +1,14 @@
 ---
 summary: "Plan the day's work as workspaces with one agent tab per task, and steer the tabs from one place, through a driver so the same Bridge works with any terminal tool or none."
 type: guide
-last_updated: 2026-10-09
+last_updated: 2026-10-15
 related:
   - ../scripts/workplace.py
   - ../scripts/task.py
   - inbox.md
   - ../skills/briefing/references/control.md
   - ../skills/cmux/SKILL.md
-  - briefing-dashboard.md
+  - bridge-cockpit.md
 ---
 
 # Workplace
@@ -29,6 +29,7 @@ python3 scripts/workplace.py tasks              # every active task: area, prior
 python3 scripts/workplace.py teams              # team recipes: ordered role tabs on one task
 python3 scripts/workplace.py send <tab> <text>  # type into one tab
 python3 scripts/workplace.py adopt <tab> <slug> # name an open tab after its task
+python3 scripts/workplace.py control --yes      # a new agent tab in the control workspace (workplace.control.command, default claude)
 ```
 
 ## Plan and driver are separate on purpose
@@ -60,7 +61,7 @@ them; it can then only print the commands (`driver: none`).
 | Terminal | Steerable through | Driver |
 |---|---|---|
 | [cmux](https://github.com/manaflow-ai/cmux) (macOS) | CLI and socket API: workspaces, tabs, splits, sidebar status, notifications | ships as [`skills/cmux`](../skills/cmux/SKILL.md), the reference driver |
-| tmux | `tmux` commands (sessions, windows, `send-keys`, `list-panes`) | write one (below) |
+| tmux, in any terminal app (iTerm, Terminal, Ghostty, VS Code) | `tmux` commands (sessions, windows, `send-keys`, `list-panes`, `capture-pane`) | ships as [`skills/tmux`](../skills/tmux/SKILL.md) |
 | WezTerm | `wezterm cli` (spawn, send-text, list) | write one (below) |
 | kitty | remote control (`kitten @ launch`, `send-text`, `ls`) | write one (below) |
 | none of these | | `driver: none`: the plan prints the commands to start by hand |
@@ -70,9 +71,9 @@ side by side: workspaces with colors, tab status the agent itself reports (worki
 waiting, needs you), notifications, and an API for all of it. It is also the driver
 that ships and is tested, and so far the only one: every workplace feature,
 `launch`, teams and the tab steering (`status`, `send`, `adopt`) included, and the
-dashboard's tab actions built on them (setup in
-[`briefing-dashboard.md`](briefing-dashboard.md)), has run only with Claude Code as
-the agent and cmux as the terminal. Other agents and
+cockpit's tab actions built on them ([`bridge-cockpit.md`](bridge-cockpit.md)), has run
+with Claude Code as the agent and cmux as the terminal; `skills/tmux` ships a
+second driver. Other agents and
 terminals are untested until an issue for that combination says otherwise. The
 others are good choices too; their driver is a small program speaking the protocol
 below, and the plan, the briefing and the inbox stay exactly the same.
@@ -83,8 +84,8 @@ below, and the plan, the briefing and the inbox stay exactly the same.
 workplace:
   driver: none                       # or {command: ["python3", "path/to/driver.py"]}
   control: {name: Control}           # the workspace whose session steers the others; the
-                                     # dashboard in that session polls the agent tabs, the
-                                     # others read its state; optional `command:` starts an
+                                     # cockpit hands it questions through the relay;
+                                     # optional `command:` starts an
                                      # agent there when a driver creates the workspace
   workspaces:
     - {name: Bigcorp, contexts: [bigcorp], color: "#1565C0", description: "client work for Bigcorp"}
@@ -120,8 +121,21 @@ the same shape `agents/_runtime/approval.py` uses for owner approval:
 | `{"verb": "launch", "tabs": [{"label", "slug", "command", "workspace", "aliases"}], "target": "tab" \| "workspace" \| "area", "here": ref \| null}`: one `target` key with one of three values, never `auto` (the CLI splits `--target auto` into one `workspace` call and one `area` call) | `{"report": ["line", ...]}` |
 | `{"verb": "send", "tab": ref, "text": "..."}` | `{"report": [...]}` |
 | `{"verb": "rename", "tab": ref, "title": "..."}` | `{"report": [...]}` |
+| `{"verb": "caps"}` | `{"caps": ["tabs", "sessions", "open", "launch", "send", "rename", ...]}`: the verbs this driver serves. A driver that answers no `caps` counts as serving the six above |
+| `{"verb": "focus", "tab": ref}` | `{"report": [...]}`: the tab comes to the front |
+| `{"verb": "key", "tab": ref, "key": k}` | `{"report": [...]}`: one key into the tab, `k` one of `enter`, `escape`, `y`, `n`, `1` to `9` |
+| `{"verb": "screen", "tab": ref, "lines": n}` | `{"text": "..."}`: the last `n` lines the tab shows, plain text, read only |
+| `{"verb": "close", "tab": ref}` | `{"report": [...]}`: closes that one tab, only ever on an explicit request |
 
-Rules every driver keeps: it never closes a tab or a workspace; a tab that is already
+The last five are optional. A terminal that cannot do one leaves it out of
+`caps`, and whoever steers the tabs (`workplace.py`, the cockpit) offers only
+what the driver serves. With them the cockpit steers any terminal the same way:
+jump to a tab, answer a question with a key, read what a tab shows, close a
+finished one. A `ref` is the driver's own name for a tab (`surface:3` in cmux,
+`%3` in tmux): letters, digits and `:%_.@/-`, at most 64 characters.
+
+Rules every driver keeps: it never closes a tab or a workspace on its own (only
+`close`, which a person asked for); a tab that is already
 open is reused, never opened twice; `here` is the calling tab, which becomes the
 control tab and moves last so no workspace is ever left empty. A driver that fails or
 answers something unreadable is reported as a line, never raised, so the plan always
@@ -227,15 +241,12 @@ Every agent tab, launched or opened by the plan, starts with `BRIDGE_TAB_SLUG=<s
 its environment, so a session, or any tool running in that tab, can tell it was started for
 one item rather than as a free session. `status` names the task (`slug`) or open inbox item (`item`) a tab works on.
 A task tab's slug is the task slug; an inbox item's tab gets `inbox-<short id>`.
-The briefing-ui dashboard ([`briefing-dashboard.md`](briefing-dashboard.md)) reads
-both from `status`: `is_self` keeps its own tab out of the tabs it lists, and `slug`
-ties a tab to the task row it works on. It also reads `BRIDGE_TAB_SLUG` itself: in
-a launched tab it shows no band above the prompt and no morning hint, and it does
-not poll the agent tabs.
-
-The cockpit ([`bridge-cockpit.md`](bridge-cockpit.md), an early version) uses the same
-driver verbs for its tab buttons. Without a driver it starts nothing and hands over the
-command to start by hand.
+The cockpit ([`bridge-cockpit.md`](bridge-cockpit.md)) reads `slug` and `item` from
+`status` to tie a tab to the task or inbox row it works on, and uses the same driver
+verbs for its tab buttons; without a driver it starts nothing and hands over the
+command to start by hand. The relay mod `mods/cockpit-relay` reads `BRIDGE_TAB_SLUG`
+itself: in a launched tab it never heartbeats, so an agent tab never takes the
+cockpit's questions.
 
 `workplace.py tasks [--json]` lists every active task flat, sorted by priority and then
 activity: label, area, priority, score, `blocked_by`, and `stale` (no activity for longer

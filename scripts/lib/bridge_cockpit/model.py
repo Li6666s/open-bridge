@@ -11,6 +11,7 @@ state as a word instead of a sentence) the docstring says so.
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import json
 import re
 from typing import Any
@@ -159,6 +160,7 @@ def parse_info(i: dict) -> dict:
             "actions": [{"id": a["id"], "label": a["label"]} for a in _list(i.get("actions"))
                         if isinstance(a, dict) and isinstance(a.get("id"), str) and isinstance(a.get("label"), str)] or None,
             "row_id": as_text_or_null(i.get("row_id")),
+            "id": as_text_or_null(i.get("id")), "actionable": i.get("actionable") is True,
             "at": as_text_or_null(i.get("at")),
             "account": parse_account(i.get("account"))}
 
@@ -247,6 +249,12 @@ def row_key(row: dict) -> str:
     if row.get("ref"):
         return f"ref:{row['ref']}"
     return f"title:{row.get('title', '')[:60]}"
+
+
+def item_key(page_id: str, section_id: str, info: dict) -> str:
+    """The key of a page item: its source id, else a hash of its title (a row without an id still has one)"""
+    rid = info.get("id") or "h" + hashlib.sha1(as_text(info.get("title")).encode("utf-8")).hexdigest()[:10]
+    return f"item:{page_id}/{section_id}/{rid}"
 
 
 def launch_item(row: dict) -> str | None:
