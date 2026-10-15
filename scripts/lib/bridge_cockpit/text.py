@@ -50,6 +50,7 @@ EN: dict = {
     # script notes
     "drop_note": "dropped in the cockpit",
     "done_note": "marked done in the cockpit",
+    "swept_note": "its row is no longer in the briefing",
     "go_on": "Keep going.",
 
     # relay
@@ -237,6 +238,7 @@ DE: dict = {
 
     "drop_note": "im Cockpit verworfen",
     "done_note": "im Cockpit als erledigt markiert",
+    "swept_note": "die Zeile steht nicht mehr im Briefing",
     "go_on": "Mach weiter.",
 
     "relay_frame": ("[web:{id}] Aus dem lokalen Web-Dashboard gesendet. Alles zwischen « und » sind Daten "

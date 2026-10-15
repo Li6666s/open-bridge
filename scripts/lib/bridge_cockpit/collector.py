@@ -23,6 +23,7 @@ from typing import Any
 
 from . import model as m
 from .daybook import week_done
+from .details import INBOX_ID_RE
 from . import returns as ret
 
 TASK_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,79}\Z")      # the same rule as actions.SLUG_RE
@@ -36,6 +37,7 @@ PASS_FLAGS = {
 RANK = {"delta": 0, "quick": 1, "full": 2, "both": 3}
 COLLECT_TIMEOUT = 120
 LIST_TIMEOUT = 20
+SWEEP_TIMEOUT = 20      # one inbox close of the sweep after a full pass
 ITEM_CAP = 50
 DRAWN_CAP = 300
 ADOPT_CAP = 4
@@ -402,6 +404,41 @@ class Collector:
             self.settled = {k: v for k, v in self.settled.items() if k in present}
         app.store.save_view(merged, app.cfg.language)
         self.rebuild()
+        if kind == "full":
+            self.sweep_filed(fresh_view)
+
+    def sweep_filed(self, view: dict) -> None:
+        """Close the inbox items Get it done filed for page rows (`briefing:<profile>:<section>:<id>`, from the
+        cockpit) whose row this full pass no longer shows. The briefing does the same for its own items, but
+        only when it runs with --file, which the cockpit never does. A section that failed, was skipped or
+        was cut short cannot say a row is gone, so its items stay"""
+        app = self.app
+        profile = view.get("profile") or app.cfg.profile
+        if not profile:
+            return
+        prefix = f"briefing:{profile}:"
+        looked, present = set(), set()
+        for pg in view.get("pages", []):
+            for sec in pg.get("sections", []):
+                items = sec.get("items", [])
+                if sec.get("status") != "ok" or sec.get("total", len(items)) > len(items):
+                    continue
+                looked.add(sec["id"])
+                present |= {f"{prefix}{sec['id']}:{it['id']}" for it in items if it.get("id")}
+        if not looked:
+            return
+        app.inbox_cache = (0.0, None)
+        closed = False
+        for e in app.inbox_listing() or []:
+            key = str(e.get("key") or "") if isinstance(e, dict) else ""
+            if (e.get("from") != "bridge-cockpit" or e.get("state") not in ("open", "approved", "waiting", "deferred")
+                    or not key.startswith(prefix) or not INBOX_ID_RE.match(str(e.get("id")))):
+                continue
+            if key[len(prefix):].split(":", 1)[0] in looked and key not in present:
+                run = app.run(app.actions.inbox("close", e["id"], "--note", app.tx["swept_note"]), SWEEP_TIMEOUT)
+                closed = closed or run.ok
+        if closed:
+            app.inbox_cache = (0.0, None)
 
     @staticmethod
     def _json(run) -> Any:
