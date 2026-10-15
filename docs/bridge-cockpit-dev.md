@@ -1,7 +1,7 @@
 ---
 summary: "Working on the cockpit: which files make up the server, the page and the mod relay, which of them are shared with the rest of the Bridge, the edit and test loop (mock mode, a second instance beside the live one), recipes for a new verb, a new model field and new text, the rules the tests hold, and what has to travel together when it moves to open-bridge."
 type: guide
-last_updated: 2026-10-13
+last_updated: 2026-10-15
 related:
   - bridge-cockpit.md
   - ai-services.md
@@ -126,8 +126,15 @@ python3 scripts/bridge-cockpit.py status --json
   `&mock=1` (the server serves even static files only with the key; the sign-in
   redirect keeps `mock`, `lang`, `offline`, `empty` and `auth`). The page then
   renders invented data and sends no request. Add `&lang=de`,
-  `&offline=1`, `&empty=1`, `&auth=0`. Good for layout work; it does not
+  `&offline=1`, `&empty=1`, `&auth=0`, `&theme=light` or `&theme=dark` (forces
+  the mode for this load and saves nothing). Good for layout work; it does not
   exercise the server.
+- **The demo on the website** (`docs/cockpit-demo/`) is a generated copy of
+  `scripts/web/`, because GitHub Pages serves only `docs/`. After changing
+  anything in `scripts/web/`, run `python3 scripts/build-cockpit-demo.py --write`
+  and commit the copy with the change. It writes `colors.css` from `DESIGN.md`
+  and an `index.html` that turns mock mode on by itself; CI runs
+  `test_bridge_cockpit_demo.py`, which fails while the copy has drifted.
 - **A second instance beside the live one**:
   `python3 scripts/bridge-cockpit.py --state-dir /tmp/bw-dev serve --port 8798`,
   its link from `python3 scripts/bridge-cockpit.py --state-dir /tmp/bw-dev url`,

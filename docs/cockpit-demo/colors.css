@@ -1,0 +1,107 @@
+/* generated from DESIGN.md by scripts/lib/bridge_cockpit/design.py: edit DESIGN.md, not this */
+:root {
+  color-scheme: light;
+  --primary: #111827;
+  --primary-hover: #111827;
+  --secondary: #6B7280;
+  --accent: #6366F1;
+  --accent-subtle: #F9FAFB;
+  --accent-line: #E5E7EB;
+  --surface: #FFFFFF;
+  --surface-raised: #FFFFFF;
+  --surface-muted: #F3F4F6;
+  --on-surface: #374151;
+  --on-surface-muted: #6B7280;
+  --on-surface-faint: #6B7280;
+  --on-primary: #FFFFFF;
+  --border: #E5E7EB;
+  --border-strong: #6B7280;
+  --success: #10B981;
+  --warning: #B4762A;
+  --danger: #A33B36;
+  --info: #3B82F6;
+  --primary-edge: var(--primary);
+  --counter: var(--secondary);
+  --series-2: var(--accent);
+  --ink: var(--primary);
+  --scrim: rgb(4 14 26 / 0.32);
+}
+:root.dark {
+  color-scheme: dark;
+  --primary: #6366F1;
+  --primary-hover: #8B5CF6;
+  --secondary: #6B7280;
+  --accent: #A78BFA;
+  --accent-subtle: #1F2937;
+  --accent-line: #374151;
+  --surface: #111827;
+  --surface-raised: #111827;
+  --surface-muted: #374151;
+  --on-surface: #D1D5DB;
+  --on-surface-muted: #6B7280;
+  --on-surface-faint: #6B7280;
+  --on-primary: #FFFFFF;
+  --border: #374151;
+  --border-strong: #6B7280;
+  --success: #10B981;
+  --warning: #D29E56;
+  --danger: #CE6964;
+  --info: #3B82F6;
+  --primary-edge: var(--accent-line);
+  --counter: var(--accent);
+  --series-2: var(--accent-line);
+  --ink: var(--on-surface);
+  --scrim: rgb(0 0 0 / 0.55);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not(.light) {
+    color-scheme: dark;
+    --primary: #6366F1;
+    --primary-hover: #8B5CF6;
+    --secondary: #6B7280;
+    --accent: #A78BFA;
+    --accent-subtle: #1F2937;
+    --accent-line: #374151;
+    --surface: #111827;
+    --surface-raised: #111827;
+    --surface-muted: #374151;
+    --on-surface: #D1D5DB;
+    --on-surface-muted: #6B7280;
+    --on-surface-faint: #6B7280;
+    --on-primary: #FFFFFF;
+    --border: #374151;
+    --border-strong: #6B7280;
+    --success: #10B981;
+    --warning: #D29E56;
+    --danger: #CE6964;
+    --info: #3B82F6;
+    --primary-edge: var(--accent-line);
+    --counter: var(--accent);
+    --series-2: var(--accent-line);
+    --ink: var(--on-surface);
+    --scrim: rgb(0 0 0 / 0.55);
+  }
+}
+:root {
+  --void: #111827;
+  --void-raised: #111827;
+  --void-line: #374151;
+  --void-text: #D1D5DB;
+  --void-muted: #6B7280;
+  --void-faint: #6B7280;
+  --void-identity: #A78BFA;
+  --void-infra: #374151;
+  --void-workflow: #10B981;
+  --void-work: #D29E56;
+  --void-core: #FFFFFF;
+  --void-docs: #6B7280;
+  --void-other: #6B7280;
+  --void-live-working: #6B7280;
+  --void-live-asks: #D29E56;
+  --void-live-answer: #10B981;
+  --void-live-alarm: #CE6964;
+}
+:root {
+  --font-display: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --font-ui: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+}

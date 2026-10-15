@@ -1,0 +1,495 @@
+// SPDX-License-Identifier: MIT
+// Mock mode for frontend development: open index.html?mock=1 (optionally &lang=de,
+// &offline=1 for a relay that is offline, &empty=1 for an empty briefing, &auth=0 for
+// the sign-in panel). Everything here is invented example data in the shape of the
+// contract's /api/state payload (section 11). No request leaves the page, nothing runs.
+
+// the Jev tab's mock comes with the optional Jev files; without them the demo shows Jev as off
+const createMockJev = await import('./jev/logic.js').then(m => m.createMockJev, () => null)
+
+const MIN = 60000
+
+function row(over) {
+  return {
+    key: '', bucket: 'do', section: 'now', number: 0, title: '', why: [], sources: [],
+    inbox_id: null, gate: null, task: null, ref: null, url: null, link: null,
+    priority: null, urgency: null, area: null, area_names: [], task_type: null, due: null,
+    has_action: false, inbox_state: null, inbox_key: null, mark: null, is_new: false, is_changed: false,
+    tab: null, actions: [{ id: 'ask', primary: false, dim: false }], selectable: false, starting: false,
+    adopt_candidates: [], team: null, team_suggestions: [], closable: false, settle: ['done', 'not_doing'], review: null,
+    ...over,
+  }
+}
+
+const A = (id, primary = false, dim = false) => ({ id, primary, dim })
+
+function isoIn(days, now) {
+  const d = new Date(now + days * 86400000)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+function hhmm(ms) {
+  const d = new Date(ms)
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+
+export function buildState(now = Date.now(), opts = {}) {
+  const empty = !!opts.empty
+  const rows = {
+    review: row({
+      key: 'inbox:20261009-0900-review-demo-a1b2', bucket: 'do', section: 'now', title: 'Review the demo report',
+      why: ['due tomorrow', 'only you'], sources: ['inbox'], inbox_id: '20261009-0900-review-demo-a1b2', gate: 'only-you',
+      task: 'demo-task', urgency: 'today', area: 'Demo', area_names: ['Demo'], task_type: 'feature', due: isoIn(1, now),
+      inbox_state: 'open', inbox_key: 'demo-review', mark: { label: 'Demo', color: 'blue' }, is_new: true,
+      actions: [A('done', true), A('advise')], selectable: true,
+    }),
+    release: row({
+      key: 'task:alpha-release', bucket: 'do', section: 'now', title: 'Prepare the alpha release notes',
+      why: ['tab asks for permission'], sources: ['tasks'], task: 'alpha-release', priority: 'P0', urgency: 'now',
+      area: 'Ops', area_names: ['Ops'], task_type: 'ops', mark: { label: 'Ops', color: 'red' },
+      tab: { ref: 'surface:7', state: 'needs-you', live: true, waiting: true },
+      actions: [A('to_tab', true)], team: { team_id: 'build', started: 1, next_role: { id: 'review', name: 'Review' }, ready: false, waiting_for: 'Implement' },
+    }),
+    labels: row({
+      key: 'inbox:20261009-0910-tidy-labels-c3d4', bucket: 'delegate', section: 'give', title: 'Tidy the issue labels on the demo board',
+      why: ['needs your yes'], sources: ['inbox'], inbox_id: '20261009-0910-tidy-labels-c3d4', gate: 'your-yes', has_action: true,
+      priority: 'P2', area: 'Demo', area_names: ['Demo'], inbox_state: 'open', inbox_key: 'tidy-labels',
+      actions: [A('do', true), A('drop', false, true)], selectable: true,
+    }),
+    docs: row({
+      key: 'inbox:20261009-0915-update-docs-e5f6', bucket: 'delegate', section: 'give', title: 'Update the setup docs after the config change',
+      why: ['needs your yes', 'changed since 08:40'], sources: ['inbox'], inbox_id: '20261009-0915-update-docs-e5f6', gate: 'your-yes',
+      has_action: true, area: 'Docs', area_names: ['Docs'], inbox_state: 'open', inbox_key: 'update-docs',
+      mark: { label: 'Docs', color: 'green' }, is_changed: true, actions: [A('do', true), A('drop', false, true)], selectable: true,
+    }),
+    sweep: row({
+      key: 'inbox:20261009-0920-sweep-logs-0a0b', bucket: 'plan', section: 'give', title: 'Sweep old log files in the scratch folder',
+      why: ['may run alone'], sources: ['inbox'], inbox_id: '20261009-0920-sweep-logs-0a0b', gate: 'free', has_action: true,
+      area: 'Ops', area_names: ['Ops'], inbox_state: 'approved', inbox_key: 'sweep-logs',
+      actions: [A('approved', false, true), A('drop', false, true)],
+    }),
+    demo: row({
+      key: 'task:demo-task', bucket: 'tasks', section: 'work', title: 'Write the onboarding guide for the demo project',
+      why: ['1 in the inbox'], sources: ['tasks'], task: 'demo-task', priority: 'P1', area: 'Demo', area_names: ['Demo'],
+      task_type: 'feature', actions: [A('do', true), A('advise')], selectable: true, closable: true,
+      adopt_candidates: [{ ref: 'surface:9', name: 'notes', workspace: 'Demo' }], team_suggestions: ['build', 'research'],
+      link: { kind: 'file', path: 'work/tasks/demo-task/STATUS.md' },
+      review: { verdict: 'close', reason: 'The linked issue example/repo#7 was closed as completed on 07.10, every step is checked.',
+        confidence: 'medium', model: 'claude-haiku-5-5', kept: false, resolved: true, changed: true, previous_verdict: 'continue',
+        days_since_activity: 3, cached: false, chips: [{ kind: 'ref', ref: 'example/repo#7', state: 'closed' }, { kind: 'steps', count: 1 }],
+        closed_refs: ['example/repo#7'], title: 'Write the onboarding guide for the demo project', status: 'doing', priority: 'P1' },
+    }),
+    quiet: row({
+      key: 'task:quiet-docs', bucket: 'tasks', section: 'work', title: 'Tidy the old setup notes',
+      sources: ['tasks'], task: 'quiet-docs', priority: 'P3', area: 'Docs', area_names: ['Docs'], closable: true,
+      actions: [A('do', true), A('advise')],
+      review: { verdict: 'stale', reason: 'No log row, commit or note for 34 days and nothing blocks it.', confidence: 'high',
+        model: 'claude-haiku-5-5', kept: false, resolved: false, changed: false, days_since_activity: 34, cached: true,
+        chips: [{ kind: 'steps', count: 4 }], closed_refs: [], title: 'Tidy the old setup notes', status: 'doing', priority: 'P3' },
+    }),
+    waits: row({
+      key: 'task:vendor-reply', bucket: 'tasks', section: 'work', title: 'Settle the invoice format with the vendor',
+      sources: ['tasks'], task: 'vendor-reply', priority: 'P2', area: 'Demo', area_names: ['Demo'], closable: true,
+      actions: [A('do', true), A('advise')],
+      review: { verdict: 'waiting', reason: 'The vendor has not answered the question from 02.10 yet (example/repo#9 open).',
+        confidence: 'low', model: 'claude-sonnet-5-5', kept: false, resolved: false, changed: false, days_since_activity: 8, cached: false,
+        chips: [{ kind: 'ref', ref: 'example/repo#9', state: 'open' }, { kind: 'blocked' }], closed_refs: [],
+        title: 'Settle the invoice format with the vendor', status: 'doing', priority: 'P2' },
+    }),
+    flaky: row({
+      key: 'ref:example/repo#12', bucket: 'do', section: 'work', title: 'Fix the flaky test in example/repo#12',
+      why: ['assigned to you', 'quiet for 3 days'], sources: ['github'], ref: 'example/repo#12', priority: 'P2',
+      url: 'https://example.org/repo/issues/12', link: { kind: 'web', href: 'https://example.org/repo/issues/12' },
+      mark: { label: 'Demo', color: 'blue' }, actions: [A('ask')],
+    }),
+    index: row({
+      key: 'task:docs-refresh', bucket: 'tasks', section: 'work', title: 'Refresh the docs index', sources: ['tasks'],
+      task: 'docs-refresh', priority: 'P2', area: 'Docs', area_names: ['Docs'], task_type: 'docs',
+      tab: { ref: 'surface:8', state: 'working', live: true, waiting: false }, actions: [A('to_tab', true)],
+    }),
+    cleanup: row({
+      key: 'task:old-cleanup', bucket: 'tasks', section: 'work', title: 'Clean up the old example fixtures', sources: ['tasks'],
+      task: 'old-cleanup', priority: 'P3', area: 'Ops', area_names: ['Ops'], actions: [A('do', true), A('advise')], selectable: true,
+    }),
+    vendor: row({
+      key: 'inbox:20261008-1400-vendor-reply-9f9f', bucket: 'waiting', section: 'later', title: 'Waiting for the reply on the license question',
+      why: ['asked 2 days ago'], sources: ['inbox'], inbox_id: '20261008-1400-vendor-reply-9f9f', gate: 'only-you', area: 'Demo',
+      area_names: ['Demo'], inbox_state: 'open', inbox_key: 'license-reply', actions: [A('follow_up')],
+    }),
+    idea: row({
+      key: 'task:report-dark-mode', bucket: 'resting', section: 'later', title: 'Idea: dark mode for the weekly report',
+      why: ['quiet for 12 days'], sources: ['tasks'], task: 'report-dark-mode', priority: 'P3', area: 'Docs', area_names: ['Docs'],
+      actions: [A('do', true), A('advise')], selectable: true,
+    }),
+  }
+  const sec = (id, list, compact) => ({ id, total: list.length, rows: list, compact: compact.map(r => r.key) })
+  const sections = empty ? [sec('now', [], []), sec('give', [], []), sec('work', [], []), sec('later', [], [])] : [
+    sec('now', [rows.review, rows.release], [rows.review, rows.release]),
+    sec('give', [rows.labels, rows.docs, rows.sweep], [rows.labels, rows.docs, rows.sweep]),
+    sec('work', [rows.demo, rows.flaky, rows.index, rows.cleanup], [rows.demo, rows.flaky, rows.index]),
+    sec('later', [rows.vendor, rows.idea], []),
+  ]
+  const numbers = {}
+  let n = 0
+  for (const s of sections) for (const r of s.rows) { n += 1; r.number = n; numbers[r.key] = n }
+  const hidden = empty ? [] : [row({
+    key: 'title:Renew the test certificate', bucket: 'plan', section: 'later', title: 'Renew the test certificate', sources: ['calendar'],
+    hidden_until: isoIn(5, now), actions: [A('ask')],
+  })]
+
+  const item = (index, over) => ({
+    index, title: '', detail: '', when: '', tone: null, link: null, task: null, ask: false, mark: null,
+    priority: null, state: null, lines: [], meter: null, starting: false, tab: null, ...over,
+  })
+  const pages = empty ? [] : [
+    {
+      id: 'systems', title: 'Systems', badge: { kind: 'bad', n: 1 }, sections: [
+        { id: 'checks', kind: 'command', title: 'Checks', status: 'ok', reason: '', alarm: true, empty: 'nothing', count: 2, total: 2,
+          weight: 1, bad: 1, as_of: hhmm(now - 4 * MIN), more: 0, items: [
+            item(0, { title: 'Backup older than 2 days', detail: 'last copy on the external disk is from Tuesday', when: '08:55', tone: 'bad', link: { kind: 'web', href: 'https://example.org/backup' }, ask: true }),
+            item(1, { title: 'Disk space below 15 percent', detail: 'scratch volume', when: '08:55', tone: 'warn', ask: true }),
+          ] },
+        { id: 'services', kind: 'command', title: 'Services', status: 'ok', reason: '', alarm: true, empty: 'all running', count: 0, total: 0,
+          weight: 0, bad: 0, as_of: hhmm(now - 4 * MIN), more: 0, items: [] },
+      ],
+    },
+    {
+      id: 'trackers', title: 'Trackers', badge: { kind: 'count', n: 5, warn: true }, sections: [
+        { id: 'mine', kind: 'github', title: 'Assigned to me', status: 'ok', reason: '', alarm: false, empty: 'nothing', count: 3, total: 5,
+          weight: 3, bad: 0, as_of: hhmm(now - 22 * MIN), more: 2, items: [
+            item(0, { title: 'example/repo#12 Flaky test in the parser suite', detail: 'In Progress', when: 'Tue', tone: 'warn', link: { kind: 'web', href: 'https://example.org/repo/issues/12' }, ask: true, mark: { label: 'Demo', color: 'blue' }, priority: 'P2' }),
+            item(1, { title: 'example/repo#15 Add a config switch for the report', detail: 'Backlog', when: 'Mon', link: { kind: 'web', href: 'https://example.org/repo/issues/15' }, ask: true, priority: 'P3' }),
+            item(2, { title: 'example/tools#4 Release checklist', detail: 'In Review', when: '08:10', link: { kind: 'web', href: 'https://example.org/tools/issues/4' }, ask: true, mark: { label: 'Ops', color: 'red' } }),
+          ] },
+        { id: 'tasks', kind: 'tasks', title: 'Bridge tasks', status: 'ok', reason: '', alarm: false, empty: 'nothing', count: 2, total: 2,
+          weight: 2, bad: 0, as_of: null, more: 0, items: [
+            item(0, { title: 'Write the onboarding guide for the demo project', detail: 'Demo', when: '', task: 'demo-task', priority: 'P1', state: 'doing',
+              lines: [{ kind: 'next', text: 'Draft the first two chapters' }, { kind: 'step', text: 'Outline agreed with the team' }, { kind: 'log', text: 'Outline written, examples collected' }] }),
+            item(1, { title: 'Refresh the docs index', detail: 'Docs', task: 'docs-refresh', priority: 'P2', state: 'doing',
+              tab: { ref: 'surface:8', state: 'working', live: true, waiting: false }, lines: [{ kind: 'blocked', text: 'waits for the new folder layout' }] }),
+          ] },
+      ],
+    },
+    {
+      id: 'usage', title: 'Usage', badge: { kind: 'none' }, sections: [
+        { id: 'quota', kind: 'command', title: 'Quota', status: 'ok', reason: '', alarm: false, empty: 'no account', count: 2, total: 2,
+          weight: 0, bad: 0, as_of: hhmm(now - 2 * MIN), more: 0, items: [
+            item(0, { title: 'Session (5 h): 22 %', when: '16:00', meter: { value: 22, max: 100, unit: '%', elapsed: 0.4, warn: 80, bad: 95 } }),
+            item(1, { title: 'Week, all models: 84 %', when: 'Mon 04:00', tone: 'warn', meter: { value: 84, max: 100, unit: '%', elapsed: 0.55, warn: 80, bad: 95 } }),
+          ] },
+        { id: 'runs', kind: 'command', title: 'Sessions', status: 'ok', reason: '', alarm: false, empty: 'no session', count: 3, total: 3,
+          weight: 0, bad: 0, as_of: hhmm(now - 2 * MIN), more: 0, items: [
+            item(0, { title: 'Demo dashboard', detail: 'opus · busy · 25 turns · $42.10', when: '08:12', meter: { value: 42.1, unit: '$' } }),
+            item(1, { title: 'Docs refresh', detail: 'sonnet · idle · 9 turns · $6.80', when: '09:40', tone: 'dim', meter: { value: 6.8, unit: '$' } }),
+            item(2, { title: 'Release notes', detail: 'sonnet · waiting · 4 turns · $1.95', when: '10:05', tone: 'warn', meter: { value: 1.95, unit: '$' } }),
+          ] },
+      ],
+    },
+    {
+      id: 'dates', title: 'Dates', badge: { kind: 'none' }, sections: [
+        { id: 'calendar', kind: 'calendar', title: 'Calendar', status: 'skipped', reason: '', alarm: false, empty: 'no dates', count: 0, total: 0,
+          weight: 0, bad: 0, as_of: null, more: 0, items: [] },
+        { id: 'mail', kind: 'mail', title: 'Mail', status: 'error', reason: 'mail account token expired', alarm: false, empty: 'nothing', count: 0, total: 0,
+          weight: 0, bad: 0, as_of: null, more: 0, items: [] },
+      ],
+    },
+  ]
+
+  const tabs = empty ? [] : [
+    { ref: 'surface:3', ws_ref: 'workspace:1', name: 'Control', workspace: 'Control', state: 'waiting', last: '', slug: null, item: null,
+      team: null, role: null, live: true, waiting: false, is_control: true, filed_by: null, since_ms: now - 15 * MIN, long: null },
+    { ref: 'surface:7', ws_ref: 'workspace:2', name: 'alpha-release', workspace: 'Ops', state: 'needs-you', last: 'Allow edit of RELEASE_NOTES.md?',
+      slug: 'alpha-release', item: null, team: 'build', role: 'implement', live: true, waiting: true, is_control: false, filed_by: null,
+      since_ms: now - 3 * MIN, long: null },
+    { ref: 'surface:10', ws_ref: 'workspace:3', name: 'report-draft', workspace: 'Demo', state: 'waiting',
+      last: 'Draft written to the inbox as a result. Anything else?', slug: 'report-draft', item: null, team: null, role: null, live: true,
+      waiting: false, is_control: false, filed_by: 'inbox:20261009-0910-tidy-labels-c3d4', since_ms: now - 74 * MIN, long: 'waiting' },
+    { ref: 'surface:12', ws_ref: 'workspace:3', name: 'demo-task research', workspace: 'Demo', state: 'waiting',
+      last: 'I found three sources. Should I summarise them in team.md?', slug: 'demo-task', item: null, team: 'research', role: 'evidence',
+      live: true, waiting: true, is_control: false, filed_by: null, since_ms: now - 11 * MIN, long: null },
+    { ref: 'surface:8', ws_ref: 'workspace:4', name: 'docs-refresh', workspace: 'Docs', state: 'working', last: 'Running the link check (12 of 40 pages)',
+      slug: 'docs-refresh', item: null, team: null, role: null, live: true, waiting: false, is_control: false, filed_by: null,
+      since_ms: now - 26 * MIN, long: null },
+    { ref: 'surface:9', ws_ref: 'workspace:3', name: 'notes', workspace: 'Demo', state: 'working', last: 'Reading the meeting notes',
+      slug: null, item: null, team: null, role: null, live: true, waiting: false, is_control: false, filed_by: null, since_ms: now - 6 * MIN, long: null },
+    { ref: 'surface:11', ws_ref: 'workspace:4', name: 'zsh', workspace: 'Docs', state: 'shell', last: '', slug: null, item: null,
+      team: null, role: null, live: false, waiting: false, is_control: false, filed_by: null, since_ms: now - 140 * MIN, long: null },
+  ]
+
+  const relayOnline = !opts.offline
+  return {
+    ok: true,
+    server: { version: '0.1.0', started_ms: now - 50 * MIN },
+    model: {
+      seq: 3, stale: false, profile: 'morning', title: 'Morning',
+      collected_at: hhmm(now - 2 * MIN), collected_ms: now - 2 * MIN, full_ms: now - 2 * MIN, is_full: true,
+      headline: empty ? 'Nothing waits for you' : '2 for you today, next: Review the demo report',
+      since: empty ? null : 'since 08:40: 1 new', skipped: [],
+      agenda: empty ? [] : [{ when: '10:00', title: 'Team call' }, { when: '14:30', title: 'Review of the demo project' }],
+      status: [{ title: 'Systems', count: empty ? 0 : 1, probe: true, state: 'ok' }, { title: 'Inbox', count: empty ? 0 : 6, probe: false, state: 'ok' }],
+      extras: { clear: ['Services: all running'], hygiene: empty ? [] : ['2 tasks without a log row for 7 days'], workplace: empty ? null : 'Tabs: 3 suggested' },
+      counts: { waiting_tabs: empty ? 0 : 2, long_tabs: empty ? 0 : 1, working_tabs: empty ? 0 : 2, now: empty ? 0 : 2, give: empty ? 0 : 3, work: empty ? 0 : 4, later: empty ? 0 : 2, hidden: hidden.length },
+      sections, numbers, hidden,
+      approvable: empty ? [] : [rows.labels.key, rows.docs.key],
+      task_rows: empty ? [] : [rows.quiet, rows.waits],
+      review: empty ? { running: null, error: null, last: null, keys: [] } : {
+        running: null, error: null, keys: [rows.demo.key, rows.quiet.key, rows.waits.key],
+        last: { reviewed_at: new Date(now - 20 * MIN).toISOString().slice(0, 19), reviewed: 3, to_close: 1, cost_ct: 2.22,
+          cost_known: true, models: ['haiku-5-5', 'sonnet-5-5'], duration_sec: 24.5, escalate_ct: 2.1, mismatch: false,
+          tiers: [{ model: 'haiku-5-5', answered: 2, cost_ct: 0.12 }, { model: 'sonnet-5-5', answered: 1, cost_ct: 2.1 }], cached: 0 },
+      },
+      pages,
+      alarms: empty ? [] : [{ page_id: 'systems', page_title: 'Systems', section_title: 'Checks', count: 1 }],
+      teams: [
+        { id: 'build', label: 'Build', for_types: ['feature'], roles: [{ id: 'implement', name: 'Implement', mode: 'go' }, { id: 'review', name: 'Review', mode: 'report' }] },
+        { id: 'research', label: 'Research', for_types: ['research'], roles: [{ id: 'evidence', name: 'Evidence', mode: 'report' }, { id: 'counter', name: 'Counter', mode: 'report' }, { id: 'summary', name: 'Summary', mode: 'report' }] },
+      ],
+      briefing_badge: empty ? 0 : 7,
+    },
+    tabs: { at_ms: now - 8000, error: null, control: { name: 'Control', ref: 'surface:3' }, tabs },
+    quick: { available: true, default: 'haiku', models: ['haiku', 'sonnet', 'opus'], convs: [] },
+    jev: createMockJev ? { enabled: true, ready: true, reason: null } : { enabled: false, ready: false, reason: 'off' },
+    loading: { pass: null, fresh: false, started_ms: 0, eta_ms: 0, queued: null, last_error: null },
+    notes: [
+      { at: hhmm(now - 9 * MIN), text: 'Yes given, runs on the next pass: Sweep old log files', tone: 'ok' },
+    ],
+    relay: {
+      enabled: true, online: relayOnline, reason: relayOnline ? null : 'no_heartbeat',
+      session: relayOnline ? { id_short: 'a1b2c3d4', surface_ok: true, busy: false, at_ms: now - 2000 } : null,
+      records: empty ? [] : [
+        { id: '20261009T071000-1a2b3c4d', kind: 'overview', created_ms: now - 30 * MIN, status: 'answered',
+          preview: 'My briefing state from the dashboard (09:10): 2 for you today, next: Review the demo report',
+          answer: '1. Review the demo report first, it is due tomorrow and only you can do it.\n2. Give your yes to the two label and docs items, they run alone.\n3. The flaky test can wait until after the team call.',
+          answered_ms: now - 29 * MIN },
+      ],
+    },
+    cmux: { ok: true, error: null },
+    sessions: { at_ms: now - 8000, sessions: empty ? [] : [
+      { id: '7a16c7b2', pid: 101, name: 'demo-bridge-fc', project: 'demo-bridge', cwd: '/demo/bridge', here: true, status: 'busy',
+        since_ms: now - 4 * MIN, started_ms: now - 95 * MIN, kind: 'interactive', version: '2.1.0', remote: true,
+        tab: { ref: 'surface:3', name: 'Control', workspace: 'Control', state: 'working', is_control: true },
+        agents: { running_count: 2, done_recent: 3, running: [
+          { id: 'a1efe80', type: 'code-reviewer', description: 'Review the dashboard change', since_ms: now - 2 * MIN, background: true },
+          { id: 'b77c012', type: 'Explore', description: 'Find where sessions are stored', since_ms: now - 40000, background: false }] },
+        workflows: [{ name: 'demo-build', status: 'running', agents: 6, since_ms: now - 12 * MIN }] },
+      { id: 'd8db96ad', pid: 102, name: 'demo-bridge-4b', project: 'demo-bridge', cwd: '/demo/bridge', here: true, status: 'idle',
+        since_ms: now - 31 * MIN, started_ms: now - 5 * 60 * MIN, kind: 'interactive', version: '2.1.0', remote: false,
+        tab: { ref: 'surface:7', name: 'alpha-release', workspace: 'Ops', state: 'needs-you', is_control: false },
+        agents: { running_count: 0, done_recent: 0, running: [] }, workflows: [] },
+      { id: '3c9a1e44', pid: 103, name: 'other-repo-2a', project: 'other-repo', cwd: '/demo/other-repo', here: false, status: 'busy',
+        since_ms: now - 9 * MIN, started_ms: now - 20 * MIN, kind: 'interactive', version: '2.1.0', remote: false,
+        tab: null, agents: { running_count: 1, done_recent: 0, running: [
+          { id: 'c03f9aa', type: 'general-purpose', description: 'Run the migration tests', since_ms: now - 6 * MIN, background: true }] },
+        workflows: [] },
+    ] },
+  }
+}
+
+function inboxDetail(id, state) {
+  const r = [...(state.model?.sections ?? []).flatMap(s => s.rows)].find(x => x.inbox_id === id)
+  const hasAction = !!r?.has_action
+  return {
+    ok: true, id,
+    item: {
+      summary: r?.title ?? 'Example item', detail: 'Invented example detail.\nThe item came from a demo check and carries no real data.',
+      kind: hasAction ? 'approval' : 'todo', gate: r?.gate ?? 'only-you', urgency: r?.urgency ?? null, state: r?.inbox_state ?? 'open',
+      task: r?.task ?? null, due: r?.due ?? null, key: r?.inbox_key ?? 'example', from: 'demo-check', created: '2026-10-09T09:00:00',
+      action_display: hasAction ? 'python3 scripts/example-tool.py --apply demo' : null, has_closes_when: hasAction,
+    },
+    events: [
+      { verb: 'add', by: 'demo-check', at: '2026-10-09T09:00:00' },
+      { verb: 'note', by: 'web', at: '2026-10-09T09:05:00', note: 'looked at it, fine' },
+    ],
+  }
+}
+
+function taskDetail(slug) {
+  return {
+    ok: true, slug, kind: 'task', path: `work/tasks/${slug}/STATUS.md`,
+    front: { type: 'feature', status: 'doing', priority: 'P1', created: '2026-10-01', last_updated: '2026-10-08',
+      headline: 'Onboarding guide for the demo project', origin: 'team call on 2026-09-30', blocked_by: null },
+    sections: [
+      { heading: 'Goal', text: 'A new team member sets up the demo project in under an hour, with every step written down.', truncated: false },
+      { heading: 'Next', text: '- Draft the first two chapters\n- Collect screenshots from the example setup', truncated: false },
+      { heading: 'Log', text: '2026-10-08: outline written, examples collected\n2026-10-03: task opened', truncated: false },
+    ],
+    log: [
+      { at: '2026-10-08 16:20', glyph: 'n', context: slug, text: 'Outline written, examples collected' },
+      { at: '2026-10-03 11:05', glyph: 'n', context: slug, text: 'Task opened after the team call' },
+    ],
+  }
+}
+
+/** A transport with the same interface as the real one, backed by the example state */
+export function createMockTransport(opts = {}) {
+  const now = () => Date.now()
+  let state = buildState(now(), opts)
+  let handlers = {}
+  let seq = state.model.seq
+  const jev = createMockJev ? createMockJev() : null   // the Jev tab's mock: the server's once-per-day rule, invented tokens
+  const emit = (name, payload) => { if (handlers[name]) handlers[name](payload) }
+  const note = (text, tone = 'info') => emit('note', { at: hhmm(now()), text, tone })
+  const ok = data => ({ status: 200, ok: true, data, error: null })
+  const fail = (status, code, message, extra = {}) => ({ status, ok: false, data: { ok: false, ...extra, error: { code, message, field: null } }, error: { code, message, field: null } })
+
+  const removeRows = keys => {
+    for (const s of state.model.sections) {
+      s.rows = s.rows.filter(r => !keys.includes(r.key))
+      s.compact = s.compact.filter(k => !keys.includes(k))
+      s.total = s.rows.length
+    }
+    state.model.approvable = state.model.approvable.filter(k => !keys.includes(k))
+    state.model.task_rows = state.model.task_rows.filter(r => !keys.includes(r.key))
+    state.model.review = { ...state.model.review, keys: state.model.review.keys.filter(k => !keys.includes(k)) }
+    seq += 1
+    state.model = { ...state.model, seq }
+    setTimeout(() => emit('view', state.model), 300)
+  }
+
+  return {
+    async get(path) {
+      const [pathname, query = ''] = path.split('?')
+      const url = { pathname, searchParams: new URLSearchParams(query) }
+      if (url.pathname === '/api/bootstrap') {
+        if (opts.auth === false) return fail(401, 'unauthorized', 'no cookie')
+        return ok({ ok: true, csrf: 'mock', language: opts.lang || 'en', version: '0.1.0',
+          config: { port: 8797, relay: true, tabs_seconds: 10, full_minutes: 10, voice: false, target: 'area', control: 'Control', profile: 'morning' } })
+      }
+      if (url.pathname === '/api/state') return ok(state)
+      if (url.pathname === '/api/inbox') return ok(inboxDetail(url.searchParams.get('id'), state))
+      if (url.pathname === '/api/task') return ok(taskDetail(url.searchParams.get('slug')))
+      if (url.pathname === '/api/relay') return ok(state.relay)
+      if (url.pathname === '/api/workers') {
+        // invented runs in the shape of `workload view --json`; nothing here is a real machine
+        const run = (id, system, kind, state, when, marks, strip, findings = []) => ({ id, title: id.replace(/-/g, ' '), purpose: `Example run ${id}`,
+          system, kind, sphere: system === 'mail' ? 'work' : 'private', host: 'homebox', runtime: 'launchd', owner: 'bridge', when,
+          unit: `bridge.${id}`, log: `~/.bridge/workloads/${id}.out`, program: `scripts/${id}.sh`, program_where: 'repository', retired: false,
+          state, severity: findings[0]?.severity ?? 'none', findings, continuous: kind === 'daemon',
+          strip: strip.map((v, i) => ({ at: `2026-10-10T${String(6 + i).padStart(2, '0')}:00:00Z`, rc: v === 'failed' ? 1 : 0, verdict: v })),
+          day: { marks: marks.map(p => ({ at_pct: p, label: `${Math.round(p * 0.24)}:00` })), trace_pct: marks.length ? marks[0] : null, trace_at: '', trace_label: 'last run', note: kind === 'daemon' ? 'runs all the time' : '' },
+          week: [false, true, true, true, true, true, false], month_due: [], ran_days: ['2026-10-09', '2026-10-10'] })
+        return ok({ ok: true, view: { schema: 1, host: 'homebox', generated_at: new Date(now() - 12 * MIN).toISOString(), zone: 'Europe/Berlin',
+          stats: { in_service: 5, with_findings: 2, not_reported: 0, retired: 1 },
+          systems: [{ id: 'mail', title: 'Mail', count: 2 }, { id: 'board', title: 'Board', count: 2 }],
+          runs: [
+            run('mail-watcher', 'mail', 'interval', 'in_sync', 'every 300 s', [], ['ok', 'ok', 'ok', 'ok', 'ok', 'ok']),
+            run('mail-digest', 'mail', 'recurring', 'in_sync', 'daily 07:20', [30], ['ok', 'ok', 'skipped', 'ok']),
+            run('board-pilot', 'board', 'daemon', 'absent', 'all the time', [], ['ok', 'failed', 'failed'],
+              [{ state: 'absent', severity: 'high', detail: 'provisioned once, but nothing on the machine carries it any more', hint: 'provision it again, or retire the declaration' }]),
+            run('board-report', 'board', 'recurring', 'drifted', 'Mon to Fri 08:00 and 17:00', [33, 71], ['ok', 'expired', 'ok'],
+              [{ state: 'drifted', severity: 'medium', detail: 'the unit differs from its declaration', hint: 'provision it again' }]),
+            run('backup-sync', '', 'recurring', 'intentionally_absent', 'daily 02:00', [8], []),
+          ],
+          elsewhere: { inventory_stale: [], intentionally_absent: ['backup-sync'], undeclared: { named: [], counted: 12 } } } })
+      }
+      if (url.pathname === '/api/tab/screen') {
+        const tab = state.tabs.tabs.find(x => x.ref === url.searchParams.get('ref'))
+        if (!tab) return fail(404, 'not_found', 'no such tab')
+        const text = ['❯ ' + (tab.last || 'Go on with the task'), '', '⏺ Reading the task folder and the last log rows.',
+          '  ⎿  Read work/tasks/demo-task/STATUS.md (48 lines)', '', '⏺ ' + (tab.state === 'needs-you' ? 'Allow edit of README.md?' : 'Working on the next step.'),
+          '', '─'.repeat(40), '> '].join('\n')
+        return ok({ ok: true, ref: tab.ref, name: tab.name, state: tab.state, workspace: tab.workspace, text, at_ms: now() })
+      }
+      if (url.pathname === '/api/page') {
+        const page = state.model.pages.find(p => p.id === url.searchParams.get('page'))
+        const section = page?.sections.find(s => s.id === url.searchParams.get('section'))
+        if (!section) return fail(404, 'not_found', 'unknown page or section')
+        const extra = [3, 4].map(i => ({ index: i, title: `example/repo#${20 + i} Follow up item ${i}`, detail: 'Backlog', when: 'Fri', tone: null,
+          link: { kind: 'web', href: `https://example.org/repo/issues/${20 + i}` }, task: null, ask: true, mark: null, priority: null, state: null,
+          lines: [], starting: false, tab: null }))
+        return ok({ ok: true, items: [...section.items, ...extra], total: section.total })
+      }
+      return fail(404, 'not_found', 'unknown path')
+    },
+    async post(path, body) {
+      await new Promise(r => setTimeout(r, 250))
+      if (path === '/api/reload') {
+        const loading = { pass: 'quick', fresh: !!body?.fresh, started_ms: now(), eta_ms: 3000, queued: 'full', last_error: null }
+        state.loading = loading
+        emit('loading', loading)
+        setTimeout(() => {
+          state.loading = { pass: null, fresh: false, started_ms: 0, eta_ms: 0, queued: null, last_error: null }
+          seq += 1
+          state.model = { ...state.model, seq, collected_at: hhmm(now()), collected_ms: now(), full_ms: now() }
+          emit('loading', state.loading)
+          emit('view', state.model)
+        }, 3000)
+        return { status: 202, ok: true, data: { ok: true, loading }, error: null }
+      }
+      if (path === '/api/ask' && body?.via === 'quick') {
+        // a short session of its own: invented answer, invented cost, nothing is asked for real
+        const model = body.model || 'haiku'
+        const q = body?.kind === 'free' ? String(body.args?.text ?? '') : `Example question of kind ${body?.kind}`
+        let conv = state.quick.convs.find(c => c.id === body.conv)
+        if (!conv) {
+          conv = { id: `q${Math.random().toString(16).slice(2, 12).padEnd(10, '0')}`, kind: body.kind, started_ms: now(), session: null, total_usd: 0, turns: [], running: false }
+          state.quick = { ...state.quick, convs: [conv, ...state.quick.convs] }
+        }
+        conv.turns.push({ q, a: null, model_asked: model, model: null, cost_usd: null, at_ms: now(), error: null })
+        conv.running = true
+        emit('quick', JSON.parse(JSON.stringify(state.quick)))
+        setTimeout(() => {
+          const t = conv.turns[conv.turns.length - 1]
+          t.a = 'Example answer from the mock. Seven of eleven steps are done; the next one is the yaml change in this repository.\nNothing was asked for real.'
+          t.model = `${model}-5-5`
+          t.cost_usd = { haiku: 0.0021, sonnet: 0.011, opus: 0.054 }[model] ?? 0.002
+          conv.running = false
+          emit('quick', JSON.parse(JSON.stringify(state.quick)))
+        }, 2200)
+        return { status: 202, ok: true, data: { ok: true, conv: conv.id }, error: null }
+      }
+      if (path === '/api/ask') {
+        const id = `${new Date().toISOString().replace(/[-:]/g, '').slice(0, 15)}-${Math.random().toString(16).slice(2, 10)}`
+        const preview = body?.kind === 'free' ? String(body.args?.text ?? '') : `Example prompt of kind ${body?.kind}`
+        if (!state.relay.online) {
+          const record = { id, kind: body?.kind, created_ms: now(), status: 'offline', preview: preview.slice(0, 200), answer: null, answered_ms: null }
+          return fail(409, 'relay_offline', 'relay offline', { record, fallback: { available: true, tab: { ref: 'surface:3', name: 'Control', state: 'waiting' } } })
+        }
+        const record = { id, kind: body?.kind, created_ms: now(), status: 'queued', preview: preview.slice(0, 200), answer: null, answered_ms: null }
+        setTimeout(() => emit('relay', { ...record, status: 'submitted' }), 900)
+        setTimeout(() => emit('relay', { ...record, status: 'answered', answered_ms: now(),
+          answer: 'Example answer from the mock: nothing was sent to a real session.\nThe real answer shows here as plain text.' }), 2600)
+        return { status: 202, ok: true, data: { ok: true, record }, error: null }
+      }
+      if (path === '/api/jev/run' && !jev) return fail(404, 'jev_off', 'Jev is off')
+      if (path === '/api/jev/run') {
+        // the Jev tab: invented judgments from jev/logic.js, the real API is never asked
+        const r = jev(state.model, { force: !!body?.force, cacheOnly: !!body?.cache_only })
+        if (r.paid) await new Promise(res => setTimeout(res, 2400))
+        return ok(r.result)
+      }
+      if (path === '/api/action') {
+        const verb = body?.verb
+        const args = body?.args ?? {}
+        const keys = args.keys ?? (args.key ? [args.key] : [])
+        const result = { ok: true, verb, note: `Mock: ${verb} ${keys.join(', ') || args.tab_ref || ''}`.trim(), steps: [], settled: [],
+          reload: 'none', jump: null, relay: null, confirm: null }
+        if (verb === 'approve_all' && !args.confirm) return ok({ ...result, note: '', confirm: { count: keys.length } })
+        if (['drop', 'done', 'later', 'hide', 'task_close', 'settle'].includes(verb) || (verb === 'approve_all' && args.confirm)) {
+          result.settled = keys
+          removeRows(keys)
+        }
+        if (verb === 'snapshot_list') result.note = 'Mock: 3 snapshots, latest 09:00'
+        if (verb === 'task_review') {
+          // a check that runs for six seconds, then the same result again with a new time
+          const publish = review => { seq += 1; state.model = { ...state.model, seq, review }; emit('view', state.model) }
+          publish({ ...state.model.review, running: { started_ms: now(), count: keys.length, escalate: !!args.escalate } })
+          setTimeout(() => publish({ ...state.model.review, running: null,
+            last: { ...state.model.review.last, reviewed_at: new Date(now()).toISOString().slice(0, 19) } }), 6000)
+        }
+        setTimeout(() => note(result.note, 'ok'), 50)
+        return ok(result)
+      }
+      return fail(404, 'not_found', 'unknown path')
+    },
+    events(h, onConn) {
+      handlers = h
+      setTimeout(() => {
+        onConn('open')
+        emit('hello', { version: '0.1.0', started_ms: state.server.started_ms, language: opts.lang || 'en' })
+        emit('state', state)
+      }, 30)
+      return { close() { handlers = {} } }
+    },
+  }
+}

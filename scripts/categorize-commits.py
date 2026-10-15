@@ -578,6 +578,8 @@ SCRIPTS_CORE_ALLOWLIST = frozenset({
     "scripts/archive-autorun.sh",
     "scripts/lib/bridge-python.sh",
     "scripts/tests/test_archive_autorun.py",
+    "scripts/build-cockpit-demo.py",
+    "scripts/tests/test_bridge_cockpit_demo.py",
 })
 
 

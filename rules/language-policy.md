@@ -61,7 +61,8 @@ Everything in the `core` tier:
 - **Per-language UI string tables** inside a CORE program that has its own
   user-facing words (today: the `briefing-ui` mod,
   `mods/briefing-ui/hooks/text.ts`; the cockpit, `scripts/web/text.js`,
-  `scripts/web/jev/page.js` and `scripts/lib/bridge_cockpit/text.py`; the
+  `scripts/web/jev/page.js` and `scripts/lib/bridge_cockpit/text.py`, plus
+  their generated copy in `docs/cockpit-demo/` (the website demo); the
   `cockpit-relay` mod, `TABLES` in `mods/cockpit-relay/hooks/relay.ts`; and
   the smaller tables beside the data they word: `scripts/lib/briefing_view.py`,
   `scripts/bridge-resources.py`, `skills/briefing/scripts/advise.py`,
