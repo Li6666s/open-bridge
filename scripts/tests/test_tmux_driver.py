@@ -117,7 +117,7 @@ def test_last_line_and_shells():
 
 @pytest.mark.parametrize("args,agent", [
     ("claude --resume 1b4e28ba-2fa1-11d2-883f-0016d3cca427", True),
-    ("/Users/x/.local/bin/claude -n task", True),
+    ("/opt/tools/bin/claude -n task", True),
     ("node /opt/homebrew/lib/node_modules/@anthropic-ai/claude-code/cli.js", True),
     ("codex exec hi", True),
     ("/bin/sh /tmp/t/claude --resume x", True),
