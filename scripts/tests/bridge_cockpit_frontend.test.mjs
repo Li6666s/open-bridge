@@ -1426,3 +1426,72 @@ test('short cuts a title at a word, not in the middle of one', () => {
   assert.equal(logic.short('kurz', 10), 'kurz')
   assert.equal(logic.short('Donaudampfschifffahrtsgesellschaft', 10), 'Donaudamp…')   // one long word: cut it
 })
+
+// ---------------------------------------------------------------- ?theme= and the demo badge
+
+test('themeOverride: ?theme=light|dark forces the mode, anything else is no override', () => {
+  assert.equal(logic.themeOverride('?theme=dark'), 'dark')
+  assert.equal(logic.themeOverride('?mock=1&theme=light&lang=de'), 'light')
+  for (const search of ['', '?', '?theme=', '?theme=auto', '?theme=DARK', '?theme=blue', '?mock=1', undefined, null]) {
+    assert.equal(logic.themeOverride(search), null, String(search))
+  }
+})
+
+/** Runs theme.js (a classic script) against a fake page: the URL, the stored choice and the system mode */
+async function runThemeScript({ search = '', stored = null, systemDark = false }) {
+  const vm = await import('node:vm')
+  const classes = new Set()
+  const attrs = {}
+  const writes = []
+  const window = {
+    location: { search },
+    localStorage: {
+      getItem: key => (key === 'bridge-cockpit.theme' ? stored : null),
+      setItem: (key, value) => writes.push([key, value]),
+      removeItem: key => writes.push([key, null]),
+    },
+    matchMedia: () => ({ matches: systemDark }),
+  }
+  const document = {
+    documentElement: {
+      classList: { toggle: (name, on) => (on ? classes.add(name) : classes.delete(name)) },
+      setAttribute: (name, value) => { attrs[name] = value },
+    },
+  }
+  vm.runInNewContext(read('theme.js'), { window, document, URLSearchParams })
+  return { dark: classes.has('dark'), light: classes.has('light'), mode: attrs['data-theme-mode'], writes }
+}
+
+test('theme.js: ?theme= forces the mode for this load and never writes the stored choice', async () => {
+  const forced = await runThemeScript({ search: '?mock=1&theme=dark', stored: 'light' })
+  assert.deepEqual([forced.dark, forced.light, forced.mode, forced.writes], [true, false, 'dark', []])
+  const light = await runThemeScript({ search: '?theme=light', systemDark: true })
+  assert.deepEqual([light.dark, light.light, light.mode, light.writes], [false, true, 'light', []])
+})
+
+test('theme.js: without a valid ?theme= the stored choice or the system decides, as before', async () => {
+  assert.equal((await runThemeScript({ search: '?theme=bogus', stored: 'light', systemDark: true })).dark, false)
+  assert.equal((await runThemeScript({ stored: 'dark' })).dark, true)
+  const auto = await runThemeScript({ systemDark: true })
+  assert.deepEqual([auto.dark, auto.mode, auto.writes], [true, 'auto', []])
+  assert.equal((await runThemeScript({ search: '?theme=auto', systemDark: false })).dark, false)
+})
+
+test('app.js: the initial theme takes ?theme= first and does not save it', () => {
+  const src = read('app.js')
+  assert.match(src, /themeOverride\(window\.location\.search\)/)
+  assert.match(src, /theme: THEME_OVERRIDE \?\? load\('bridge-cockpit\.theme', 'auto'\)/)
+})
+
+test('demo badge: a short text in both tables, shown in the header in mock mode only', () => {
+  for (const lang of ['en', 'de']) {
+    const v = text.TABLES[lang].demoBadge
+    assert.equal(typeof v, 'string', lang)
+    assert.ok(v.length > 0 && v.length <= 32, `${lang}: short`)
+    assert.ok(text.TABLES[lang].demoBadgeShort.length <= 6, `${lang}: fits a phone header`)
+  }
+  assert.notEqual(text.TABLES.en.demoBadge, text.TABLES.de.demoBadge)
+  const header = read('components.js').match(/function Header\(\{[\s\S]*?\n\}/)[0]
+  assert.match(header, /s\.mock \? html`<span class="hdr-demo" title=\$\{t\.mockNote\}>[^`]*\$\{t\.demoBadge\}[^`]*\$\{t\.demoBadgeShort\}/)
+  assert.match(read('style.css'), /\.hdr-demo \{/)
+})

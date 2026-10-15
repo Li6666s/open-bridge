@@ -743,6 +743,8 @@ const en = {
   tabLongToast: name => `Tab "${name}" has waited or run for over an hour`,
   voiceWaiting: name => `${name} is waiting for you`,
   mockNote: 'Mock data: nothing runs, nothing is saved.',
+  demoBadge: 'Demo, invented data',
+  demoBadgeShort: 'Demo',
 
   // errors per code of contract section 8.2
   errors: {
@@ -1505,6 +1507,8 @@ const de = {
   tabLongToast: name => `Tab „${name}“ wartet oder läuft seit über einer Stunde`,
   voiceWaiting: name => `${name} wartet auf dich`,
   mockNote: 'Beispieldaten: nichts läuft, nichts wird gespeichert.',
+  demoBadge: 'Demo, erfundene Daten',
+  demoBadgeShort: 'Demo',
 
   errors: {
     unauthorized: 'Nicht angemeldet. Öffne das Cockpit mit dem Link aus dem Befehl unten.',

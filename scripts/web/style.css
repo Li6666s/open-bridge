@@ -188,6 +188,13 @@ kbd {
 .hdr-id { display: flex; flex-direction: column; justify-content: center; min-width: 0; flex: 0 0 auto; }
 .hdr-id .eyebrow { font-size: 10.5px; line-height: 1.2; }
 .hdr-title { font-size: 16px; font-weight: 600; line-height: 1.25; color: var(--on-surface); white-space: nowrap; }
+/* mock mode only (the website demo): says the data is invented, always visible, never loud */
+.hdr-name { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.hdr-demo {
+  flex: 0 0 auto; padding: 0 6px; border: 1px solid var(--border); border-radius: var(--radius-full);
+  font-size: 10.5px; line-height: 16px; color: var(--on-surface-muted); white-space: nowrap;
+}
+.hdr-demo-short { display: none; }
 .hdr-headline {
   flex: 1 1 auto; min-width: 0; font-size: var(--text-sm); color: var(--on-surface);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -1041,6 +1048,11 @@ kbd {
   .hdr { gap: 8px; padding: 0 12px; }
   .hdr-id .eyebrow { display: none; }
   .hdr-title { font-size: 15px; }
+  /* the demo badge goes under the title where the eyebrow was, so the buttons keep their room */
+  .hdr-name { flex-direction: column; align-items: flex-start; gap: 0; }
+  .hdr-demo { font-size: 10px; line-height: 14px; padding: 0 5px; }
+  .hdr-demo-long { display: none; }
+  .hdr-demo-short { display: inline; }
   .hdr-right { gap: 2px; }
   /* relay state and warnings get their own line under the header (components.js MobileSwitch) */
   .hide-narrow, .hdr-status > span:not(.spinner) { display: none; }
