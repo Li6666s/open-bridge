@@ -470,9 +470,27 @@ footer.foot code{font-family:var(--font-mono)}
   <div class="dh-next" data-reveal>
     <p><span data-lang="en"><strong>This was the terminal.</strong> The same Bridge also has a page in the browser, the cockpit, and its demo runs live with invented data.</span><span data-lang="de"><strong>Das war das Terminal.</strong> Dieselbe Bridge hat auch eine Seite im Browser, das Cockpit, und seine Demo läuft live mit erfundenen Daten.</span></p>
     <div class="links">
-      <a href="cockpit-demo/index.html"><span data-lang="en">Try the cockpit demo →</span><span data-lang="de">Cockpit-Demo ausprobieren →</span></a>
+      <a id="dh-cockpit-demo" href="cockpit-demo/index.html"><span data-lang="en">Try the cockpit demo →</span><span data-lang="de">Cockpit-Demo ausprobieren →</span></a>
       <a href="cockpit.html"><span data-lang="en">About the cockpit</span><span data-lang="de">Mehr zum Cockpit</span></a>
     </div>
+    <script>
+    /* The demo opens in the language and theme of this page, as on cockpit.html.
+       The address is built here, so no static link carries a query. */
+    (function(){
+      var a = document.getElementById("dh-cockpit-demo");
+      if(!a) return;
+      var r = document.documentElement;
+      function sync(){
+        var lang = r.getAttribute("data-active-lang") === "de" ? "de" : "en";
+        var theme = r.classList.contains("dark") ? "dark" : "light";
+        a.setAttribute("href", "cockpit-demo/index.html?mock=1&lang=" + lang + "&theme=" + theme);
+      }
+      sync();
+      if("MutationObserver" in window){
+        new MutationObserver(sync).observe(r, { attributes:true, attributeFilter:["class","data-active-lang"] });
+      }
+    })();
+    </script>
   </div>
   </div>
 

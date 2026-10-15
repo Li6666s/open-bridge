@@ -529,11 +529,30 @@ html.dark .ckt-win{box-shadow:0 1px 2px rgba(0,0,0,.4),0 28px 70px -28px rgba(0,
 .ckt-addr{flex:1;min-width:0;font-family:var(--mono);font-size:12px;color:var(--secondary);background:var(--surface);border:1px solid var(--border);
   border-radius:var(--r-full);padding:4px 12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ckt-addr b{font-family:var(--font-sans);font-weight:600;font-size:11.5px;letter-spacing:.04em;text-transform:uppercase;color:var(--attention-text);margin-right:8px}
-.ckt-frame{display:block;width:100%;height:908px;border:0;background:var(--surface)}
+.ckt-frame{display:none;width:100%;border:0;background:var(--surface);
+  /* well under the window height, so the landing page always scrolls past the demo */
+  height:clamp(540px,calc(100vh - 220px),700px)}
+.ckt-live .ckt-frame{display:block}
+.ckt-live .ckt-poster{display:none}
+/* phones (and no script): a picture that opens the demo full screen, never a live
+   frame, so a swipe down the landing page cannot get caught inside the demo */
+.ckt-poster{display:block;position:relative;height:420px;overflow:hidden;text-decoration:none;background:var(--surface-subtle)}
+.ckt-poster img{display:block;width:100%;max-width:390px;height:auto;margin:0 auto}
+.ckt-poster .pl-dark{display:none}
+html.dark .ckt-poster .pl-dark{display:block}
+html.dark .ckt-poster .pl-light{display:none}
+.ckt-poster::after{content:"";position:absolute;inset:auto 0 0 0;height:160px;
+  background:linear-gradient(to bottom,transparent,var(--surface-subtle) 78%)}
+.ckt-tap{position:absolute;z-index:1;left:50%;bottom:26px;transform:translateX(-50%);white-space:nowrap;
+  display:inline-flex;align-items:center;gap:8px;padding:11px 20px;border-radius:var(--r-full);
+  font-size:15px;font-weight:600;color:#fff;background:var(--accent-text);box-shadow:0 8px 24px -10px rgba(15,23,42,.5)}
+html.dark .ckt-tap{color:var(--surface)}
+.ckt-alpha .short{display:none}
 .ckt-cap{max-width:var(--hero-w);margin:14px auto 0;font-size:14px;line-height:1.6;color:var(--secondary)}
 .ckt-links{display:flex;flex-wrap:wrap;justify-content:center;gap:12px;margin-top:28px}
 @media (max-width:640px){
-  .ckt-frame{height:640px}
+  .ckt-alpha .long{display:none}
+  .ckt-alpha .short{display:inline}
   .ckt-dots{display:none}
   .ckt-bar{padding:8px 10px}
 }
@@ -1135,10 +1154,10 @@ html.story-static .story-list{display:flex;flex-wrap:wrap;gap:10px;justify-conte
 <section id="cockpit" class="alt">
   <div class="container">
     <div class="sec-head ckt-head reveal">
-      <p class="eyebrow"><span data-lang="en">Cockpit · try it here</span><span data-lang="de">Cockpit · gleich hier ausprobieren</span></p>
+      <p class="eyebrow"><span data-lang="en">Cockpit · try it here</span><span data-lang="de">Cockpit · hier ausprobieren</span></p>
       <h2 class="h1"><span data-lang="en">The whole Bridge in one browser tab.</span><span data-lang="de">Die ganze Bridge in einem Browser-Tab.</span></h2>
-      <p class="lede-2"><span data-lang="en">A local page that shows your briefing, inbox and tasks, agent tabs, sessions and tokens, and acts on them with a click through the Bridge's own scripts. Below runs the real page with invented data: click around, the demo itself sends nothing.</span><span data-lang="de">Eine lokale Seite, die dein Briefing, deinen Posteingang und deine Aufgaben, Agent-Tabs, Sitzungen und Tokens zeigt und dich per Klick darauf reagieren lässt, über die Skripte, die die Bridge schon hat. Unten läuft die echte Seite mit erfundenen Daten: klick dich durch, die Demo selbst sendet nichts.</span></p>
-      <span class="ckt-alpha"><span data-lang="en">Early version (alpha), still being extended</span><span data-lang="de">Frühe Version (Alpha), wird noch ausgebaut</span></span>
+      <p class="lede-2"><span data-lang="en">A local page that shows your briefing, inbox and tasks, agent tabs, sessions and tokens, and acts on them with a click through the Bridge's own scripts. Below runs the real page with invented data: click around, the demo itself sends nothing.</span><span data-lang="de">Eine lokale Seite, die dein Briefing, deinen Posteingang und deine Aufgaben, Agent-Tabs, Sitzungen und Tokens zeigt und per Klick darauf handelt, über die Skripte, die die Bridge schon hat. Unten läuft die echte Seite mit erfundenen Daten: klick dich durch, die Demo selbst sendet nichts.</span></p>
+      <span class="ckt-alpha"><span class="long"><span data-lang="en">Early version (alpha), still being extended</span><span data-lang="de">Frühe Version (Alpha), wird noch ausgebaut</span></span><span class="short"><span data-lang="en">Alpha, still growing</span><span data-lang="de">Alpha, im Ausbau</span></span></span>
     </div>
 
     <figure class="reveal" style="margin:0">
@@ -1147,17 +1166,32 @@ html.story-static .story-list{display:flex;flex-wrap:wrap;gap:10px;justify-conte
           <span class="ckt-dots" aria-hidden="true"><i></i><i></i><i></i></span>
           <span class="ckt-addr"><b>Demo</b>cockpit-demo/</span>
         </div>
-        <iframe class="ckt-frame" id="ckt-demo-frame" src="cockpit-demo/index.html" loading="lazy" title="Bridge cockpit demo with invented data"></iframe>
+        <a class="ckt-poster ckt-demo-link" href="cockpit-demo/index.html">
+          <div data-lang="en">
+            <img class="pl-light" src="assets/cockpit/light-phone-today.jpg" width="780" height="1688" loading="lazy" decoding="async" alt="The cockpit demo on a phone: the Today page with the waiting agent tabs on top. Tap to open the demo full screen.">
+            <img class="pl-dark" src="assets/cockpit/dark-phone-today.jpg" width="780" height="1688" loading="lazy" decoding="async" alt="The cockpit demo on a phone in dark mode: the Today page with the waiting agent tabs on top. Tap to open the demo full screen.">
+          </div>
+          <div data-lang="de">
+            <img class="pl-light" src="assets/cockpit/de-light-phone-today.jpg" width="780" height="1688" loading="lazy" decoding="async" alt="Die Cockpit-Demo auf einem Handy: die Seite Heute mit den wartenden Agent-Tabs oben. Tippen öffnet die Demo im Vollbild.">
+            <img class="pl-dark" src="assets/cockpit/de-dark-phone-today.jpg" width="780" height="1688" loading="lazy" decoding="async" alt="Die Cockpit-Demo auf einem Handy im dunklen Design: die Seite Heute mit den wartenden Agent-Tabs oben. Tippen öffnet die Demo im Vollbild.">
+          </div>
+          <span class="ckt-tap"><span data-lang="en">Tap to open the demo</span><span data-lang="de">Tippen öffnet die Demo</span> <span aria-hidden="true">↗</span></span>
+        </a>
+        <iframe class="ckt-frame" id="ckt-demo-frame" loading="lazy" title="Bridge cockpit demo with invented data"></iframe>
         <script>
         /* Same rule as on cockpit.html: the demo follows the site's theme
            (html.dark) and language (data-active-lang). The address is built
-           here, so no static link carries a query. The first address goes
-           into src; a later toggle replaces the frame's location, which adds
-           no history entry. The full-screen link carries the same address. */
+           here, so no static link carries a query. The live frame loads only
+           from 641 px up; on a phone the poster stays and opens the demo full
+           screen, so a swipe cannot get caught in a frame. The first address
+           goes into src; a later toggle replaces the frame's location, which
+           adds no history entry. The full-screen link carries the same address. */
         (function(){
           var f = document.getElementById("ckt-demo-frame");
           if(!f) return;
           var r = document.documentElement, cur = "", loaded = false;
+          var win = f.parentNode;
+          var mq = window.matchMedia ? window.matchMedia("(min-width: 641px)") : null;
           var TITLE = { en:"Bridge cockpit demo with invented data", de:"Bridge-Cockpit-Demo mit erfundenen Daten" };
           f.addEventListener("load", function(){ loaded = true; });
           function sync(){
@@ -1167,7 +1201,9 @@ html.story-static .story-list{display:flex;flex-wrap:wrap;gap:10px;justify-conte
             f.setAttribute("title", TITLE[lang]);
             var links = document.querySelectorAll("a.ckt-demo-link");
             for(var i = 0; i < links.length; i++){ links[i].setAttribute("href", u); }
-            if(u === cur) return;
+            var wide = !mq || mq.matches;
+            win.classList.toggle("ckt-live", wide);
+            if(!wide || u === cur) return;
             cur = u;
             var w = null;
             try { w = loaded ? f.contentWindow : null; if(w){ w.location.replace(new URL(u, location.href).href); } }
@@ -1175,13 +1211,14 @@ html.story-static .story-list{display:flex;flex-wrap:wrap;gap:10px;justify-conte
             if(!w){ f.setAttribute("src", u); }
           }
           sync();
+          if(mq){ if(mq.addEventListener){ mq.addEventListener("change", sync); } else if(mq.addListener){ mq.addListener(sync); } }
           if("MutationObserver" in window){
             new MutationObserver(sync).observe(r, { attributes:true, attributeFilter:["class","data-active-lang"] });
           }
         })();
         </script>
       </div>
-      <figcaption class="ckt-cap"><span data-lang="en">Invented demo data: nothing is sent and nothing is saved. The cockpit itself answers only on 127.0.0.1 on your own computer.</span><span data-lang="de">Erfundene Demodaten: nichts wird gesendet, nichts gespeichert. Das Cockpit selbst antwortet nur auf 127.0.0.1 auf deinem eigenen Rechner.</span></figcaption>
+      <figcaption class="ckt-cap"><span data-lang="en">Invented demo data: nothing is sent and no data is saved. The cockpit itself answers only on 127.0.0.1 on your own computer.</span><span data-lang="de">Erfundene Demodaten: nichts wird gesendet, keine Daten werden gespeichert. Das Cockpit selbst antwortet nur auf 127.0.0.1 auf deinem eigenen Rechner.</span></figcaption>
     </figure>
 
     <div class="ckt-links reveal">

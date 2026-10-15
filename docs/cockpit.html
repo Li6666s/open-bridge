@@ -90,6 +90,8 @@ code, .mono{
   background:color-mix(in srgb,var(--attention) 10%,var(--surface));
 }
 .alpha::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--attention)}
+.alpha .short{display:none}
+@media (max-width:640px){ .alpha .long{display:none} .alpha .short{display:inline} }
 .lead-def{
   border:1px solid var(--border);border-left:3px solid var(--accent-text);
   border-radius:var(--r-lg);background:var(--surface-subtle);padding:24px 28px;
@@ -114,7 +116,24 @@ html.dark .ck-win{box-shadow:0 1px 2px rgba(0,0,0,.4),0 28px 70px -28px rgba(0,0
 .ck-addr b{font-weight:600;color:var(--attention-text);font-family:var(--font-sans);font-size:11.5px;letter-spacing:.04em;text-transform:uppercase}
 .ck-full{flex:none;font-size:13px;font-weight:500;text-decoration:none;color:var(--accent-text);white-space:nowrap}
 .ck-full:hover{text-decoration:underline}
-.ck-frame{display:block;width:100%;height:908px;border:0;background:var(--surface)}
+.ck-frame{display:none;width:100%;border:0;background:var(--surface);
+  /* shorter than the window, so the page always has room to scroll past the demo */
+  height:clamp(560px,calc(100vh - 150px),860px)}
+.ck-live .ck-frame{display:block}
+.ck-live .ck-poster{display:none}
+/* phones (and no script): a picture of the demo that opens it full screen, never a
+   live frame, so a swipe through the page cannot get caught inside the demo */
+.ck-poster{display:block;position:relative;height:440px;overflow:hidden;text-decoration:none;background:var(--surface-subtle)}
+.ck-poster img{display:block;width:100%;max-width:390px;height:auto;margin:0 auto}
+.ck-poster .pl-dark{display:none}
+html.dark .ck-poster .pl-dark{display:block}
+html.dark .ck-poster .pl-light{display:none}
+.ck-poster::after{content:"";position:absolute;inset:auto 0 0 0;height:160px;
+  background:linear-gradient(to bottom,transparent,var(--surface-subtle) 78%)}
+.ck-tap{position:absolute;z-index:1;left:50%;bottom:26px;transform:translateX(-50%);white-space:nowrap;
+  display:inline-flex;align-items:center;gap:8px;padding:11px 20px;border-radius:var(--r-full);
+  font-size:15px;font-weight:600;color:#fff;background:var(--accent-text);box-shadow:0 8px 24px -10px rgba(15,23,42,.5)}
+html.dark .ck-tap{color:var(--surface)}
 .ck-demo figcaption{display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px 24px;margin-top:14px;font-size:14px;line-height:1.6;color:var(--secondary)}
 .ck-demo figcaption strong{color:var(--primary);font-weight:600}
 .ck-demo figcaption a{color:var(--accent-text);font-weight:500;text-decoration:none;white-space:nowrap}
@@ -130,12 +149,16 @@ html.dark .ck-win{box-shadow:0 1px 2px rgba(0,0,0,.4),0 28px 70px -28px rgba(0,0
 /* ---- the path of one click: wide drawing, tall drawing on phones ---- */
 .ck-fig{margin:0 auto;max-width:none}
 .ck-fig .ck-tall{display:none}
-@media (max-width:640px){ .ck-fig .ck-wide{display:none} .ck-fig .ck-tall{display:block;max-width:420px;margin-inline:auto} }
+@media (max-width:640px){
+  .ck-fig .ck-wide{display:none} .ck-fig .ck-tall{display:block;max-width:420px;margin-inline:auto}
+  /* the tall drawing labels its own boxes, so phones skip the legend below it */
+  .ck-fig .steps-legend{display:none}
+}
 .ck-after{margin-top:32px}
 .ck-note{border:1px solid var(--border);border-left:3px solid var(--accent-text);border-radius:var(--r-lg);background:var(--surface);padding:18px 22px;font-size:15px;line-height:1.65;color:var(--on-surface)}
 .alt .ck-note{background:var(--surface)}
 
-/* ---- screenshots: one light and one dark file each, the page shows the one that matches ---- */
+/* ---- close-ups: one light and one dark file each, the page shows the one that matches ---- */
 .shot{margin:0}
 .shot .frame{border:1px solid var(--border);border-radius:var(--r-lg);overflow:hidden;background:var(--surface-subtle);line-height:0;
   box-shadow:0 1px 2px rgba(15,23,42,.05),0 18px 44px -26px rgba(15,23,42,.30)}
@@ -146,12 +169,16 @@ html.dark .shot .frame{box-shadow:0 1px 2px rgba(0,0,0,.35),0 22px 50px -28px rg
 html.dark .shot .shot-dark{display:block}
 html.dark .shot .shot-light{display:none}
 .shot figcaption{margin-top:12px;font-size:14px;line-height:1.6;color:var(--secondary)}
+/* a close-up is shown at its own size (the file is twice that), so its text stays readable */
+.shot.crop{justify-self:center;width:fit-content;max-width:100%}
+.shot.crop .frame{background:var(--surface)}
+.shot.crop img{width:auto;max-width:100%}
 
 .ck-row{display:grid;gap:28px;align-items:center}
 .ck-row + .ck-row{margin-top:72px}
 @media (min-width:1000px){
-  .ck-row{grid-template-columns:minmax(0,1.55fr) minmax(0,1fr);gap:52px}
-  .ck-row.flip{grid-template-columns:minmax(0,1fr) minmax(0,1.55fr)}
+  .ck-row{grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:56px}
+  .ck-row.flip{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
   .ck-row.flip .shot{order:2}
 }
 .ck-row .txt .eyebrow{color:var(--accent-text)}
@@ -160,11 +187,12 @@ html.dark .shot .shot-light{display:none}
 .ck-verbs{list-style:none;margin:16px 0 0;padding:0;display:flex;flex-wrap:wrap;gap:8px}
 .ck-verbs li{font-size:13px;font-weight:500;padding:5px 12px;border-radius:var(--r-full);border:1px solid var(--border);background:var(--surface);color:var(--primary)}
 .ck-verbs li b{color:var(--accent-text);font-weight:600}
-.shot.phone{width:100%;max-width:19rem;margin-inline:auto}
+.shot.phone{width:100%;max-width:16rem;margin-inline:auto}
 .shot.phone .frame{border-radius:24px}
 @media (min-width:1000px){
-  .ck-row.phone-row{grid-template-columns:minmax(0,1fr) minmax(0,1.55fr)}
+  .ck-row.phone-row{grid-template-columns:minmax(0,1fr) minmax(0,1fr);align-items:start}
   .ck-row.phone-row .shot{order:2;justify-self:center}
+  .ck-row.phone-row .txt{position:sticky;top:110px;padding-top:24px}
 }
 
 /* ---- adapts: three numbered parts ---- */
@@ -214,6 +242,12 @@ html.dark .code{background:var(--code-bg)}
 
 /* ---- read on ---- */
 .ck-links{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(min(100%,17rem),1fr))}
+/* five cards: three above two, never four and a lone one */
+@media (min-width:1000px){
+  .ck-links{grid-template-columns:repeat(6,minmax(0,1fr))}
+  .ck-links a{grid-column:span 2}
+  .ck-links a:nth-child(n+4){grid-column:span 3}
+}
 .ck-links a{display:block;text-decoration:none;border:1px solid var(--border);border-radius:var(--r-lg);background:var(--surface);padding:20px 22px;transition:border-color .2s ease,background .2s ease}
 .ck-links a:hover{border-color:var(--accent-text);background:var(--surface-subtle)}
 .ck-links a code{display:table;margin-bottom:10px;color:var(--accent-text)}
@@ -225,7 +259,7 @@ html.dark .code{background:var(--code-bg)}
   .lead-def{padding:20px}
   .lead-def .def{font-size:17px}
   .ck-demo{margin-top:32px}
-  .ck-frame{height:640px}
+  .ck-poster{height:420px}
   .ck-bar{padding:8px 10px;gap:8px}
   .ck-dots{display:none}
   .ck-stat .v{font-size:36px}
@@ -288,7 +322,7 @@ html.dark .code{background:var(--code-bg)}
     <div class="container">
       <div class="ck-top">
         <div class="ck-top-text">
-          <span class="alpha"><span data-lang="en">Early version (alpha), still being extended</span><span data-lang="de">Frühe Version (Alpha), wird noch ausgebaut</span></span>
+          <span class="alpha"><span class="long"><span data-lang="en">Early version (alpha), still being extended</span><span data-lang="de">Frühe Version (Alpha), wird noch ausgebaut</span></span><span class="short"><span data-lang="en">Alpha, still growing</span><span data-lang="de">Alpha, im Ausbau</span></span></span>
           <p class="eyebrow" data-lang="en">Feature</p>
           <p class="eyebrow" data-lang="de">Feature</p>
           <h1 class="h1">Cockpit</h1>
@@ -314,19 +348,34 @@ html.dark .code{background:var(--code-bg)}
             <span class="ck-addr"><b data-lang="en">Demo</b><b data-lang="de">Demo</b><span>cockpit-demo/</span></span>
             <a class="ck-full ck-demo-link" href="cockpit-demo/index.html"><span data-lang="en">Full screen ↗</span><span data-lang="de">Vollbild ↗</span></a>
           </div>
-          <iframe class="ck-frame" id="ck-demo-frame" src="cockpit-demo/index.html" loading="lazy" title="Bridge cockpit demo with invented data"></iframe>
+          <a class="ck-poster ck-demo-link" href="cockpit-demo/index.html">
+            <div data-lang="en">
+              <img class="pl-light" src="assets/cockpit/light-phone-today.jpg" width="780" height="1688" loading="lazy" decoding="async" alt="The cockpit demo on a phone: the Today page with the waiting agent tabs on top. Tap to open the demo full screen.">
+              <img class="pl-dark" src="assets/cockpit/dark-phone-today.jpg" width="780" height="1688" loading="lazy" decoding="async" alt="The cockpit demo on a phone in dark mode: the Today page with the waiting agent tabs on top. Tap to open the demo full screen.">
+            </div>
+            <div data-lang="de">
+              <img class="pl-light" src="assets/cockpit/de-light-phone-today.jpg" width="780" height="1688" loading="lazy" decoding="async" alt="Die Cockpit-Demo auf einem Handy: die Seite Heute mit den wartenden Agent-Tabs oben. Tippen öffnet die Demo im Vollbild.">
+              <img class="pl-dark" src="assets/cockpit/de-dark-phone-today.jpg" width="780" height="1688" loading="lazy" decoding="async" alt="Die Cockpit-Demo auf einem Handy im dunklen Design: die Seite Heute mit den wartenden Agent-Tabs oben. Tippen öffnet die Demo im Vollbild.">
+            </div>
+            <span class="ck-tap"><span data-lang="en">Tap to open the demo</span><span data-lang="de">Tippen öffnet die Demo</span> <span aria-hidden="true">↗</span></span>
+          </a>
+          <iframe class="ck-frame" id="ck-demo-frame" loading="lazy" title="Bridge cockpit demo with invented data"></iframe>
           <script>
           /* The demo follows the site: theme from html.dark, language from
              data-active-lang. The address is built here so the link checker
-             never sees a query; without JS the plain src and hrefs still open
-             the demo, which switches mock mode on by itself. The first address
-             goes into src; a later toggle replaces the frame's location, so it
-             adds no history entry and Back leaves the page. The full-screen
-             links carry the same language and theme. */
+             never sees a query; without JS the poster and the plain hrefs still
+             open the demo, which switches mock mode on by itself. The live frame
+             loads only from 641 px up: on a phone a frame this tall would catch
+             every swipe, so the poster stays and opens the demo full screen.
+             The first address goes into src; a later toggle replaces the
+             frame's location, so it adds no history entry and Back leaves the
+             page. The full-screen links carry the same language and theme. */
           (function(){
             var f = document.getElementById("ck-demo-frame");
             if(!f) return;
             var r = document.documentElement, cur = "", loaded = false;
+            var win = f.parentNode;
+            var mq = window.matchMedia ? window.matchMedia("(min-width: 641px)") : null;
             var TITLE = { en:"Bridge cockpit demo with invented data", de:"Bridge-Cockpit-Demo mit erfundenen Daten" };
             f.addEventListener("load", function(){ loaded = true; });
             function sync(){
@@ -336,7 +385,9 @@ html.dark .code{background:var(--code-bg)}
               f.setAttribute("title", TITLE[lang]);
               var links = document.querySelectorAll("a.ck-demo-link");
               for(var i = 0; i < links.length; i++){ links[i].setAttribute("href", u); }
-              if(u === cur) return;
+              var wide = !mq || mq.matches;
+              win.classList.toggle("ck-live", wide);
+              if(!wide || u === cur) return;
               cur = u;
               var w = null;
               try { w = loaded ? f.contentWindow : null; if(w){ w.location.replace(new URL(u, location.href).href); } }
@@ -344,6 +395,7 @@ html.dark .code{background:var(--code-bg)}
               if(!w){ f.setAttribute("src", u); }
             }
             sync();
+            if(mq){ if(mq.addEventListener){ mq.addEventListener("change", sync); } else if(mq.addListener){ mq.addListener(sync); } }
             if("MutationObserver" in window){
               new MutationObserver(sync).observe(r, { attributes:true, attributeFilter:["class","data-active-lang"] });
             }
@@ -351,14 +403,15 @@ html.dark .code{background:var(--code-bg)}
           </script>
         </div>
         <figcaption>
-          <span data-lang="en"><strong>Live demo.</strong> Invented demo data: the demo itself sends nothing and saves nothing. Every page, button and chat answer comes from a script in your browser.</span>
-          <span data-lang="de"><strong>Live-Demo.</strong> Erfundene Demodaten: die Demo selbst sendet nichts und speichert nichts. Jede Seite, jeder Knopf und jede Chat-Antwort kommt aus einem Skript in deinem Browser.</span>
+          <span data-lang="en"><strong>Live demo.</strong> Invented demo data: the demo itself sends nothing and saves no data. Every page, button and chat answer comes from a script in your browser.</span>
+          <span data-lang="de"><strong>Live-Demo.</strong> Erfundene Demodaten: die Demo selbst sendet nichts und speichert keine Daten. Jede Seite, jeder Knopf und jede Chat-Antwort kommt aus einem Skript in deinem Browser.</span>
         </figcaption>
       </figure>
 
       <!-- Every number here is checked: 11 pages in the demo's tab bar and its
-           "More" menu, 0 requests to another host while the demo runs, the two
-           tables of text.js, and the four switches of section "Off by default". -->
+           "More" menu, 0 requests to another host while the demo runs, the 49
+           verbs of SPEC in scripts/lib/bridge_cockpit/actions.py, and the four
+           switches of section "Off by default". -->
       <div class="ck-stats" data-reveal="stagger">
         <div class="ck-stat">
           <span class="v" data-count="11">11</span>
@@ -371,9 +424,9 @@ html.dark .code{background:var(--code-bg)}
           <p data-lang="de">Anfragen verlassen die Demo: die Daten entstehen in deinem Browser</p>
         </div>
         <div class="ck-stat">
-          <span class="v" data-count="2">2</span>
-          <p data-lang="en">languages for the page's own words, English and German, read from your config</p>
-          <p data-lang="de">Sprachen für die Texte der Seite, Englisch und Deutsch, aus deinen Einstellungen</p>
+          <span class="v" data-count="49">49</span>
+          <p data-lang="en">verbs on the server's fixed list, each argument checked by type. Nothing else runs</p>
+          <p data-lang="de">Verben auf der festen Liste des Servers, jedes Argument nach Typ geprüft. Sonst läuft nichts</p>
         </div>
         <div class="ck-stat">
           <span class="v" data-count="4">4</span>
@@ -419,7 +472,7 @@ html.dark .code{background:var(--code-bg)}
             <rect class="sf-box" x="222" y="52" width="164" height="124" rx="10"/>
             <text class="sf-lbl" x="238" y="78"><tspan data-lang="en">Local server</tspan><tspan data-lang="de">Lokaler Server</tspan></text>
             <text class="sf-mono" x="238" y="100">bridge-cockpit.py</text>
-            <text class="sf-sub" x="238" y="122">token · host · origin</text>
+            <text class="sf-sub" x="238" y="122"><tspan data-lang="en">token · host · origin</tspan><tspan data-lang="de">Schlüssel · Host · Herkunft</tspan></text>
             <text class="sf-sub" x="238" y="140"><tspan data-lang="en">fixed verb list</tspan><tspan data-lang="de">feste Verbliste</tspan></text>
             <text class="sf-sub" x="238" y="158"><tspan data-lang="en">audit.log per write</tspan><tspan data-lang="de">audit.log je Schreibaktion</tspan></text>
           </g>
@@ -443,9 +496,10 @@ html.dark .code{background:var(--code-bg)}
             <text class="sf-sub" x="626" y="140"><tspan data-lang="en">cmux or tmux</tspan><tspan data-lang="de">cmux oder tmux</tspan></text>
           </g>
 
-          <path class="sf-line soft" data-step="5" data-draw d="M304 176 V304" marker-end="url(#ckArrM)"/>
+          <path class="sf-line soft" data-step="5" data-draw d="M304 176 V232 H208 V304" marker-end="url(#ckArrM)"/>
+          <path class="sf-line soft" data-step="5" data-draw d="M304 232 H592 V304" marker-end="url(#ckArrM)"/>
           <g data-step="5">
-            <text class="sf-sub" x="316" y="250"><tspan data-lang="en">off until you switch it on</tspan><tspan data-lang="de">aus, bis du es einschaltest</tspan></text>
+            <text class="sf-sub" x="318" y="258"><tspan data-lang="en">only on your click or a switch</tspan><tspan data-lang="de">nur auf deinen Klick oder einen Schalter</tspan></text>
             <rect class="sf-zone" x="12" y="276" width="776" height="112" rx="12"/>
             <text class="sf-sub" x="28" y="298"><tspan data-lang="en">OUTSIDE YOUR COMPUTER</tspan><tspan data-lang="de">AUSSERHALB DEINES RECHNERS</tspan></text>
             <rect class="sf-box" x="28" y="310" width="360" height="62" rx="10"/>
@@ -475,7 +529,7 @@ html.dark .code{background:var(--code-bg)}
             <rect class="sf-box" x="20" y="156" width="300" height="112" rx="10"/>
             <text class="sf-lbl" x="36" y="182"><tspan data-lang="en">Local server</tspan><tspan data-lang="de">Lokaler Server</tspan></text>
             <text class="sf-mono" x="36" y="202">bridge-cockpit.py</text>
-            <text class="sf-sub" x="36" y="222">token · host · origin</text>
+            <text class="sf-sub" x="36" y="222"><tspan data-lang="en">token · host · origin</tspan><tspan data-lang="de">Schlüssel · Host · Herkunft</tspan></text>
             <text class="sf-sub" x="36" y="238"><tspan data-lang="en">fixed verb list</tspan><tspan data-lang="de">feste Verbliste</tspan></text>
             <text class="sf-sub" x="36" y="254"><tspan data-lang="en">audit.log per write</tspan><tspan data-lang="de">audit.log je Schreibaktion</tspan></text>
           </g>
@@ -494,7 +548,8 @@ html.dark .code{background:var(--code-bg)}
             <text class="sf-mono" x="36" y="470">work/ · inbox</text>
             <text class="sf-sub" x="36" y="492"><tspan data-lang="en">agent tabs in cmux or tmux</tspan><tspan data-lang="de">Agent-Tabs in cmux oder tmux</tspan></text>
           </g>
-          <path class="sf-line soft" data-step="5" data-draw d="M320 212 H352 V612 H326" marker-end="url(#ckArrTM)"/>
+          <path class="sf-line soft" data-step="5" data-draw d="M320 212 H352 V613 H326" marker-end="url(#ckArrTM)"/>
+          <path class="sf-line soft" data-step="5" data-draw d="M352 613 V675 H326" marker-end="url(#ckArrTM)"/>
           <g data-step="5">
             <rect class="sf-zone" x="8" y="552" width="336" height="160" rx="12"/>
             <text class="sf-sub" x="20" y="574"><tspan data-lang="en">OUTSIDE YOUR COMPUTER</tspan><tspan data-lang="de">AUSSERHALB DEINES RECHNERS</tspan></text>
@@ -512,7 +567,7 @@ html.dark .code{background:var(--code-bg)}
           <li data-step="2"><b>2</b><span data-lang="en">The local server checks</span><span data-lang="de">Der lokale Server prüft</span></li>
           <li data-step="3"><b>3</b><span data-lang="en">A Bridge script runs</span><span data-lang="de">Ein Bridge-Skript läuft</span></li>
           <li data-step="4"><b>4</b><span data-lang="en">Files and tabs change</span><span data-lang="de">Dateien und Tabs ändern sich</span></li>
-          <li data-step="5"><b>5</b><span data-lang="en">Nothing leaves unless switched on</span><span data-lang="de">Nichts geht raus, solange du es nicht einschaltest</span></li>
+          <li data-step="5"><b>5</b><span data-lang="en">Nothing leaves without your click or a switch</span><span data-lang="de">Nichts geht raus ohne deinen Klick oder einen Schalter</span></li>
         </ol>
       </figure>
 
@@ -522,8 +577,8 @@ html.dark .code{background:var(--code-bg)}
           <p data-lang="de">Ein Skript läuft nur aus der eigenen Liste der Bridge: <code>briefing.py</code>, <code>inbox.py</code>, <code>workplace.py</code>, <code>task.py</code>, <code>bridge-resources.py</code>, <code>triage.py</code> und das cmux-Layout-Skript. Jedes Argument ist ein eigenes Wort, und was die Seite mit einem Agent-Tab macht, geht über <code>workplace.py</code> und seinen Terminal-Treiber.</p>
         </div>
         <div class="ck-note" data-reveal>
-          <span data-lang="en">Nothing on the page costs tokens until you press a button that asks Claude or opens an agent tab. An inbox action you approve still runs only at the next <code>inbox.py run</code>.</span>
-          <span data-lang="de">Nichts auf der Seite kostet Tokens, bis du einen Knopf drückst, der Claude fragt oder einen Agent-Tab öffnet. Eine Posteingangs-Aktion, die du freigibst, läuft trotzdem erst beim nächsten <code>inbox.py run</code>.</span>
+          <span data-lang="en">Nothing on the page costs tokens until you press a button that asks Claude, sorts or checks with a model, or opens an agent tab. An inbox action you approve still runs only at the next <code>inbox.py run</code>.</span>
+          <span data-lang="de">Nichts auf der Seite kostet Tokens, bis du einen Knopf drückst, der Claude fragt, mit einem Modell sortiert oder prüft, oder einen Agent-Tab öffnet. Eine Posteingangs-Aktion, die du freigibst, läuft trotzdem erst beim nächsten <code>inbox.py run</code>.</span>
         </div>
       </div>
     </div></div>
@@ -537,23 +592,23 @@ html.dark .code{background:var(--code-bg)}
         <p class="eyebrow" data-lang="de">Was du siehst</p>
         <h2 class="h2" data-lang="en">Your day, your agents, your quota</h2>
         <h2 class="h2" data-lang="de">Dein Tag, deine Agenten, dein Kontingent</h2>
-        <p class="intro" data-lang="en">Start greets you and opens every page. These are the pages that carry most of a day, taken from the demo above in the theme you are reading in.</p>
-        <p class="intro" data-lang="de">Start begrüßt dich und öffnet jede Seite. Das hier sind die Seiten, die den größten Teil eines Tages tragen, aus der Demo oben, im Design, in dem du gerade liest.</p>
+        <p class="intro" data-lang="en">Start greets you and opens every page. Three pages carry most of a day. Here is the one part of each that matters, at its real size, from the demo above and in the theme you are reading in.</p>
+        <p class="intro" data-lang="de">Start begrüßt dich und öffnet jede Seite. Drei Seiten tragen den größten Teil eines Tages. Hier ist von jeder der eine Teil, auf den es ankommt, in echter Größe, aus der Demo oben und im Design, in dem du gerade liest.</p>
       </div>
 
       <div class="ck-row" data-reveal>
-        <figure class="shot">
+        <figure class="shot crop">
           <div class="frame">
             <div data-lang="en">
-              <img class="shot-light" src="assets/cockpit/light-today.jpg" width="1600" height="1000" loading="lazy" decoding="async" alt="The Today page: on the left what waits for you and what you can hand off, each row with its main button; in the middle the day at a glance; on the right the agent tabs, one asking for a yes with Yes and No buttons.">
-              <img class="shot-dark" src="assets/cockpit/dark-today.jpg" width="1600" height="1000" loading="lazy" decoding="async" alt="The Today page in dark mode: what waits for you and what you can hand off on the left, the day at a glance in the middle, the agent tabs on the right, one asking for a yes.">
+              <img class="shot-light" src="assets/cockpit/light-today-ask.jpg" width="428" height="202" loading="lazy" decoding="async" alt="Close-up of the Today page: an agent tab in the group Ops that needs you. It asks to allow an edit of RELEASE_NOTES.md and offers Yes and No right on the card, next to Go to tab, View and message.">
+              <img class="shot-dark" src="assets/cockpit/dark-today-ask.jpg" width="428" height="202" loading="lazy" decoding="async" alt="Close-up of the Today page: an agent tab in the group Ops that needs you. It asks to allow an edit of RELEASE_NOTES.md and offers Yes and No right on the card, next to Go to tab, View and message.">
             </div>
             <div data-lang="de">
-              <img class="shot-light" src="assets/cockpit/de-light-today.jpg" width="1600" height="1000" loading="lazy" decoding="async" alt="Die Seite Heute: links, was auf dich wartet und was du übergeben kannst, jede Zeile mit ihrem Hauptknopf; in der Mitte der Tag im Überblick; rechts die Agent-Tabs, einer fragt nach einem Ja, mit Knöpfen Ja und Nein.">
-              <img class="shot-dark" src="assets/cockpit/de-dark-today.jpg" width="1600" height="1000" loading="lazy" decoding="async" alt="Die Seite Heute im dunklen Design: links, was auf dich wartet und was du übergeben kannst, in der Mitte der Tag im Überblick, rechts die Agent-Tabs, einer fragt nach einem Ja.">
+              <img class="shot-light" src="assets/cockpit/de-light-today-ask.jpg" width="428" height="202" loading="lazy" decoding="async" alt="Ausschnitt der Seite Heute: ein Agent-Tab in der Gruppe Ops, der dich braucht. Er fragt, ob er RELEASE_NOTES.md ändern darf, und bietet Ja und Nein direkt auf der Karte, neben Zum Tab, Ansehen und Nachricht.">
+              <img class="shot-dark" src="assets/cockpit/de-dark-today-ask.jpg" width="428" height="202" loading="lazy" decoding="async" alt="Ausschnitt der Seite Heute: ein Agent-Tab in der Gruppe Ops, der dich braucht. Er fragt, ob er RELEASE_NOTES.md ändern darf, und bietet Ja und Nein direkt auf der Karte, neben Zum Tab, Ansehen und Nachricht.">
             </div>
           </div>
-          <figcaption><span data-lang="en">Today, with invented demo data.</span><span data-lang="de">Heute, mit erfundenen Demodaten.</span></figcaption>
+          <figcaption><span data-lang="en">Today: a tab that asks, with invented demo data.</span><span data-lang="de">Heute: ein Tab, der fragt, mit erfundenen Demodaten.</span></figcaption>
         </figure>
         <div class="txt">
           <p class="eyebrow" data-lang="en">Today</p>
@@ -561,7 +616,7 @@ html.dark .code{background:var(--code-bg)}
           <h3 data-lang="en">What waits for you, and the tabs that ask</h3>
           <h3 data-lang="de">Was auf dich wartet, und die Tabs, die fragen</h3>
           <p data-lang="en">On the left your day: what waits for you, what you can hand off, the backlog. In the middle the detail of the row you clicked, with every action it allows. On the right the agent tabs, grouped by workspace: a tab that asks for a yes gets Yes and No right there. The buttons speak four verbs, here and in every other place:</p>
-          <p data-lang="de">Links dein Tag: was auf dich wartet, was du übergeben kannst, der Backlog. In der Mitte das Detail der Zeile, die du angeklickt hast, mit jeder Aktion, die sie erlaubt. Rechts die Agent-Tabs, nach Workspace gruppiert: ein Tab, der ein Ja braucht, bekommt Ja und Nein gleich dort. Die Knöpfe sprechen vier Verben, hier und überall sonst:</p>
+          <p data-lang="de">Links dein Tag: was auf dich wartet, was du übergeben kannst, der Backlog. In der Mitte das Detail der Zeile, die du angeklickt hast, mit jeder Aktion, die sie erlaubt. Rechts die Agent-Tabs, nach Workspace gruppiert: ein Tab, der ein Ja braucht, bekommt Ja und Nein gleich dort. Vier Knöpfe tauchen hier und überall sonst auf:</p>
           <ul class="ck-verbs">
             <li><b data-lang="en">Get it done</b><b data-lang="de">Erledigen lassen</b></li>
             <li><b data-lang="en">Advise</b><b data-lang="de">Beraten</b></li>
@@ -572,42 +627,42 @@ html.dark .code{background:var(--code-bg)}
       </div>
 
       <div class="ck-row flip" data-reveal>
-        <figure class="shot">
+        <figure class="shot crop">
           <div class="frame">
             <div data-lang="en">
-              <img class="shot-light" src="assets/cockpit/light-sessions.jpg" width="1600" height="760" loading="lazy" decoding="async" alt="The Sessions page: three counters for sessions, working and subagents, then one card per Claude Code session with its state, its tab and the subagents it started.">
-              <img class="shot-dark" src="assets/cockpit/dark-sessions.jpg" width="1600" height="760" loading="lazy" decoding="async" alt="The Sessions page in dark mode: counters for sessions, working and subagents, and one card per Claude Code session with its subagents.">
+              <img class="shot-light" src="assets/cockpit/light-sessions-card.jpg" width="467" height="408" loading="lazy" decoding="async" alt="Close-up of the Sessions page: the card of one Claude Code session, working for 4 minutes, with 2 subagents active and 3 finished in the last hour, a timeline of the last 10 minutes, each subagent with its task, and a Go to tab button.">
+              <img class="shot-dark" src="assets/cockpit/dark-sessions-card.jpg" width="467" height="408" loading="lazy" decoding="async" alt="Close-up of the Sessions page: the card of one Claude Code session, working for 4 minutes, with 2 subagents active and 3 finished in the last hour, a timeline of the last 10 minutes, each subagent with its task, and a Go to tab button.">
             </div>
             <div data-lang="de">
-              <img class="shot-light" src="assets/cockpit/de-light-sessions.jpg" width="1600" height="760" loading="lazy" decoding="async" alt="Die Seite Sitzungen: drei Zähler für Sitzungen, arbeitende und Subagenten, dann je Claude-Code-Sitzung eine Karte mit ihrem Zustand, ihrem Tab und den Subagenten, die sie gestartet hat.">
-              <img class="shot-dark" src="assets/cockpit/de-dark-sessions.jpg" width="1600" height="760" loading="lazy" decoding="async" alt="Die Seite Sitzungen im dunklen Design: Zähler für Sitzungen, arbeitende und Subagenten, und je Claude-Code-Sitzung eine Karte mit ihren Subagenten.">
+              <img class="shot-light" src="assets/cockpit/de-light-sessions-card.jpg" width="467" height="408" loading="lazy" decoding="async" alt="Ausschnitt der Seite Sitzungen: die Karte einer Claude-Code-Sitzung, arbeitet seit 4 Minuten, 2 Subagenten aktiv und 3 in der letzten Stunde fertig, eine Zeitleiste der letzten 10 Minuten, jeder Subagent mit seiner Aufgabe, und ein Knopf Zum Tab.">
+              <img class="shot-dark" src="assets/cockpit/de-dark-sessions-card.jpg" width="467" height="408" loading="lazy" decoding="async" alt="Ausschnitt der Seite Sitzungen: die Karte einer Claude-Code-Sitzung, arbeitet seit 4 Minuten, 2 Subagenten aktiv und 3 in der letzten Stunde fertig, eine Zeitleiste der letzten 10 Minuten, jeder Subagent mit seiner Aufgabe, und ein Knopf Zum Tab.">
             </div>
           </div>
-          <figcaption><span data-lang="en">Sessions, with invented demo data.</span><span data-lang="de">Sitzungen, mit erfundenen Demodaten.</span></figcaption>
+          <figcaption><span data-lang="en">Sessions: one card, with invented demo data.</span><span data-lang="de">Sitzungen: eine Karte, mit erfundenen Demodaten.</span></figcaption>
         </figure>
         <div class="txt">
           <p class="eyebrow" data-lang="en">Sessions</p>
           <p class="eyebrow" data-lang="de">Sitzungen</p>
           <h3 data-lang="en">Who is working on what</h3>
           <h3 data-lang="de">Wer woran arbeitet</h3>
-          <p data-lang="en">Every Claude Code session on this machine as a card, this Bridge first: working, needs you or waiting, since when, and its subagents with what each one does and for how long. A click jumps to the session's tab.</p>
-          <p data-lang="de">Jede Claude-Code-Sitzung auf diesem Rechner als Karte, diese Bridge zuerst: arbeitet, braucht dich oder wartet, seit wann, und ihre Subagenten mit dem, was jeder tut und wie lange schon. Ein Klick springt in den Tab der Sitzung.</p>
+          <p data-lang="en">Every Claude Code session on this machine as a card, this Bridge first: working, ready, needs you or waiting, since when, and its subagents with what each one does and for how long. A click jumps to the session's tab.</p>
+          <p data-lang="de">Jede Claude-Code-Sitzung auf diesem Rechner als Karte, diese Bridge zuerst: arbeitet, bereit, braucht dich oder wartet, seit wann, und ihre Subagenten mit dem, was jeder tut und wie lange schon. Ein Klick springt in den Tab der Sitzung.</p>
         </div>
       </div>
 
       <div class="ck-row" data-reveal>
-        <figure class="shot">
+        <figure class="shot crop">
           <div class="frame">
             <div data-lang="en">
-              <img class="shot-light" src="assets/cockpit/light-usage.jpg" width="1600" height="1074" loading="lazy" decoding="async" alt="A usage page: two gauges for the session quota and the weekly quota, each with how much of its time window has passed, and below them the day's sessions with their cost.">
-              <img class="shot-dark" src="assets/cockpit/dark-usage.jpg" width="1600" height="1074" loading="lazy" decoding="async" alt="The usage page in dark mode: gauges for the session and the weekly quota against their time windows, and the day's sessions with their cost.">
+              <img class="shot-light" src="assets/cockpit/light-usage-gauges.jpg" width="526" height="246" loading="lazy" decoding="async" alt="Close-up of a usage page: two gauges. The session quota stands at 22 % with 40 % of its time window gone, on pace. The weekly quota stands at 84 % with 55 % of the week gone, ahead of the time.">
+              <img class="shot-dark" src="assets/cockpit/dark-usage-gauges.jpg" width="526" height="246" loading="lazy" decoding="async" alt="Close-up of a usage page: two gauges. The session quota stands at 22 % with 40 % of its time window gone, on pace. The weekly quota stands at 84 % with 55 % of the week gone, ahead of the time.">
             </div>
             <div data-lang="de">
-              <img class="shot-light" src="assets/cockpit/de-light-usage.jpg" width="1600" height="1074" loading="lazy" decoding="async" alt="Eine Verbrauchsseite: zwei Anzeigen für das Kontingent der Sitzung und der Woche, jede mit dem Teil ihres Zeitfensters, der schon vorbei ist, darunter die Sitzungen des Tages mit ihren Kosten.">
-              <img class="shot-dark" src="assets/cockpit/de-dark-usage.jpg" width="1600" height="1074" loading="lazy" decoding="async" alt="Die Verbrauchsseite im dunklen Design: Anzeigen für das Kontingent der Sitzung und der Woche gegen ihre Zeitfenster, darunter die Sitzungen des Tages mit ihren Kosten.">
+              <img class="shot-light" src="assets/cockpit/de-light-usage-gauges.jpg" width="526" height="246" loading="lazy" decoding="async" alt="Ausschnitt einer Verbrauchsseite: zwei Anzeigen. Das Kontingent der Sitzung steht bei 22 %, 40 % ihres Zeitfensters sind vorbei, im Plan. Das Wochenkontingent steht bei 84 %, 55 % der Woche sind vorbei, schneller als die Zeit.">
+              <img class="shot-dark" src="assets/cockpit/de-dark-usage-gauges.jpg" width="526" height="246" loading="lazy" decoding="async" alt="Ausschnitt einer Verbrauchsseite: zwei Anzeigen. Das Kontingent der Sitzung steht bei 22 %, 40 % ihres Zeitfensters sind vorbei, im Plan. Das Wochenkontingent steht bei 84 %, 55 % der Woche sind vorbei, schneller als die Zeit.">
             </div>
           </div>
-          <figcaption><span data-lang="en">A usage page, with invented demo data.</span><span data-lang="de">Eine Verbrauchsseite, mit erfundenen Demodaten.</span></figcaption>
+          <figcaption><span data-lang="en">Usage: two quotas, with invented demo data.</span><span data-lang="de">Verbrauch: zwei Kontingente, mit erfundenen Demodaten.</span></figcaption>
         </figure>
         <div class="txt">
           <p class="eyebrow" data-lang="en">Your own pages</p>
@@ -688,9 +743,9 @@ html.dark .code{background:var(--code-bg)}
         <div class="ck-guards" data-reveal>
           <ul>
             <li><span class="n">127.0.0.1</span><span><span data-lang="en"><strong>Local address only.</strong> The server never answers on every interface of your computer.</span><span data-lang="de"><strong>Nur lokale Adresse.</strong> Der Server antwortet nie auf allen Schnittstellen deines Rechners.</span></span></li>
-            <li><span class="n">token → cookie</span><span><span data-lang="en"><strong>A sign-in link with a key.</strong> You open it once, the server swaps the key for a cookie, and the address bar keeps no key.</span><span data-lang="de"><strong>Ein Anmeldelink mit Schlüssel.</strong> Du öffnest ihn einmal, der Server tauscht den Schlüssel gegen ein Cookie, und die Adressleiste behält keinen.</span></span></li>
-            <li><span class="n">host · origin</span><span><span data-lang="en"><strong>Only from the page itself.</strong> Every request must name the local host, every click must come from the page, and the page allows no frames and no scripts from elsewhere.</span><span data-lang="de"><strong>Nur von der Seite selbst.</strong> Jede Anfrage muss den lokalen Host nennen, jeder Klick muss von der Seite kommen, und die Seite erlaubt keine Frames und keine fremden Skripte.</span></span></li>
-            <li><span class="n">verbs</span><span><span data-lang="en"><strong>Verbs, never commands.</strong> A fixed list, every id checked again, and only scripts from the Bridge's own list run.</span><span data-lang="de"><strong>Verben, nie Befehle.</strong> Eine feste Liste, jede ID noch einmal geprüft, und es laufen nur Skripte aus der eigenen Liste der Bridge.</span></span></li>
+            <li><span class="n"><span data-lang="en">token → cookie</span><span data-lang="de">Schlüssel → Cookie</span></span><span><span data-lang="en"><strong>A sign-in link with a key.</strong> You open it once, the server swaps the key for a cookie, and the address bar keeps no key.</span><span data-lang="de"><strong>Ein Anmeldelink mit Schlüssel.</strong> Du öffnest ihn einmal, der Server tauscht den Schlüssel gegen ein Cookie, und die Adressleiste behält keinen.</span></span></li>
+            <li><span class="n">host · origin</span><span><span data-lang="en"><strong>Only from the page itself.</strong> Every request must name the local host, every click must come from the page, and the page allows no frames and no scripts from elsewhere (the live page, the demo here is a static copy).</span><span data-lang="de"><strong>Nur von der Seite selbst.</strong> Jede Anfrage muss den lokalen Host nennen, jeder Klick muss von der Seite kommen, und die Seite erlaubt keine Frames und keine fremden Skripte (die echte Seite, die Demo hier ist eine statische Kopie).</span></span></li>
+            <li><span class="n"><span data-lang="en">verbs</span><span data-lang="de">Verben</span></span><span><span data-lang="en"><strong>Verbs, never commands.</strong> A fixed list, every id checked again, and only scripts from the Bridge's own list run.</span><span data-lang="de"><strong>Verben, nie Befehle.</strong> Eine feste Liste, jede ID noch einmal geprüft, und es laufen nur Skripte aus der eigenen Liste der Bridge.</span></span></li>
             <li><span class="n">audit.log</span><span><span data-lang="en"><strong>One line per write action</strong>: time, verb, rows and exit codes, never a text and never the key.</span><span data-lang="de"><strong>Eine Zeile je Schreibaktion</strong>: Zeit, Verb, Zeilen und Exit-Codes, nie ein Text und nie der Schlüssel.</span></span></li>
             <li><span class="n">HMAC</span><span><span data-lang="en"><strong>Questions to Claude are signed</strong> with a key outside the Bridge, so a program that merely writes files into your repository cannot forge one.</span><span data-lang="de"><strong>Fragen an Claude sind signiert</strong>, mit einem Schlüssel außerhalb der Bridge. Ein Programm, das nur Dateien in dein Repository schreibt, kann keine fälschen.</span></span></li>
           </ul>
@@ -753,8 +808,8 @@ python3 scripts/bridge-cockpit.py open</pre>
         </div>
         <ol class="ck-steps" data-reveal="stagger">
           <li><h4><span data-lang="en">Switch it on</span><span data-lang="de">Einschalten</span></h4>
-            <p data-lang="en">Add the <code>cockpit:</code> block. Every other key is optional and has a default; <code>bridge-config.yaml.template</code> lists them.</p>
-            <p data-lang="de">Füge den Block <code>cockpit:</code> hinzu. Jeder weitere Schlüssel ist optional und hat einen Standardwert; <code>bridge-config.yaml.template</code> listet sie auf.</p></li>
+            <p data-lang="en">Add the <code>cockpit:</code> block. Every other key is optional and has a default. <code>bridge-config.yaml.template</code> lists them.</p>
+            <p data-lang="de">Füge den Block <code>cockpit:</code> hinzu. Jeder weitere Schlüssel ist optional und hat einen Standardwert. <code>bridge-config.yaml.template</code> listet sie auf.</p></li>
           <li><h4><span data-lang="en">Open it</span><span data-lang="de">Öffnen</span></h4>
             <p data-lang="en"><code>/cockpit</code> starts the server, or reuses the running one, and opens the page.</p>
             <p data-lang="de"><code>/cockpit</code> startet den Server, oder nimmt den laufenden, und öffnet die Seite.</p></li>
