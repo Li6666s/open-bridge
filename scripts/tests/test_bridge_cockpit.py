@@ -1201,6 +1201,64 @@ def test_advise_later_and_settle_work_on_a_page_item(world):
     assert world.app.store.hidden()[CHECK_KEY] == TOMORROW
 
 
+def test_do_it_reuses_an_item_another_profile_filed_for_the_same_row(world):
+    """The cockpit's profile often extends the morning briefing: a `to_inbox` item filed by /briefing morning
+    carries that profile's name, and is still the same row"""
+    world.runner.handlers["inbox.list"] = lambda argv: ok([
+        {"id": FILED_ID, "state": "open", "key": "briefing:evening:checks:backup-stale"}])
+    world.app.inbox_cache = (0.0, None)
+    world.runner.calls.clear()
+    world.act("do_it", keys=[CHECK_KEY])
+    assert writes(world) == [launch_argv(world, FILED_ID, "go")]
+
+
+SWEPT_ID = "20261015-1300-checks-gone-row-e5f6"
+KEPT_ID = "20261015-1301-checks-backup-older-a7b8"
+
+
+def full_pass(world) -> None:
+    world.app.inbox_cache = (0.0, None)
+    world.runner.calls.clear()
+    world.app.collector.request("full")
+    world.app.collector.drain()
+
+
+def test_a_full_pass_closes_what_get_it_done_filed_once_its_row_is_gone(world):
+    """Get it done on a page row files an item the briefing would close when the row is gone, but the briefing
+    only sweeps with --file, and the cockpit collects without: so the cockpit sweeps its own items after a
+    full pass. Only its own, only in sections that answered in full"""
+    world.runner.handlers["inbox.list"] = lambda argv: ok([
+        {"id": SWEPT_ID, "state": "open", "from": "bridge-cockpit", "key": "briefing:morning:checks:gone-row"},
+        {"id": KEPT_ID, "state": "open", "from": "bridge-cockpit", "key": CHECK_INBOX_KEY},
+        {"id": YES_ID, "state": "open", "from": "briefing/morning", "key": "briefing:morning:checks:other"},
+        {"id": YES2_ID, "state": "open", "from": "bridge-cockpit", "key": "briefing:morning:nosuchsection:x"},
+        {"id": ONLY_ID, "state": "done", "from": "bridge-cockpit", "key": "briefing:morning:checks:old"}])
+    full_pass(world)
+    assert writes(world) == [I(world, "close", SWEPT_ID, "--note", "its row is no longer in the briefing")]
+
+
+def test_no_sweep_after_a_quick_pass_or_when_a_section_did_not_answer_in_full(world):
+    world.runner.handlers["inbox.list"] = lambda argv: ok([
+        {"id": SWEPT_ID, "state": "open", "from": "bridge-cockpit", "key": "briefing:morning:checks:gone-row"}])
+    world.app.inbox_cache = (0.0, None)
+    world.runner.calls.clear()
+    world.app.collector.request("quick")
+    world.app.collector.drain()
+    assert not any(world.runner.key(c) == "inbox.close" for c in world.runner.calls)
+    original = world.runner.handlers["briefing.collect"]
+
+    def failing(argv):
+        data = json.loads(original(argv).out)
+        for pg in data["pages"]:
+            for sec in pg["sections"]:
+                if sec["id"] == "checks":
+                    sec["status"] = "error"
+        return ok(data)
+    world.runner.handlers["briefing.collect"] = failing
+    full_pass(world)
+    assert not any(world.runner.key(c) == "inbox.close" for c in world.runner.calls)
+
+
 def test_a_page_item_put_off_or_handed_on_leaves_its_page_until_the_day_comes(world):
     def listed():
         sec = next(x for p in world.app.collector.model["pages"] if p["id"] == "systems"

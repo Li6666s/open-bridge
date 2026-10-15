@@ -279,7 +279,7 @@ class Actions:
         inbox_key = f"briefing:{profile}:{sec['id']}:{it['id']}" if it.get("id") and profile else None
         row = m._base_row(title=it["title"], url=url, sources=[sec.get("title") or sec["id"]],
                           page_item={"section": sec.get("title") or sec["id"], "detail": it.get("detail") or "",
-                                     "inbox_key": inbox_key})
+                                     "inbox_key": inbox_key, "row": f":{sec['id']}:{it['id']}" if it.get("id") else None})
         row["key"] = key
         hidden = (self.app.store.hidden().get(key) or "") > self.today().isoformat()
         return {"row": row, "out": {"settle": list(m.SETTLE_OUTCOMES), "closable": False}, "hidden": hidden}
@@ -694,9 +694,12 @@ class Actions:
         has no such key: it is filed for a person to close."""
         inbox_key = page.get("inbox_key")
         if inbox_key:
+            # the same row filed under any profile's name: the cockpit's profile often extends the briefing's
+            same = page["row"]
             for e in self.app.inbox_listing() or []:
-                if (isinstance(e, dict) and e.get("key") == inbox_key and e.get("state") in ACTIVE_INBOX_STATES
-                        and INBOX_ID_RE.match(str(e.get("id")))):
+                key = str(e.get("key") or "") if isinstance(e, dict) else ""
+                if ((key == inbox_key or key.startswith("briefing:") and key.endswith(same))
+                        and e.get("state") in ACTIVE_INBOX_STATES and INBOX_ID_RE.match(str(e.get("id")))):
                     return e["id"]
         detail = " ".join(x for x in [page.get("detail"), m.row_url(row) or ""] if x)
         summary = f"{page['section']}: {row['title']}"

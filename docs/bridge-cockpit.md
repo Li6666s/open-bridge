@@ -576,8 +576,11 @@ finding (red or yellow) or a tracker row has Get it done, Advise and Close as we
 in the table and in its detail. It is keyed `item:<page>/<section>/<row id>` (a hash of
 the title when the source gives no id). Get it done files it to the inbox under the
 key `briefing:<profile>:<section>:<row id>`, the one `to_inbox` uses, so an item the
-briefing already filed is reused instead of doubled, and the briefing closes the item
-once the row is gone (the probe is green again). A row without a source id is filed for a
+briefing already filed for that row is reused instead of doubled (under any profile's
+name, since the cockpit's profile often extends the briefing's). After every full pass
+the cockpit closes the items it filed this way whose row is gone (the probe is green
+again); a section that failed or was cut short closes nothing. The briefing's own sweep
+does the same when it runs with `--file`. A row without a source id is filed for a
 person to close. The row leaves its page for 30 days, or for the day you choose with
 Later. Rows that need no one (a gauge, an appointment, a commit count, a log line) get no
 buttons; a section can switch it for all its rows with `actionable: true|false` in its
