@@ -396,6 +396,7 @@ SCRIPTS_CORE_ALLOWLIST = frozenset({
     "scripts/tests/test_standing_orders.py",
     "scripts/tests/test_worklog.py",
     "scripts/tests/test_workplace.py",
+    "scripts/tests/test_tmux_driver.py",
     "scripts/tests/test_task.py",
     "scripts/tests/test_task_review.py",
     # Registered 2026-08-28: both are generic guards with no instance name in
