@@ -1126,6 +1126,37 @@ test('the work tab opens on what is due and switches to by source and by Jev', (
   assert.equal(logic.workViewOf(undefined, work, ready), 'due')
 })
 
+test('with a work tab the day view stands on Start, the middle of Due only points there', () => {
+  const comp = read('components.js')
+  // one component holds the day: dates, status, clear and hygiene, the workplace, the pages of group day
+  const day = comp.slice(comp.indexOf('function DayView('), comp.indexOf('function StatusList('))
+  assert.match(day, /m\.agenda/)
+  assert.match(day, /<\$\{StatusList\} rows=\$\{m\.status\}/)
+  assert.match(day, /p\.group === 'day'/)
+  // Start shows it where a work page exists, as a shelf of its own, in both start page styles
+  const home = comp.slice(comp.indexOf('function HomePage('), comp.indexOf('function HomePage(') + 9000)
+  assert.equal((home.match(/\$\{daily\}/g) ?? []).length, 2)
+  assert.match(home, /const daily = workPageOf\(s\.model\?\.pages\) \? html`<\$\{HomeShelf\} id="home-day" title=\$\{h\.dayTitle\}/)
+  // there it looks like the other shelves: one card per block; on the stage above the project chips, which do not filter it
+  const cards = day.slice(day.indexOf('if (cards)'), day.indexOf('const [agenda, status'))
+  assert.match(cards, /class=\$\{`hcard day-card day-\$\{b\.id\}`\}/)
+  assert.match(home, /\$\{daily\}\s*\$\{chips\}/)
+  // what happened today is long and read last: on Start a shelf of its own at the end, not one of the day cards
+  assert.doesNotMatch(cards, /DayPages/)
+  assert.match(day.slice(day.indexOf('const [agenda, status')), /<\$\{DayPages\} s=\$\{s\} c=\$\{c\} \/>/)
+  assert.equal((home.match(/\$\{shelves\}\s*\$\{diary\}/g) ?? []).length, 2)
+  // the shelf does not repeat the title of the card on the stage
+  assert.notEqual(text.TABLES.de.home.dayTitle, text.TABLES.de.overviewTitle)
+  assert.ok(text.TABLES.en.home.dayTitle)
+  // the middle of Due keeps only the headline and a way to Start there; without a work page it stays whole
+  const ov = comp.slice(comp.indexOf('function Overview('), comp.indexOf('function DayView('))
+  assert.match(ov, /if \(workPageOf\(m\.pages\)\)/)
+  assert.match(ov, /c\.setPage\(START_PAGE\)/)
+  assert.match(ov, /<\$\{DayView\} s=\$\{s\} c=\$\{c\} \/>/)
+  // its words exist in both languages
+  assert.equal((read('text.js').match(/^  dayOnStart(Open)?: '/gm) ?? []).length, 4)
+})
+
 test('the words of the Jev order exist in both languages', () => {
   for (const lang of ['de', 'en']) {
     const t = text.TABLES[lang]

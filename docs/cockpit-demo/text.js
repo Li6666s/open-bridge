@@ -133,6 +133,8 @@ const en = {
   hygieneTitle: 'Housekeeping',
   workplaceTitle: 'Workplace',
   detailEmpty: 'Pick a row on the left to see its details and every action.',
+  dayOnStart: 'Dates, status and what happened today stand on Start.',
+  dayOnStartOpen: 'Open Start',
   rowGone: 'This row is no longer in the briefing.',
   meta: {
     bucket: 'Bucket', section: 'Section', gate: 'Gate', urgency: 'Urgency', priority: 'Priority', area: 'Area',
@@ -445,6 +447,7 @@ const en = {
     controlOffline: 'Control session not listening',
     alarm: (n, where) => `${n} finding${n === 1 ? '' : 's'} in ${where}`,
     overviewTitle: 'Overview',
+    dayTitle: 'The day',
     quotaTitle: 'Quota',
     perDay: v => `${v} % a day`,
     budget: v => `budget ${v} % a day`,
@@ -905,6 +908,8 @@ const de = {
   hygieneTitle: 'Aufräumen',
   workplaceTitle: 'Arbeitsplatz',
   detailEmpty: 'Wähle links eine Zeile, dann stehen hier ihre Details und alle Aktionen.',
+  dayOnStart: 'Termine, Status und was heute geschah stehen auf Start.',
+  dayOnStartOpen: 'Start öffnen',
   rowGone: 'Diese Zeile steht nicht mehr im Briefing.',
   meta: {
     bucket: 'Block', section: 'Abschnitt', gate: 'Freigabe', urgency: 'Dringlichkeit', priority: 'Prio', area: 'Bereich',
@@ -1215,6 +1220,7 @@ const de = {
     controlOffline: 'Steuer-Sitzung hört nicht zu',
     alarm: (n, where) => `${n} ${n === 1 ? 'Befund' : 'Befunde'} unter ${where}`,
     overviewTitle: 'Überblick',
+    dayTitle: 'Tagesblick',
     quotaTitle: 'Kontingent',
     perDay: v => `${v} % pro Tag`,
     budget: v => `Budget ${v} % pro Tag`,
