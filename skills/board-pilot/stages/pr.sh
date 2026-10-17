@@ -15,6 +15,8 @@
 #     length; it rides stdin via --body-file -.
 #   * NO citing its own CI. CI starts after the PR opens and this stage is the last
 #     one before the human gate, so the body links the Checks tab and says so.
+#     (Opt-in BP_PR_AWAIT_CHECKS=1 waits for those checks AFTER the PR exists and
+#     only decides draft vs ready; the body still cites nothing. See the end.)
 #
 # unset GH_TOKEN: the App installation has issues:write + organization_projects:write
 # but NO pull_requests and NO contents (verified live), so `gh pr create` cannot run
@@ -180,11 +182,126 @@ PR_URL="$("$GH" pr list --head "$BRANCH" --state open --json url --jq '.[0].url 
 if [ -n "$PR_URL" ]; then
   echo "[pr] reusing open PR: $PR_URL" >&2
 else
-  # --draft: board-pilot never opens a ready PR. --body-file - : the body rides stdin,
+  # --draft: board-pilot never opens a ready PR; only the opt-in check wait below
+  # may mark it ready, and only on green. --body-file - : the body rides stdin,
   # never argv.
   PR_URL="$("$GH" pr create --draft --head "$BRANCH" --base "$BASE" \
     --title "$ITEM_TITLE" --body-file - < "$BODY_FILE")"
+  bp_note "pull request opened as draft"
   echo "[pr] created draft PR: $PR_URL" >&2
 fi
+
+# ---- optional: the checks, and only then the handover ------------------------
+# OFF by default. With BP_PR_AWAIT_CHECKS unset (or anything but 1) the stage ends
+# here: the PR stays a draft, exit 0, and the human reads the Checks tab. That is
+# the shipped contract, and a pipeline that never asked for more keeps it.
+#
+# OPT-IN (BP_PR_AWAIT_CHECKS=1, set in the unit env like BP_VERIFY_CMD) is for a
+# pipeline whose human gate downstream is a single tap, e.g. a chat button. There
+# a draft is no longer enough protection: a tap on an untested change is exactly
+# the accident the draft was guarding against. So the stage waits for the run the
+# PR triggered and says one of three things, only one of which takes the flag off:
+#
+#   every check green   -> `pr ready`, the human may act on it;
+#   any check red       -> stays a draft, stage FAILS naming the check;
+#   still running at the -> stays a draft, stage FAILS saying so. Unknown is not
+#   budget, or no checks   green, and no checks at all is not green either.
+#
+# A failure here leaves an OPEN DRAFT PR behind. The engine does NOT re-run this
+# stage to retry the wait: on the next dispatch tick.py finds the open PR
+# (`pr_exists`) and hands the item to the human gate without dispatching. The PR
+# then stays a draft, and the human reads its checks and marks it ready by hand.
+if [ "${BP_PR_AWAIT_CHECKS:-0}" != "1" ]; then
+  echo "$PR_URL"
+  exit 0
+fi
+
+CHECK_TIMEOUT="${BP_PR_CHECK_TIMEOUT:-600}"
+CHECK_PAUSE="${BP_PR_CHECK_PAUSE:-10}"
+# How long "no checks at all" is treated as "not attached YET" rather than as the
+# answer. The two are indistinguishable in a single sample, and which one it is
+# depends on a race: GitHub attaches the run started by opening the PR a moment
+# after `pr create` returns. This mattered from the day the duplicate push-run was
+# removed (2026-09-03) — until then a run from the engine's own push had been
+# alive for minutes, so the first sample was never empty. Kept SHORT, because the
+# other case is a repo with no workflow, and that must fail fast rather than in
+# ten minutes.
+NONE_GRACE="${BP_PR_CHECK_NONE_GRACE:-90}"
+WAITED=0
+CHECK_STATE=""
+
+while :; do
+  CHECKS_JSON="$("$GH" pr checks "$PR_URL" --json name,state 2>/dev/null || echo "[]")"
+  CHECK_STATE="$(printf '%s' "$CHECKS_JSON" | python3 -c '
+import json, sys
+
+try:
+    rows = json.loads(sys.stdin.read() or "[]")
+except json.JSONDecodeError:
+    rows = []
+if not isinstance(rows, list):
+    rows = []
+
+# GitHub says PENDING/QUEUED/IN_PROGRESS while a run is alive, and SKIPPED for a
+# job whose condition excluded it. SKIPPED is not a pass and not a failure: it is
+# a job that never claimed anything, so it may not hold the gate either way.
+LIVE = {"PENDING", "QUEUED", "IN_PROGRESS", "EXPECTED", "REQUESTED", "WAITING"}
+OK = {"SUCCESS", "SKIPPED", "NEUTRAL"}
+
+live = [r for r in rows if str(r.get("state", "")).upper() in LIVE]
+bad = [r for r in rows if str(r.get("state", "")).upper() not in LIVE | OK]
+if bad:
+    parts = []
+    for r in bad:
+        parts.append(str(r.get("name", "?")) + "=" + str(r.get("state", "?")))
+    print("RED " + "; ".join(parts))
+elif live:
+    print("LIVE " + str(len(live)))
+elif rows:
+    print("GREEN " + str(len(rows)))
+else:
+    # No checks at all is NOT green. A repo with no workflow, a run that never
+    # started, a gh that answered nothing: all three look identical here, and
+    # calling any of them "tested" would be the lie this whole block exists to
+    # prevent.
+    print("NONE")
+')"
+  # Only on CHANGE, and never for NONE. This loop polls every few seconds, so a
+  # note per poll would post the same card twenty times while nothing happened,
+  # and "checks NONE" is not news — it is the absence of news.
+  if [ "$CHECK_STATE" != "${CHECK_LAST:-}" ] && [ "$CHECK_STATE" != "NONE" ]; then
+    bp_note "checks $CHECK_STATE"
+    CHECK_LAST="$CHECK_STATE"
+  fi
+  case "$CHECK_STATE" in
+    LIVE*) : ;;
+    NONE)
+      # Not attached yet, or none at all. Wait out the grace, then let the case
+      # below say the honest thing.
+      [ "$WAITED" -ge "$NONE_GRACE" ] && break
+      ;;
+    *) break ;;
+  esac
+  [ "$WAITED" -ge "$CHECK_TIMEOUT" ] && break
+  sleep "$CHECK_PAUSE"
+  WAITED=$((WAITED + CHECK_PAUSE))
+done
+
+case "$CHECK_STATE" in
+  GREEN*)
+    "$GH" pr ready "$PR_URL" >/dev/null 2>&1 || bp_die "could not mark $PR_URL ready for review"
+    bp_note "pull request ready: $PR_URL"
+    echo "[pr] checks green (${CHECK_STATE#GREEN }), handed over ready: $PR_URL" >&2
+    ;;
+  RED*)
+    bp_die "the suite is red on $PR_URL, the PR stays a draft: ${CHECK_STATE#RED }"
+    ;;
+  LIVE*)
+    bp_die "checks on $PR_URL were still running after ${CHECK_TIMEOUT}s, the PR stays a draft. Unknown is not green."
+    ;;
+  *)
+    bp_die "no checks reported on $PR_URL, the PR stays a draft. An untested change is not ready for a one-tap merge."
+    ;;
+esac
 
 echo "$PR_URL"
