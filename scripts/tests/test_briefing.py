@@ -832,8 +832,9 @@ def test_icalbuddy_keeps_events_across_midnight_and_several_days(tmp_path):
     run = FakeRun({("icalBuddy",): out})
     items = bf.collect(root, {"id": "p", "sections": [{"kind": "calendar", "provider": "icalbuddy"}]},
                        ctx(root, run))["sections"][0]["items"]
+    # in time order, an all-day event first on its day (as the ics provider sorts)
     assert [(i["title"], i["start"], i["end"]) for i in items] == [
-        ("Late deploy", "2026-10-04T23:00", "2026-10-05T01:00"), ("Offsite", "2026-10-04", "2026-10-06")]
+        ("Offsite", "2026-10-04", "2026-10-06"), ("Late deploy", "2026-10-04T23:00", "2026-10-05T01:00")]
 
 
 def test_provider_errors_are_source_errors_under_the_cli(tmp_path, capsys):
@@ -1241,21 +1242,20 @@ ICAL_TWO = ("2026-10-04 at 18:00 - 18:45\tWeekly\n"
             "2026-10-04 at 18:05 - 19:05\tSchool play\n")
 
 
-def _ical_by_calendar(argv):
-    return "2026-10-04 at 18:05 - 19:05\tSchool play\n" if "-ic" in argv else ICAL_TWO
+ICAL_BY_CALENDAR = ("Work:@@calendar@@\n" + ICAL_TWO.splitlines()[0] + "\nFamily:@@calendar@@\n"
+                    + ICAL_TWO.splitlines()[1] + "\n")
 
 
 def test_icalbuddy_tags_events_of_info_calendars(tmp_path):
+    # one call: -sc puts each event under a line naming its calendar, the info calendars are matched by name
     root = bridge(tmp_path)
-    run = FakeRun({("icalBuddy",): _ical_by_calendar})
+    run = FakeRun({("icalBuddy",): ICAL_BY_CALENDAR})
     section = {"kind": "calendar", "provider": "icalbuddy", "exclude_calendars": ["Holidays"],
                "info_calendars": ["Family", "Kids"]}
     items = bf.collect(root, {"id": "p", "sections": [section]}, ctx(root, run))["sections"][0]["items"]
     assert {i["title"]: bool(i.get("info")) for i in items} == {"Weekly": False, "School play": True}
-    first, second = run.calls
-    assert "-ic" not in first
-    assert second[second.index("-ic") + 1] == "Family,Kids" and "-ec" not in second
-    assert second[-1] == first[-1] == "eventsToday+1"
+    (call,) = run.calls
+    assert "-ic" not in call and "-sc" in call and call[-1] == "eventsToday+1"
 
 
 def test_icalbuddy_without_info_calendars_calls_once(tmp_path):
@@ -1294,7 +1294,7 @@ def test_advise_ignores_info_events_for_collisions(tmp_path):
     root = bridge(tmp_path)
     box = inbox.Inbox(root / "work" / "inbox", actor="t", clock=lambda: NOW)
     box.add(source="t", kind="decision", summary="Call the vendor", due="2026-10-04T19:00")
-    run = FakeRun({("icalBuddy",): _ical_by_calendar})
+    run = FakeRun({("icalBuddy",): ICAL_BY_CALENDAR})
     profile = {"id": "p", "sections": [{"kind": "advise"},
                                        {"kind": "calendar", "provider": "icalbuddy", "info_calendars": ["Family"]}]}
     advice = bf.collect(root, profile, ctx(root, run))["sections"][0]
@@ -1467,3 +1467,82 @@ def test_extends_names_an_existing_profile_and_never_itself(tmp_path):
     problems = " | ".join(bf.validate(root))
     assert "lost.yaml: extends: no profile 'nowhere'" in problems
     assert "loop-a.yaml: extends: a circle" in problems
+
+
+# ---------------------------------------------------------------- calendar details and steps
+# icalBuddy separates its events by calendar (-sc), so each event knows the calendar it comes
+# from; location, attendees and the meeting link come along. The notes never leave the source,
+# only the meeting link found in them.
+
+# what icalBuddy prints, as Python reads it: the calendar line carries the section mark, and a carriage
+# return inside the notes has become a line break, so the notes (and what follows them) run on below
+CAL = "{name}:" + "@@calendar@@"
+ICAL_RICH = (CAL.format(name="Team") + "\n"
+             "2026-10-04 at 18:00 - 18:45\tWeekly\tlocation: Online meeting\t"
+             "attendees: Ann Example, Bob Example\u2069\tnotes: ____\n"
+             " Help <https://aka.ms/JoinTeamsMeeting>\n"
+             " Join <https://teams.microsoft.com/l/meetup-join/19%3ameeting_x%40thread.v2/0?context=%7b%7d>\n"
+             " Agenda:\n"
+             " secret agenda ____\tuid: B2\n"
+             + CAL.format(name="Family") + "\n"
+             "2026-10-04 at 18:05 - 19:05\tSchool play\n"
+             "\n"
+             + CAL.format(name="Work") + "\n"
+             "2026-10-04 at 09:00 - 09:30\tStandup\tlocation: Room 2\tuid: A1\n")
+
+
+def _rich(tmp_path, out=ICAL_RICH, **section):
+    root = bridge(tmp_path)
+    run = FakeRun({("icalBuddy",): out})
+    sec = {"kind": "calendar", "provider": "icalbuddy", "info_calendars": ["Family"], **section}
+    return bf.collect(root, {"id": "p", "sections": [sec]}, ctx(root, run))["sections"][0], run
+
+
+def test_icalbuddy_events_know_their_calendar_place_people_and_meeting_link(tmp_path):
+    sec, run = _rich(tmp_path)
+    assert sec["status"] == "ok", sec.get("reason")
+    by = {i["title"]: i for i in sec["items"]}
+    assert by["Standup"]["calendar"] == "Work" and by["Standup"]["location"] == "Room 2"
+    weekly = by["Weekly"]
+    assert weekly["calendar"] == "Team" and weekly["attendees"] == ["Ann Example", "Bob Example"]
+    assert weekly["url"] == "https://teams.microsoft.com/l/meetup-join/19%3ameeting_x%40thread.v2/0?context=%7b%7d"
+    assert "url" not in by["Standup"]                       # no meeting host, no link
+    assert "secret agenda" not in json.dumps(sec["items"])  # the notes stay at the source
+    assert by["School play"]["info"] is True and by["School play"]["calendar"] == "Family"
+    assert [i["title"] for i in sec["items"]] == ["Standup", "Weekly", "School play"]   # by time, not by calendar
+    call = run.calls[0]
+    assert len(run.calls) == 1 and "-sc" in call and "-uid" in call   # one call, info by the calendar's name
+    assert call[call.index("-ss") + 1] == "@@calendar@@"
+    assert "calendar" not in by["Weekly"].get("location", "") and "Agenda" not in json.dumps(sec["items"])
+
+
+def test_calendar_rows_offer_prepare_and_the_steps_the_section_declares(tmp_path):
+    steps = [{"id": "prepare", "label": "Prepare weekly", "match": "^weekly$", "prompt": "/cycle prepare {date}"},
+             {"id": "followup", "label": "Follow up", "match": "weekly", "phase": "after", "prompt": "/cycle follow-up"}]
+    sec, _ = _rich(tmp_path, event_steps=steps)
+    offered = {i["title"]: [(a["id"], a["label"]) for a in i.get("actions") or []] for i in sec["items"]}
+    assert offered["Weekly"] == [("prepare", "Prepare weekly")]    # the declared step stands in for the built-in one
+    assert offered["Standup"] == [("prepare", "Prepare")]
+    assert offered["School play"] == []                             # an info event is not the reader's to prepare
+
+
+def test_a_step_after_the_event_is_offered_once_it_has_ended(tmp_path):
+    out = CAL.format(name="Team") + "\n2026-10-04 at 07:00 - 07:30\tWeekly\n2026-10-04 at 18:00 - 18:45\tWeekly\n"
+    steps = [{"id": "followup", "label": "Follow up", "match": "weekly", "phase": "after", "prompt": "x"}]
+    sec, _ = _rich(tmp_path, out, event_steps=steps, prepare=False)
+    assert [[a["id"] for a in i.get("actions") or []] for i in sec["items"]] == [["followup"], []]
+
+
+def test_event_steps_are_checked():
+    ok = {"kind": "calendar", "event_steps": [{"id": "prepare", "label": "Prepare", "match": "x", "prompt": "p"}]}
+    assert bf._section_types(ok) == []
+    for bad in ([{"id": "Bad", "label": "L", "match": "x", "prompt": "p"}],
+                [{"id": "a", "label": "", "match": "x", "prompt": "p"}],
+                [{"id": "a", "label": "L", "match": "(", "prompt": "p"}],
+                [{"id": "a", "label": "L", "match": "x", "prompt": ""}],
+                [{"id": "a", "label": "L", "match": "x", "prompt": "p", "phase": "during"}],
+                [{"id": "a", "label": "L", "match": "x", "prompt": "p", "extra": 1}],
+                "prepare"):
+        assert bf._section_types({**ok, "event_steps": bad}), bad
+    assert bf._section_types({**ok, "prepare": "no"})
+    assert bf._section_types({"kind": "tasks", "event_steps": ok["event_steps"]})
