@@ -159,7 +159,7 @@ jobs:
       - name: Run bridge-cockpit server tests
         run: python3 -m pytest scripts/tests/test_ai_services.py scripts/tests/test_bridge_cockpit*.py scripts/tests/test_task.py scripts/tests/test_task_review.py scripts/tests/test_triage.py scripts/tests/test_bridge_resources.py scripts/tests/test_cloud_inventory.py -q -rs
       - name: Run bridge-cockpit frontend tests
-        run: node scripts/tests/bridge_cockpit_frontend.test.mjs && node scripts/tests/bridge_cockpit_jev.test.mjs && node scripts/tests/bridge_cockpit_markdown.test.mjs
+        run: node scripts/tests/bridge_cockpit_frontend.test.mjs && node scripts/tests/bridge_cockpit_jev.test.mjs && node scripts/tests/bridge_cockpit_markdown.test.mjs && node scripts/tests/bridge_cockpit_render.test.mjs
 
       # The mail-draft engine (skills/mail-draft). Hermetic: osascript is
       # replaced in every client test, so nothing reaches a mail client. The
@@ -378,6 +378,25 @@ jobs:
           scripts/tests/test_precommit_env_guard.py
           scripts/tests/test_push_guard_content_net.py
           scripts/tests/test_validators_coverage.py
+
+  # The cockpit demo (docs/cockpit-demo/) in a real browser: every page of the
+  # page bar opens, in en and de, without a console error. Its own job, so the
+  # browser download stays out of the script-suites job.
+  cockpit-demo-smoke:
+    name: Cockpit Demo Browser Smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install pytest + Playwright with Chromium
+        run: |
+          pip install pytest playwright==1.64.0
+          python3 -m playwright install --with-deps chromium
+
+      - name: Open every demo page and fail on console errors
+        env:
+          COCKPIT_DEMO_SMOKE: require
+        run: python3 -m pytest scripts/tests/test_cockpit_demo_smoke.py -q -rs
 
   # The workload skill carries three suites of its own, and each answers a
   # different question. The skill writes unit files onto machines: a contract it
