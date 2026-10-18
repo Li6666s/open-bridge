@@ -9,11 +9,12 @@
 
 import { html, render } from './vendor/htm-preact-3.1.1.module.js'
 import { createApi } from './api.js'
-import { AGENTS_PAGE, App, CHAT_PAGE, CHECK_PAGE, SETTINGS_PAGE, START_PAGE, WORKERS_PAGE, pageOrder } from './components.js'
+import { AGENTS_PAGE, App, CHAT_PAGE, CHECK_PAGE, SETTINGS_PAGE, START_PAGE, WORKERS_PAGE, pageOrder, quickLive } from './components.js'
 import {
-  CONN_GRACE_MS, DAY, addNote, attentionTabs, displayedRows, errorText, freshMore, indexRows, invalidateDetails,
-  isTypingTarget, isoDate, themeOverride, modalKeyAllowed, createWithBusy, letterShortcut, planBusy, reviewHome, nextMonday, parseShortcut, planShortcut, railShown, rowByNumber, short, startRefusal,
+  CONN_GRACE_MS, DAY, pushNoteState, attentionTabs, createFailNote, createLoaders, displayedRows, errorText, freshMore, indexRows, invalidateDetails,
+  isTypingTarget, isoDate, themeOverride, modalKeyAllowed, createWithBusy, createToastTimers, letterShortcut, planBusy, toastLinger, reviewHome, nextMonday, parseShortcut, planShortcut, railShown, rowByNumber, short, startRefusal,
   upsertRecord, addFeed, feedEvents, workPageOf, withLaunch, routesToFetch, newerTicker, tickerRemember,
+  applyQuickLive, quickLiveSnapshot, whenShown,
 } from './logic.js'
 import { T, language, setControl, setLanguage } from './text.js'
 
@@ -104,7 +105,6 @@ const store = createStore({
   boot: { status: 'loading', error: null, version: null, config: {}, scratch: null, warnings: [] },
   server: null, model: null, tabs: { at_ms: 0, tabs: [], error: null, control: null }, sessions: { at_ms: 0, sessions: [] },
   quick: { available: false, default: 'haiku', models: ['haiku', 'sonnet', 'opus'], convs: [] },
-  quickLive: {},
   agents: { peers: [], convs: [] },
   triage: { items: {}, last: null, running: null },
   history: [],
@@ -154,40 +154,39 @@ function pushNote(note, { toast = true, linger = 6000 } = {}) {
   if (!note || !note.text) return
   const now = Date.now()
   store.set(s => {
-    const notes = addNote(s.notes, { at: note.at ?? clock(now), text: note.text, tone: note.tone ?? 'info' }, now)
-    if (notes === s.notes) {
-      // the same text came a moment ago (the server's note event is often first): a twin that brings an
-      // action, an undo, gives it to the toast already shown and keeps it up as long as its own would stay
+    const next = pushNoteState(s, { ...note, at: note.at ?? clock(now) }, now, toastSeq + 1, toast)
+    if (next.dup) {
+      // a toast of the same text is still up (the server's note event is often first): a twin that brings
+      // an action, an undo, gives it to that toast and keeps it up as long as its own would stay
       const twin = note.action && s.toasts.find(t => t.text === note.text && !t.action)
       if (!twin) return s
-      setTimeout(() => dismissToast(twin.id), linger)
+      toastTimers.start(twin.id, toastLinger(twin.tone, linger))
       return { ...s, toasts: s.toasts.map(t => t === twin ? { ...t, action: note.action, conv: note.conv ?? null, undo: note.undo ?? null } : t) }
     }
-    if (!toast) return { ...s, notes }
-    toastSeq += 1
-    const t = { id: toastSeq, text: note.text, tone: note.tone ?? 'info', at: note.at ?? clock(now), action: note.action ?? null, conv: note.conv ?? null,
-      undo: note.undo ?? null }
-    setTimeout(() => dismissToast(t.id), linger)
-    return { ...s, notes, toasts: [...s.toasts, t].slice(-4) }
+    if (next.toast) {
+      toastSeq = next.toast.id
+      toastTimers.start(next.toast.id, toastLinger(next.toast.tone, linger))
+    }
+    return { ...s, notes: next.notes, toasts: next.toasts }
   })
 }
 
 function dismissToast(id) {
+  toastTimers.stop(id)
   store.set(s => ({ ...s, toasts: s.toasts.filter(t => t.id !== id) }))
 }
+
+// a toast waits while the pointer or the focus is inside it, a bad one until it is dismissed (logic.js)
+const toastTimers = createToastTimers({ expire: dismissToast })
 
 function clock(ms) {
   const d = new Date(ms)
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
 
-function failNote(res) {
-  if (res.status === 401) {
-    store.set(s => ({ ...s, boot: { ...s.boot, status: 'unauthorized' } }))
-    return
-  }
-  pushNote({ text: errorText(res.error, T()), tone: 'bad' })
-}
+const failNote = createFailNote(
+  () => store.set(s => ({ ...s, boot: { ...s.boot, status: 'unauthorized' } })),
+  res => pushNote({ text: errorText(res.error, T()), tone: 'bad' }))
 
 // ---------------------------------------------------------------- theme and layout
 
@@ -237,6 +236,8 @@ function applyState(payload) {
     rooms: payload.rooms ?? s.rooms,
     notes: Array.isArray(payload.notes) ? payload.notes.slice(-20).map(n => ({ ...n, ms: 0 })) : s.notes,
   }))
+  // the answers being written, whole: a page that connects in the middle of one shows all of it
+  if (payload.quick_live) quickLive.set(quickLiveSnapshot(payload.quick_live))
   fixPage()
 }
 
@@ -303,15 +304,10 @@ const handlers = {
       }
     }
   },
-  // the answer while it is written: its text so far and what it reads; null when the turn is over
+  // the answer while it is written: the new piece of its text and what it reads; null when the turn is
+  // over. It goes to its own small store, so only the chat re-renders, not the page (views/chat.js)
   quick_live(p) {
-    if (!p?.conv) return
-    store.set(s => {
-      const quickLive = { ...s.quickLive }
-      if (p.text == null && p.doing == null) delete quickLive[p.conv]
-      else quickLive[p.conv] = { text: p.text ?? '', doing: p.doing ?? null }
-      return { ...s, quickLive }
-    })
+    quickLive.set(applyQuickLive(quickLive.get(), p))
   },
   sessions(sessions) {
     store.set(s => ({ ...s, sessions }))
@@ -425,6 +421,9 @@ async function act(verb, args = {}) {
 /** Mark `key` busy while fn runs, and clear it however fn ends; a row action already busy runs nothing and says so (logic.js) */
 const withBusy = createWithBusy(() => store.get().ui.busy, f => setUi(ui => ({ busy: f(ui.busy) })), () => pushNote({ text: T().busyAlready, tone: 'warn' }))
 
+// the api is made at boot, after this line runs, so the loaders reach it through a forwarder
+const loaders = createLoaders({ api: { get: p => api.get(p), post: (p, b) => api.post(p, b) }, set: store.set, fail: failNote, withBusy })
+
 /** A question to Claude: a short session of its own (Haiku unless picked), shown in the question window.
  *  A free question in the window goes on in the open conversation; anything else starts a new one */
 async function ask(kind, args = {}) {
@@ -523,6 +522,8 @@ const ctl = {
   ask,
   copy,
   dismissToast,
+  pauseToast: (id, why) => toastTimers.pause(id, why),
+  resumeToast: (id, why) => toastTimers.resume(id, why),
   reload: async () => {
     const res = await api.reload(true)
     if (res.ok && res.data?.loading) store.set(s => ({ ...s, loading: res.data.loading }))
@@ -635,15 +636,9 @@ const ctl = {
   openTabView: ref => setUi({ tabView: ref, openMsg: null }),
   openClaude: () => setUi({ tabView: '@control', openMsg: null }),
   // the Workers tab: the kept worker view, read again on every visit and every new model
-  loadAgents: async () => {
-    const res = await api.get('/api/agents')
-    if (res.ok) store.set(s => ({ ...s, agents: { peers: res.data.peers ?? [], convs: res.data.convs ?? [] } }))
-  },
+  // with loadHistory and triageRun (logic.js createLoaders): a failed answer leaves a note or signs out
+  ...loaders,
   // an agent opens on its latest conversation; "new chat" starts empty
-  loadHistory: async () => {
-    const res = await api.get('/api/history')
-    if (res.ok) store.set(s => ({ ...s, history: res.data.entries ?? [] }))
-  },
   openHistory: () => { setUi({ drawer: 'history' }); ctl.loadHistory() },
   // the inverse of a close: a task back with the status it had (the toast), or as doing or backlog by choice
   undo: async (u, as = u.args?.as ?? 'doing') => {
@@ -685,10 +680,6 @@ const ctl = {
   // the day column's height, measured by the column itself: how many rows its sections fill up to
   setDayHeight: px => { if (store.get().ui.dayHeight !== px) setUi({ dayHeight: px }) },
   setTriageFilter: f => setUi({ triageFilter: f }),
-  triageRun: async fresh => {
-    const res = await api.post('/api/triage/run', { fresh: !!fresh })
-    if (res.data?.triage) store.set(s => ({ ...s, triage: res.data.triage }))
-  },
   // sending is always the user's click: nothing here goes out on its own
   agentSend: async (peer, text, mode, conv) => {
     const r = await act('a2a_ask', { peer, text, mode, ...(conv ? { conv } : {}) })
@@ -1143,10 +1134,13 @@ async function boot() {
   api.events(handlers, onConn)
 
   document.addEventListener('keydown', onKey)
-  // durations and "as of" ages move on without new data
-  setInterval(() => store.set(s => ({ ...s, now: Date.now() })), 15000)
+  // durations and "as of" ages move on without new data; a hidden tab skips the ticks and catches up
+  // the moment it is in view again
+  const tick = whenShown(document, () => store.set(s => ({ ...s, now: Date.now() })))
+  setInterval(tick, 15000)
+  document.addEventListener('visibilitychange', tick)
   ctl.loadWorkers()   // for the Workers tab's badge; the tab reads it again when opened
-  setInterval(() => { const g = store.get(); if (g.loading?.pass || g.model?.review?.running) store.set(s => ({ ...s, now: Date.now() })) }, 1000)
+  setInterval(whenShown(document, () => { const g = store.get(); if (g.loading?.pass || g.model?.review?.running) tick() }), 1000)
 }
 
 // exported for the components' retry button

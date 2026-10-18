@@ -394,12 +394,13 @@ test('model views: rows by key, compact or all per section, numbers, tab groups'
     tab('y', 'working', 'A', { long: 'running' }), tab('z', 'needs-you', 'A', { waiting: true })]).map(t => t.ref), ['z', 'y'])
 })
 
-test('notes are deduplicated for a few seconds and capped', () => {
+test('notes are deduplicated while their toast is up and capped', () => {
   let notes = []
+  const up = [{ id: 1, text: 'x', tone: 'ok' }]
   notes = logic.addNote(notes, { text: 'x', tone: 'ok' }, 1000)
-  notes = logic.addNote(notes, { text: 'x', tone: 'ok' }, 2000)
+  notes = logic.addNote(notes, { text: 'x', tone: 'ok' }, 2000, up)
   assert.equal(notes.length, 1)
-  notes = logic.addNote(notes, { text: 'x', tone: 'ok' }, 20000)
+  notes = logic.addNote(notes, { text: 'x', tone: 'ok' }, 3000)
   assert.equal(notes.length, 2)
   for (let i = 0; i < 30; i++) notes = logic.addNote(notes, { text: `n${i}`, tone: 'info' }, 30000 + i)
   assert.equal(notes.length, 20)
@@ -3173,4 +3174,324 @@ test('style.css: every class selector is used by the page, or built from an allo
   const used = c => new RegExp(`(^|[^\\w-])${c.replace(/[-]/g, '\\-')}($|[^\\w-])`).test(src)
   const dead = [...classes].filter(c => !used(c) && !built(c)).sort()
   assert.deepEqual(dead, [])
+})
+
+// ---------------------------------------------------------------- load errors (#389)
+
+/** The loaders of logic.js against a fake store and api: what the page shows after each answer */
+function loaderRig(answers) {
+  let state = { boot: { status: 'ready' }, agents: null, history: [], triage: {}, ui: { busy: {} }, notes: [] }
+  const posts = []
+  const pending = {}
+  const api = {
+    get: async p => answers[p],
+    post: (p, b) => { posts.push([p, b]); return pending.post ? pending.post : Promise.resolve(answers[p]) },
+  }
+  const set = f => { state = f(state) }
+  const fail = logic.createFailNote(
+    () => set(s => ({ ...s, boot: { ...s.boot, status: 'unauthorized' } })),
+    res => set(s => ({ ...s, notes: [...s.notes, { text: logic.errorText(res.error, text.TABLES.en), tone: 'bad' }] })))
+  const withBusy = logic.createWithBusy(() => state.ui.busy, f => set(s => ({ ...s, ui: { ...s.ui, busy: f(s.ui.busy) } })),
+    () => set(s => ({ ...s, notes: [...s.notes, { text: 'busy', tone: 'warn' }] })))
+  const loaders = logic.createLoaders({ api, set, fail, withBusy })
+  return { loaders, posts, pending, get: () => state }
+}
+
+test('loaders: a failed agents, history or triage answer leaves an error note, never a silent empty list', async () => {
+  const err = { ok: false, status: 500, error: { code: 'internal', message: 'boom' } }
+  for (const name of ['loadAgents', 'loadHistory', 'triageRun']) {
+    const r = loaderRig({ '/api/agents': err, '/api/history': err, '/api/triage/run': err })
+    await r.loaders[name](false)
+    assert.equal(r.get().notes.length, 1, name)
+    assert.equal(r.get().notes[0].tone, 'bad', name)
+    assert.equal(r.get().boot.status, 'ready', name)
+  }
+  // a network drop (no status at all) is an error note too
+  const r = loaderRig({ '/api/triage/run': { ok: false, error: { code: 'network', message: 'offline' } } })
+  await r.loaders.triageRun(false)
+  assert.equal(r.get().notes.length, 1)
+})
+
+test('loaders: a 401 from any of them goes to the sign-in page, as a reload does', async () => {
+  const unauth = { ok: false, status: 401, error: { code: 'unauthorized', message: 'no' } }
+  for (const name of ['loadAgents', 'loadHistory', 'triageRun']) {
+    const r = loaderRig({ '/api/agents': unauth, '/api/history': unauth, '/api/triage/run': unauth })
+    await r.loaders[name](false)
+    assert.equal(r.get().boot.status, 'unauthorized', name)
+    assert.deepEqual(r.get().notes, [], name)
+  }
+})
+
+test('loaders: a good answer fills the store as before', async () => {
+  const r = loaderRig({
+    '/api/agents': { ok: true, data: { peers: ['p'], convs: [{ id: 'c' }] } },
+    '/api/history': { ok: true, data: { entries: [{ verb: 'task_close' }] } },
+    '/api/triage/run': { ok: true, data: { triage: { running: true } } },
+  })
+  await r.loaders.loadAgents()
+  await r.loaders.loadHistory()
+  await r.loaders.triageRun(true)
+  assert.deepEqual(r.get().agents, { peers: ['p'], convs: [{ id: 'c' }] })
+  assert.deepEqual(r.get().history, [{ verb: 'task_close' }])
+  assert.deepEqual(r.get().triage, { running: true })
+  assert.deepEqual(r.posts, [['/api/triage/run', { fresh: true }]])
+  assert.deepEqual(r.get().notes, [])
+})
+
+test('loaders: while a triage run is pending a second one sends no POST and the button reads as running', async () => {
+  const r = loaderRig({})
+  let release
+  r.pending.post = new Promise(res => { release = res })
+  const first = r.loaders.triageRun(false)
+  assert.equal(r.get().ui.busy[logic.TRIAGE_BUSY], 'triage')
+  assert.equal(logic.triageRunning(r.get()), true)
+  assert.equal(await r.loaders.triageRun(false), null)
+  assert.equal(r.posts.length, 1)
+  release({ ok: true, data: { triage: { running: false } } })
+  await first
+  assert.deepEqual(r.get().ui.busy, {})
+  assert.equal(logic.triageRunning(r.get()), false)
+  assert.equal(logic.triageRunning({ triage: { running: true }, ui: { busy: {} } }), true)
+  // the page wires them: app.js builds its failNote and loaders here, the button reads triageRunning
+  const app = read('app.js')
+  assert.match(app, /const failNote = createFailNote\(/)
+  assert.match(app, /createLoaders\(\{ api: \{[^}]*\}, set: store\.set, fail: failNote, withBusy \}\)/)
+  assert.doesNotMatch(app, /api\.post\('\/api\/triage\/run'/)
+  assert.match(read('triage.js'), /const running = triageRunning\(s\)/)
+})
+
+test('loaders: a 409 for a triage run already on is an answer, not an error: its state is applied', async () => {
+  const on = { running: { started_ms: 1, why: 'daily' } }
+  const r = loaderRig({ '/api/triage/run': { status: 409, ok: false, data: { ok: false, triage: on }, error: { code: 'unknown', message: '' } } })
+  await r.loaders.triageRun(false)
+  assert.deepEqual(r.get().notes, [])
+  assert.deepEqual(r.get().triage, on)
+  assert.equal(logic.triageRunning(r.get()), true)
+  // a 409 without a triage state stays an error
+  const bare = loaderRig({ '/api/triage/run': { status: 409, ok: false, data: { ok: false }, error: { code: 'conflict', message: 'x' } } })
+  await bare.loaders.triageRun(false)
+  assert.equal(bare.get().notes.length, 1)
+  assert.equal(bare.get().notes[0].tone, 'bad')
+})
+
+// ---------------------------------------------------------------- notes and toasts (#390)
+
+// what pushNote in app.js does: pushNoteState decides, the toast's timer later drops it again
+const failed = { text: 'The server does not answer.', tone: 'bad', at: '12:00' }
+const dismiss = (s, id) => ({ ...s, toasts: s.toasts.filter(t => t.id !== id) })
+
+test('notes: the same error twice within a second shows one toast and one note', () => {
+  let s = { notes: [], toasts: [] }
+  const first = logic.pushNoteState(s, failed, 0, 1)
+  assert.equal(first.dup, false)
+  assert.equal(first.toast.id, 1)
+  s = first
+  const again = logic.pushNoteState(s, failed, 800, 2)
+  assert.equal(again.dup, true)
+  assert.equal(again.toast, undefined)
+  assert.equal(again.toasts.length, 1)
+  assert.equal(again.notes.length, 1)
+  // another tone is another message
+  assert.equal(logic.pushNoteState(s, { ...failed, tone: 'warn' }, 900, 2).toasts.length, 2)
+})
+
+test('notes: the same error after its toast is gone shows a new toast and a new note', () => {
+  let s = logic.pushNoteState({ notes: [], toasts: [] }, failed, 0, 1)
+  s = dismiss(s, 1)                                   // the toast's own 6 s are over
+  const retry = logic.pushNoteState(s, failed, 7000, 2)
+  assert.equal(retry.dup, false)
+  assert.equal(retry.toast.id, 2)
+  assert.deepEqual(retry.toasts.map(t => t.text), [failed.text])
+  assert.equal(retry.notes.length, 2)
+  // while a toast stays up longer, the same text stays one, however late it comes
+  const long = logic.pushNoteState({ notes: [], toasts: [] }, failed, 0, 1)
+  assert.equal(logic.pushNoteState(long, failed, 15000, 2).dup, true)
+})
+
+test('notes: without a toast the note is kept, the newest four toasts stay up', () => {
+  const quiet = logic.pushNoteState({ notes: [], toasts: [] }, failed, 0, 1, false)
+  assert.equal(quiet.notes.length, 1)
+  assert.equal(quiet.toasts.length, 0)
+  let s = { notes: [], toasts: [] }
+  for (let i = 0; i < 6; i++) s = logic.pushNoteState(s, { text: `n${i}`, tone: 'info', at: '12:00' }, i, i + 1)
+  assert.deepEqual(s.toasts.map(t => t.id), [3, 4, 5, 6])
+  assert.equal(s.notes.length, 6)
+})
+
+// ---------------------------------------------------------------- toasts that wait, row actions busy per row (#391)
+
+/** A clock the test moves by hand: setTimer and clearTimer as createToastTimers takes them */
+function handClock() {
+  let at = 0
+  let seq = 0
+  const due = new Map()
+  return {
+    now: () => at,
+    setTimer: (fn, ms) => { seq += 1; due.set(seq, { fn, when: at + ms }); return seq },
+    clearTimer: id => { due.delete(id) },
+    advance(ms) {
+      at += ms
+      for (const [id, d] of [...due].sort((a, b) => a[1].when - b[1].when)) {
+        if (d.when > at) continue
+        due.delete(id)
+        d.fn()
+      }
+    },
+  }
+}
+
+test('createToastTimers: a toast with focus inside it outlives its linger time and goes once focus leaves', () => {
+  const clock = handClock()
+  const gone = []
+  const timers = logic.createToastTimers({ ...clock, expire: id => gone.push(id) })
+  timers.start(1, 6000)
+  timers.start(2, 6000)
+  clock.advance(1000)
+  timers.pause(1, 'focus')
+  clock.advance(9000)
+  assert.deepEqual(gone, [2], 'the toast without focus went on time, the focused one stays')
+  timers.resume(1, 'focus')
+  clock.advance(4999)
+  assert.deepEqual(gone, [2], 'it keeps the 5 s it had left when the focus came')
+  clock.advance(1)
+  assert.deepEqual(gone, [2, 1])
+})
+
+test('createToastTimers: hover and focus each hold the toast, it runs again only when both have left', () => {
+  const clock = handClock()
+  const gone = []
+  const timers = logic.createToastTimers({ ...clock, expire: id => gone.push(id) })
+  timers.start(1, 6000)
+  timers.pause(1, 'hover')
+  timers.pause(1, 'focus')
+  timers.resume(1, 'hover')
+  clock.advance(60000)
+  assert.deepEqual(gone, [])
+  timers.resume(1, 'focus')
+  clock.advance(6000)
+  assert.deepEqual(gone, [1])
+  // a dismissed toast leaves no timer behind, and a hover on it afterwards starts none
+  timers.start(3, 6000)
+  timers.stop(3)
+  timers.pause(3, 'hover')
+  timers.resume(3, 'hover')
+  clock.advance(60000)
+  assert.deepEqual(gone, [1])
+})
+
+test('toastLinger: a bad toast stays until dismissed, every other tone keeps its linger', () => {
+  const clock = handClock()
+  const gone = []
+  const timers = logic.createToastTimers({ ...clock, expire: id => gone.push(id) })
+  assert.equal(logic.toastLinger('bad', 6000), null)
+  for (const tone of ['info', 'ok', 'warn']) assert.equal(logic.toastLinger(tone, 6000), 6000)
+  timers.start(1, logic.toastLinger('bad', 6000))
+  timers.pause(1, 'hover')
+  timers.resume(1, 'hover')
+  clock.advance(24 * 3600 * 1000)
+  assert.deepEqual(gone, [], 'no timer ever takes a bad toast away')
+})
+
+test('busyKey: a row action is busy per row, other actions keep their key', () => {
+  const at = index => logic.busyKey('row_action', { page: 'dates', section: 'cal', index, action: 'prep' })
+  assert.equal(at(1), 'row_action:dates:cal:1')
+  assert.notEqual(at(1), at(2))
+  assert.notEqual(at(1), logic.busyKey('row_action', { page: 'dates', section: 'other', index: 1 }))
+  assert.equal(logic.rowActionKey({ page: 'dates', section: 'cal', index: 1 }), at(1), 'the views read the same key')
+  assert.equal(logic.planBusy('row_action', { page: 'dates', section: 'cal', index: 2, action: 'prep' }, {}).key, at(2))
+  assert.equal(logic.busyKey('task_close', { key: 'task:a' }), 'task:a')
+  assert.equal(logic.busyKey('home_tiles', { ids: ['a'] }), 'home_tiles')
+})
+
+test('errorText appends the server detail for a code whose entry takes one', () => {
+  for (const lang of ['en', 'de']) {
+    text.setLanguage(lang)
+    const t = text.T()
+    assert.equal(typeof t.errors.unreadable, 'function', lang)
+    const got = logic.errorText({ code: 'unreadable', message: 'cmux: no such surface' }, t)
+    assert.match(got, /cmux: no such surface/, lang)
+    assert.notEqual(got, 'cmux: no such surface', lang)
+    assert.equal(typeof logic.errorText({ code: 'unreadable', message: '' }, t), 'string', lang)
+    assert.match(logic.errorText({ code: 'unreadable', message: 'x', field: 'ref' }, t), /ref/, lang)
+  }
+  text.setLanguage('en')
+})
+
+// ---------------------------------------------------------------- quick_live as deltas (#400)
+
+test('applyQuickLive appends each new piece once and ignores what the page already has', () => {
+  let m = {}
+  m = logic.applyQuickLive(m, { conv: 'q1', seq: 1, at: 0, text: '', doing: 'Read work/board.md' })
+  assert.deepEqual(m.q1, { seq: 1, end: 0, text: '', doing: 'Read work/board.md' })
+  m = logic.applyQuickLive(m, { conv: 'q1', seq: 2, at: 0, text: 'Seven ', doing: null })
+  m = logic.applyQuickLive(m, { conv: 'q1', seq: 3, at: 6, text: 'of eleven.', doing: null })
+  assert.equal(m.q1.text, 'Seven of eleven.')
+  // an event that came before the state the page connected with is in that state already
+  const same = logic.applyQuickLive(m, { conv: 'q1', seq: 3, at: 6, text: 'of eleven.', doing: null })
+  assert.equal(same, m)
+  // a piece that does not continue where the page stands is never glued on
+  assert.equal(logic.applyQuickLive(m, { conv: 'q1', seq: 9, at: 40, text: 'later', doing: null }), m)
+  // a new message comes whole and takes the place of the old text
+  m = logic.applyQuickLive(m, { conv: 'q1', seq: 4, at: 0, text: 'Found it.', doing: null, full: true })
+  assert.deepEqual(m.q1, { seq: 4, end: 9, text: 'Found it.', doing: null })
+  // the turn is over
+  m = logic.applyQuickLive(m, { conv: 'q1', text: null, doing: null })
+  assert.deepEqual(m, {})
+  // a piece of an answer the page never saw begin waits for the state: only a start at 0 opens one
+  assert.deepEqual(logic.applyQuickLive({}, { conv: 'q2', seq: 5, at: 3, text: 'x', doing: null }), {})
+})
+
+test('quickLiveSnapshot takes the whole text a connecting page gets in its state', () => {
+  const m = logic.quickLiveSnapshot({ q1: { conv: 'q1', seq: 7, at: 0, text: 'Seven of eleven.', doing: null, full: true } })
+  assert.deepEqual(m, { q1: { seq: 7, end: 16, text: 'Seven of eleven.', doing: null } })
+  assert.equal(logic.applyQuickLive(m, { conv: 'q1', seq: 7, at: 6, text: 'of eleven.', doing: null }), m)
+  assert.equal(logic.applyQuickLive(m, { conv: 'q1', seq: 8, at: 16, text: ' Done.', doing: null }).q1.text, 'Seven of eleven. Done.')
+  assert.deepEqual(logic.quickLiveSnapshot(null), {})
+})
+
+test('whenShown runs a render tick only while the tab is in view', () => {
+  const doc = { hidden: true }
+  let ticks = 0
+  const tick = logic.whenShown(doc, () => { ticks += 1 })
+  tick(); tick()
+  assert.equal(ticks, 0, 'a hidden tab renders nothing')
+  doc.hidden = false
+  tick()
+  assert.equal(ticks, 1)
+})
+
+test('app.js runs its render ticks through whenShown and keeps the live text out of the store', () => {
+  const src = fs.readFileSync(path.join(WEB, 'app.js'), 'utf8')
+  for (const m of src.matchAll(/setInterval\(([^\n]*)/g)) assert.match(m[1], /^tick\b|^whenShown\(/, m[0])
+  assert.doesNotMatch(src, /quickLive:/, 'the live text has its own small store (views/chat.js quickLive)')
+  const handler = src.match(/\n  quick_live\(p\) \{\n([\s\S]*?)\n  \},/)
+  assert.ok(handler, 'the quick_live handler')
+  assert.doesNotMatch(handler[1], /store\.set/, 'a piece of an answer never renders the whole page')
+  assert.match(src, /addEventListener\('visibilitychange'/, 'a tab coming back into view catches up at once')
+})
+
+test('rovingIndex: arrows step around the ends, Home and End jump, other keys and empty groups do nothing (#401)', () => {
+  assert.equal(logic.rovingIndex(4, 1, 'ArrowRight'), 2)
+  assert.equal(logic.rovingIndex(4, 1, 'ArrowDown'), 2)
+  assert.equal(logic.rovingIndex(4, 3, 'ArrowRight'), 0)
+  assert.equal(logic.rovingIndex(4, 1, 'ArrowLeft'), 0)
+  assert.equal(logic.rovingIndex(4, 0, 'ArrowUp'), 3)
+  assert.equal(logic.rovingIndex(4, 2, 'Home'), 0)
+  assert.equal(logic.rovingIndex(4, 0, 'End'), 3)
+  assert.equal(logic.rovingIndex(4, 1, 'Enter'), -1)
+  assert.equal(logic.rovingIndex(0, 0, 'ArrowRight'), -1)
+  assert.equal(logic.rovingIndex(3, -1, 'ArrowRight'), 0)
+})
+
+test('aria roles: every radio group and tab list takes the arrow keys, every menu is a popover that moves focus (#401)', () => {
+  for (const file of ['triage.js', ...COMPONENT_FILES]) {
+    const src = read(file)
+    const groups = [...src.matchAll(/<[a-z]+\b[^>]*role="(radiogroup|tablist)"[^>]*>/g)]
+    for (const [tag, role] of groups) assert.match(tag, /onKeyDown=\$\{/, `${file}: a ${role} without the arrow keys: ${tag}`)
+    if (/role="radio"/.test(src)) assert.match(src, /role="radiogroup"/, `${file}: role="radio" outside a radiogroup`)
+    if (/role="tab"/.test(src)) assert.match(src, /role="tablist"/, `${file}: role="tab" outside a tablist`)
+    if (/role="menu"/.test(src)) assert.match(src, /usePopover\(/, `${file}: a menu without usePopover`)
+    if (file !== 'views/parts.js') assert.doesNotMatch(src, /const esc = e => \{ if \(e\.key === 'Escape'\) \{ e\.stopPropagation\(\); setOpen\(false\) \} \}/,
+      `${file}: a popover of its own instead of usePopover`)
+  }
 })

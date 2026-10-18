@@ -124,8 +124,14 @@ export function freeKeys(keys, busy) {
   return keys.filter(k => !busy?.[k])
 }
 
+/** The busy key of one row's step (row_action): its page, section and index, so one row in flight leaves the others free */
+export function rowActionKey({ page, section, index }) {
+  return `row_action:${page}:${section}:${index}`
+}
+
 /** The busy key of an action: its row, tab or conversation, the joined keys of a bulk, else the verb */
-function busyKey(verb, args) {
+export function busyKey(verb, args) {
+  if (verb === 'row_action' && args?.index != null) return rowActionKey(args)
   return args?.key ?? args?.tab_ref ?? (args?.keys ? args.keys.join(',') : args?.conv ? `quick:${args.conv}` : verb)
 }
 
@@ -177,6 +183,43 @@ export function createWithBusy(getBusy, updateBusy, onRefused = () => {}) {
         return next
       })
     }
+  }
+}
+
+/** What a failed answer does: a 401 goes to the sign-in page, anything else leaves an error note */
+export function createFailNote(onUnauthorized, onError) {
+  return res => (res?.status === 401 ? onUnauthorized(res) : onError(res))
+}
+
+/** The busy key of a triage run, so a second click while one is pending sends nothing */
+export const TRIAGE_BUSY = 'triage_run'
+
+/** The triage counts as running while the server says so and while its request is still out */
+export function triageRunning(s) {
+  return !!s.triage?.running || !!s.ui?.busy?.[TRIAGE_BUSY]
+}
+
+/** The loads of the Workers tab, the history drawer and the triage run; a failed answer goes to `fail`,
+ *  never into an empty list that reads as "nothing there" */
+export function createLoaders({ api, set, fail, withBusy }) {
+  return {
+    loadAgents: async () => {
+      const res = await api.get('/api/agents')
+      if (!res.ok) return fail(res)
+      set(s => ({ ...s, agents: { peers: res.data.peers ?? [], convs: res.data.convs ?? [] } }))
+    },
+    loadHistory: async () => {
+      const res = await api.get('/api/history')
+      if (!res.ok) return fail(res)
+      set(s => ({ ...s, history: res.data.entries ?? [] }))
+    },
+    triageRun: fresh => withBusy(TRIAGE_BUSY, 'triage', async () => {
+      const res = await api.post('/api/triage/run', { fresh: !!fresh })
+      // 409 with a state is the server's answer to a run already on: show that run, it is no error
+      const already = res.status === 409 && res.data?.triage
+      if (!res.ok && !already) return fail(res)
+      if (res.data?.triage) set(s => ({ ...s, triage: res.data.triage }))
+    }, { refuse: true }),
   }
 }
 
@@ -468,12 +511,24 @@ export function formatClock(ms, lang) {
   }
 }
 
-/** Notes keep the newest `max` entries; an entry equal in text and tone to one of the last
- * few seconds is dropped (the server broadcasts action notes that the POST also returns). */
-export function addNote(notes, note, now, max = 20, windowMs = 10000) {
-  const dup = notes.some(n => n.text === note.text && n.tone === note.tone && now - (n.ms ?? 0) < windowMs)
-  if (dup) return notes
+/** Notes keep the newest `max` entries; an entry equal in text and tone to a toast still on screen is
+ * dropped (the server broadcasts action notes that the POST also returns). Once that toast is gone the
+ * same text is news again: a retry that fails the same way shows again. */
+export function addNote(notes, note, now, toasts = [], max = 20) {
+  if (toasts.some(t => t.text === note.text && t.tone === note.tone)) return notes
   return [...notes, { ...note, ms: now }].slice(-max)
+}
+
+/** What a pushed note does to `{ notes, toasts }`: a new note and, unless `toast` is false, a toast
+ * with `id` (the newest four stay up). A note a visible toast already shows changes neither and comes
+ * back with `dup` set, so the caller can hand a twin's action to that toast. */
+export function pushNoteState({ notes, toasts }, note, now, id, toast = true) {
+  const tone = note.tone ?? 'info'
+  const next = addNote(notes, { at: note.at, text: note.text, tone }, now, toasts)
+  if (next === notes) return { notes, toasts, dup: true }
+  if (!toast) return { notes: next, toasts, dup: false }
+  const t = { id, text: note.text, tone, at: note.at, action: note.action ?? null, conv: note.conv ?? null, undo: note.undo ?? null }
+  return { notes: next, toasts: [...toasts, t].slice(-4), toast: t, dup: false }
 }
 
 /** Insert or replace a relay record by id; newest first */
@@ -486,6 +541,7 @@ export function upsertRecord(records, record) {
 export function errorText(error, table) {
   if (!error) return table.errors.unknown
   const entry = table.errors[error.code]
+  // an entry written as a function gets the whole error: its message, or the CLI it names
   const base = (typeof entry === 'function' ? entry(error) : entry) ?? error.message ?? table.errors.unknown
   return error.field ? `${base} (${table.errorField(error.field)})` : base
 }
@@ -555,6 +611,18 @@ export function nextFocusIndex(count, at, shift) {
   if (count <= 0) return -1
   if (at < 0) return shift ? count - 1 : 0
   return shift ? (at - 1 + count) % count : (at + 1) % count
+}
+
+/** Where an arrow key moves in a radio group, a tab list or a menu of `count` options: the arrows step
+ *  around the ends, Home and End jump, any other key or an empty group gives -1 */
+export function rovingIndex(count, at, key) {
+  if (count <= 0) return -1
+  if (key === 'Home') return 0
+  if (key === 'End') return count - 1
+  const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[key]
+  if (!step) return -1
+  if (at < 0) return step > 0 ? 0 : count - 1
+  return (at + step + count) % count
 }
 
 // ---------------------------------------------------------------- task check (task.py review)
@@ -2215,4 +2283,94 @@ export function tickerFeedValid(feed) {
   const name = typeof feed.name === 'string' ? feed.name.trim() : ''
   return /^[a-z0-9][a-z0-9-]{0,39}$/.test(String(feed.id ?? '').trim()) && name.length >= 1 && name.length <= 60
     && !TICKER_CTRL.test(feed.name) && tickerUrlValid(String(feed.url ?? '').trim())
+}
+
+// ---------------------------------------------------------------- toast timers
+
+/** How long a toast stays: a `bad` one until it is dismissed (null), every other its own linger */
+export function toastLinger(tone, linger) {
+  return tone === 'bad' ? null : linger
+}
+
+/**
+ * The timers of the toasts. `start(id, ms)` lets a toast go after ms (null: never), `pause(id, why)`
+ * holds it while the pointer (`hover`) or the focus (`focus`) is inside it, `resume(id, why)` lets
+ * it run on with the time it had left once every reason has gone, `stop(id)` forgets it.
+ */
+export function createToastTimers({ setTimer = setTimeout, clearTimer = clearTimeout, now = Date.now, expire }) {
+  const all = new Map()   // id -> { left, until, timer, held: Set }
+  const run = (id, t) => {
+    t.until = now() + t.left
+    t.timer = setTimer(() => { all.delete(id); expire(id) }, t.left)
+  }
+  return {
+    start(id, ms) {
+      const old = all.get(id)
+      if (old?.timer != null) clearTimer(old.timer)
+      all.delete(id)
+      if (ms == null) return
+      const t = { left: ms, until: 0, timer: null, held: old?.held ?? new Set() }
+      all.set(id, t)
+      if (!t.held.size) run(id, t)
+    },
+    pause(id, why) {
+      const t = all.get(id)
+      if (!t) return
+      if (!t.held.size && t.timer != null) {
+        clearTimer(t.timer)
+        t.timer = null
+        t.left = Math.max(0, t.until - now())
+      }
+      t.held.add(why)
+    },
+    resume(id, why) {
+      const t = all.get(id)
+      if (!t || !t.held.delete(why) || t.held.size) return
+      run(id, t)
+    },
+    stop(id) {
+      const t = all.get(id)
+      if (t?.timer != null) clearTimer(t.timer)
+      all.delete(id)
+    },
+  }
+}
+
+// ---------------------------------------------------------------- the answer while it is written
+
+const LIVE_KEEP = 20000   // the most of a live text the page keeps, as the server sends it (quick.py LIVE_KEEP)
+
+/** The live texts after one `quick_live` event: a piece is appended where it says it goes (`at`), once;
+ *  a whole text (`full`, a new message) takes the old one's place; text and doing null end the turn. An
+ *  event the page already has (its `seq` is not newer) or one that does not continue the text changes
+ *  nothing, so the same map comes back */
+export function applyQuickLive(map, p) {
+  if (!p?.conv) return map
+  if (p.text == null && p.doing == null) {
+    if (!(p.conv in map)) return map
+    const { [p.conv]: _, ...rest } = map
+    return rest
+  }
+  const cur = map[p.conv]
+  const seq = Number(p.seq) || 0
+  if (cur && seq <= cur.seq) return map
+  const piece = String(p.text ?? '')
+  const at = Number(p.at) || 0
+  let text
+  if (p.full) text = piece
+  else if (at === (cur ? cur.end : 0)) text = (cur ? cur.text : '') + piece
+  else return map
+  return { ...map, [p.conv]: { seq, end: at + piece.length, text: text.slice(-LIVE_KEEP), doing: p.doing ?? null } }
+}
+
+/** The live texts of the state a page gets when it connects: each one whole */
+export function quickLiveSnapshot(snap) {
+  let map = {}
+  for (const p of Object.values(snap ?? {})) map = applyQuickLive(map, { ...p, full: true })
+  return map
+}
+
+/** A render tick that runs only while the tab is in view: a hidden tab has nothing to draw */
+export function whenShown(doc, fn) {
+  return () => { if (!doc?.hidden) fn() }
 }
