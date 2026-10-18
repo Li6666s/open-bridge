@@ -5142,3 +5142,248 @@ def test_a_reconnecting_page_gets_the_whole_text_so_far(world, monkeypatch):
     assert full["full"] is True and full["at"] == 0 and full["text"] == "Seven of eleven."
     assert full["seq"] == seen[1]["seq"]                  # the pieces up to here are in it already
     assert world.app.state_payload()["quick_live"] == {}  # the turn is over: nothing live any more
+
+
+# ---------------------------------------------------------------- #386: the task list only when tasks changed
+
+def _bump(path: Path, step: int = 1) -> None:
+    st = os.stat(path)
+    os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns + step * 1_000_000_000))
+
+
+def test_a_delta_from_an_inbox_change_does_not_list_the_tasks(world):
+    from lib.bridge_cockpit import watch
+    watcher = watch.Watcher(world.app)
+    world.runner.calls.clear()
+    _bump(world.root / "work" / "inbox" / YES_ID / "item.yaml")
+    _bump(world.root / "work" / "log.md")
+    assert watcher.check(100.0) is False
+    assert watcher.check(100.0 + watch.DEBOUNCE_S) is True
+    world.app.collector.drain()
+    assert len(collect_calls(world)) == 1
+    assert world.runner.of("workplace.tasks") == []
+
+
+def test_a_change_under_tasks_or_streams_or_a_full_pass_lists_the_tasks(world):
+    from lib.bridge_cockpit import watch
+    watcher = watch.Watcher(world.app)
+    world.runner.calls.clear()
+    _bump(world.root / "work" / "tasks" / "demo-task" / "STATUS.md")
+    watcher.check(100.0)
+    assert watcher.check(100.0 + watch.DEBOUNCE_S) is True
+    world.app.collector.drain()
+    assert len(world.runner.of("workplace.tasks")) == 1
+    # a new stream counts as well
+    world.runner.calls.clear()
+    (world.root / "work" / "streams" / "new-stream").mkdir()
+    (world.root / "work" / "streams" / "new-stream" / "STATUS.md").write_text("---\nstatus: doing\n---\n", encoding="utf-8")
+    watcher.check(200.0)
+    assert watcher.check(200.0 + watch.DEBOUNCE_S) is True
+    world.app.collector.drain()
+    assert len(world.runner.of("workplace.tasks")) == 1
+    # nothing changed since: a plain delta leaves the list alone, a full pass lists it anyway
+    world.runner.calls.clear()
+    world.app.collector.request("delta")
+    world.app.collector.drain()
+    assert world.runner.of("workplace.tasks") == []
+    world.app.collector.request("full")
+    world.app.collector.drain()
+    assert len(world.runner.of("workplace.tasks")) == 1
+
+
+def test_closing_and_reopening_a_task_from_the_cockpit_refreshes_the_list(world):
+    remaining = [t for t in TASKS if t["slug"] != "other-task"]
+    world.runner.handlers["workplace.tasks"] = lambda argv: ok(remaining)
+    world.act("task_close", keys=["task:other-task"], reason="done")
+    world.app.collector.drain()
+    assert all(t["slug"] != "other-task" for t in world.app.collector.tasks)
+    world.runner.handlers["workplace.tasks"] = lambda argv: ok(TASKS)
+    world.act("task_reopen", slug="other-task")
+    world.app.collector.drain()
+    assert any(t["slug"] == "other-task" for t in world.app.collector.tasks)
+
+
+def test_a_pass_that_took_n_ms_holds_the_next_watched_delta_for_n_ms(world):
+    from lib.bridge_cockpit import watch
+    original = world.runner.handlers["briefing.collect"]
+    during = []
+
+    def slow(argv):
+        during.append(world.app.collector.delta_hold_ms())
+        world.clock.now += 4000
+        return original(argv)
+
+    world.runner.handlers["briefing.collect"] = slow
+    world.app.collector.request("delta")
+    world.app.collector.drain()
+    assert during and during[0] > 0                          # a pass in flight holds a watched delta
+    assert world.app.collector.delta_hold_ms() >= 4000
+    world.clock.now += 1000
+    assert 2900 <= world.app.collector.delta_hold_ms() <= 3000
+    world.runner.handlers["briefing.collect"] = original
+    watcher = watch.Watcher(world.app)
+    world.runner.calls.clear()
+    _bump(world.root / "work" / "inbox" / YES_ID / "item.yaml")
+    watcher.check(100.0)
+    # the debounce is over, the hold of the slow pass is not
+    assert watcher.check(100.0 + watch.DEBOUNCE_S) is False
+    assert world.app.collector.is_idle()
+    world.clock.now += 3000
+    assert watcher.check(100.0 + watch.DEBOUNCE_S + 3.0) is True
+    world.app.collector.drain()
+    assert len(collect_calls(world)) == 1
+
+
+# ---------------------------------------------------------------- the tab view's screen poll (#387)
+
+def test_a_tab_screen_that_did_not_change_answers_unchanged_without_text(world):
+    screens = iter(["> one\n\n⏺ first", "> one\n\n⏺ first", "> one\n\n⏺ second"])
+    world.runner.handlers["workplace.screen"] = lambda argv: ok({"text": next(screens)})
+    status, _, body = world.request("GET", "/api/tab/screen?ref=surface:7", headers=world.cookie)
+    first = json.loads(body)
+    assert status == 200 and first["text"] == "> one\n\n⏺ first" and re.fullmatch(r"[0-9a-f]{16}", first["hash"])
+    world.clock.advance(2)
+    status, _, body = world.request("GET", f"/api/tab/screen?ref=surface:7&since={first['hash']}", headers=world.cookie)
+    same = json.loads(body)
+    assert status == 200 and same["ok"] is True and same["unchanged"] is True and "text" not in same
+    assert same["hash"] == first["hash"] and same["ref"] == "surface:7"
+    world.clock.advance(2)
+    status, _, body = world.request("GET", f"/api/tab/screen?ref=surface:7&since={first['hash']}", headers=world.cookie)
+    changed = json.loads(body)
+    assert status == 200 and changed["text"] == "> one\n\n⏺ second" and changed["hash"] != first["hash"]
+    assert "unchanged" not in changed
+    assert len(world.runner.of("workplace.screen")) == 3
+
+
+def test_a_tab_screen_since_must_be_a_hash(world):
+    world.runner.calls.clear()
+    for since in ("xyz", "a" * 65, "%20", "--json"):
+        status, _, body = world.request("GET", f"/api/tab/screen?ref=surface:7&since={since}", headers=world.cookie)
+        assert status == 400 and json.loads(body)["error"]["code"] == "invalid_argument"
+    assert world.runner.of("workplace.screen") == []
+
+
+def test_two_reads_of_one_tab_screen_within_a_second_share_one_driver_call(world):
+    world.runner.handlers["workplace.screen"] = lambda argv: ok({"text": "> hi"})
+    world.runner.calls.clear()
+    a = json.loads(world.request("GET", "/api/tab/screen?ref=surface:7", headers=world.cookie)[2])
+    world.clock.advance(0.5)
+    b = json.loads(world.request("GET", "/api/tab/screen?ref=surface:7", headers=world.cookie)[2])
+    assert a["text"] == b["text"] == "> hi" and a["hash"] == b["hash"]
+    assert len(world.runner.of("workplace.screen")) == 1
+    world.clock.advance(1.5)                       # past the window the driver is asked again
+    world.request("GET", "/api/tab/screen?ref=surface:7", headers=world.cookie)
+    assert len(world.runner.of("workplace.screen")) == 2
+
+
+def test_a_tab_screen_the_driver_could_not_read_is_not_kept(world):
+    answers = iter([fail("busy"), ok({"text": "> back"})])
+    world.runner.handlers["workplace.screen"] = lambda argv: next(answers)
+    assert world.request("GET", "/api/tab/screen?ref=surface:7", headers=world.cookie)[0] == 502
+    status, _, body = world.request("GET", "/api/tab/screen?ref=surface:7", headers=world.cookie)
+    assert status == 200 and json.loads(body)["text"] == "> back"
+
+
+# ---------------------------------------------------------------- static files: ETag and 304 (#388)
+
+def test_a_static_file_answers_a_matching_if_none_match_with_304_and_no_body(world):
+    status, headers, body = world.request("GET", "/app.js", headers=world.cookie)
+    etag = headers.get("ETag")
+    assert status == 200 and body == b"export const ok = 1\n" and etag and etag.startswith('"')
+    assert headers["Cache-Control"] == "no-cache"
+    status, headers, body = world.request("GET", "/app.js", headers={**world.cookie, "If-None-Match": etag})
+    assert status == 304 and body == b"" and headers["ETag"] == etag
+    assert headers["Cache-Control"] == "no-cache" and headers["X-Content-Type-Options"] == "nosniff"
+    # a list, a weak form and the wildcard match too; a stale tag does not
+    for value in (f'"x", {etag}', f"W/{etag}", "*"):
+        assert world.request("GET", "/app.js", headers={**world.cookie, "If-None-Match": value})[0] == 304
+    status, _, body = world.request("GET", "/app.js", headers={**world.cookie, "If-None-Match": '"stale"'})
+    assert status == 200 and body == b"export const ok = 1\n"
+
+
+def test_a_changed_static_file_gets_200_with_a_new_etag(world):
+    _, headers, _ = world.request("GET", "/app.js", headers=world.cookie)
+    etag = headers["ETag"]
+    path = world.root / "scripts" / "web" / "app.js"
+    path.write_text("export const ok = 22\n", encoding="utf-8")
+    stat = path.stat()
+    os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
+    status, headers, body = world.request("GET", "/app.js", headers={**world.cookie, "If-None-Match": etag})
+    assert status == 200 and body == b"export const ok = 22\n" and headers["ETag"] not in ("", etag)
+
+
+def test_the_page_itself_stays_no_store_without_an_etag(world):
+    status, headers, _ = world.request("GET", "/", headers=world.cookie)
+    assert status == 200 and headers["Cache-Control"] == "no-store" and "ETag" not in headers
+
+
+# ---------------------------------------------------------------- multi-row actions: every row resolved first (#399)
+
+def test_runs_on_with_one_stale_key_writes_nothing(world):
+    """the second row went away with a refresh: the first is not put off either"""
+    world.runner.calls.clear()
+    with pytest.raises(ActionError) as err:
+        world.act("runs_on", keys=[f"inbox:{YES_ID}", "ref:example/repo#99"], until=TOMORROW)
+    assert err.value.code == "stale_row" and writes(world) == []
+    assert "ref:example/repo#99" not in world.app.store.hidden() and world.app.history.state() == []
+
+
+def test_do_it_with_a_failing_third_filing_starts_the_first_two_and_names_the_third(world):
+    ids = iter(["20261010-1200-fix-the-example-issue-a1b2", "20261010-1201-answer-from-the-vendor-c3d4"])
+    world.runner.handlers["inbox.add"] = lambda argv: next((ok(x + "\n") for x in ids), fail("inbox locked"))
+    world.runner.calls.clear()
+    res = world.act("do_it", keys=["ref:example/repo#12", "ref:example/repo#7", CHECK_KEY])
+    calls = writes(world)
+    assert [world.runner.key(c) for c in calls] == ["inbox.add", "inbox.add", "inbox.add", "workplace.launch"]
+    assert calls[-1] == launch_argv(world, "20261010-1200-fix-the-example-issue-a1b2,20261010-1201-answer-from-the-vendor-c3d4", "go")
+    assert res["ok"] is False and "inbox locked" in res["note"] and "Backup older than 2 days" in res["note"]
+    assert res["settled"] == ["ref:example/repo#12", "ref:example/repo#7"]
+    assert CHECK_KEY not in world.app.store.hidden()
+
+
+def test_advise_with_a_failing_filing_still_starts_the_rows_filed_before(world):
+    ids = iter(["20261010-1200-fix-the-example-issue-a1b2"])
+    world.runner.handlers["inbox.add"] = lambda argv: next((ok(x + "\n") for x in ids), fail("inbox locked"))
+    world.runner.calls.clear()
+    res = world.act("advise", keys=["ref:example/repo#12", "ref:example/repo#7"])
+    assert writes(world)[-1] == launch_argv(world, "20261010-1200-fix-the-example-issue-a1b2", "report")
+    assert "Answer from the vendor" in res["note"]
+
+
+def test_the_hide_of_a_filed_row_is_in_the_history_and_can_be_undone(world):
+    world.runner.handlers["inbox.add"] = lambda argv: ok("20261010-1200-fix-the-example-issue-a1b2\n")
+    world.runner.calls.clear()
+    res = world.act("do_it", keys=["ref:example/repo#12"])
+    items = [it for e in world.app.history.state() for it in e["items"]]
+    assert [(it["key"], it["kind"], it["undo"]) for it in items] == \
+        [("ref:example/repo#12", "other", {"verb": "unhide", "args": {"key": "ref:example/repo#12"}})]
+    assert res["undo"] == [{"title": "Fix the example issue", "kind": "other", "undo": items[0]["undo"]}]
+    world.act("unhide", key="ref:example/repo#12")
+    assert "ref:example/repo#12" not in world.app.store.hidden()
+
+
+def test_a_refusal_after_a_step_that_wrote_still_hands_back_undo_and_history(world, monkeypatch):
+    """the row was hidden and filed, then the start refused: the page can take the hide back"""
+    world.runner.handlers["inbox.add"] = lambda argv: ok("20261010-1200-fix-the-example-issue-a1b2\n")
+
+    def refuse(*a, **kw):
+        raise ActionError(409, "not_applicable", "a launch item fails validation", "keys")
+    monkeypatch.setattr(world.app.actions, "launch", refuse)
+    rebuilds = []
+    rebuild = world.app.collector.rebuild
+    world.app.collector.rebuild = lambda: (rebuilds.append(1), rebuild())
+    with pytest.raises(ActionError) as err:
+        world.act("do_it", keys=["ref:example/repo#12"])
+    assert err.value.extra["undo"] == [{"title": "Fix the example issue", "kind": "other",
+                                        "undo": {"verb": "unhide", "args": {"key": "ref:example/repo#12"}}}]
+    assert err.value.extra["history"] and err.value.extra["settled"] == ["ref:example/repo#12"] and rebuilds
+    world.act("unhide", key="ref:example/repo#12")
+    status, _, body = world.post("/api/action", {"verb": "do_it", "args": {"keys": ["ref:example/repo#12"]}})
+    data = json.loads(body)
+    assert status == 409 and data["error"]["code"] == "not_applicable" and data["undo"][0]["kind"] == "other"
+
+
+def test_a_refusal_before_any_write_hands_back_nothing_more(world):
+    with pytest.raises(ActionError) as err:
+        world.act("do_it", keys=["ref:example/repo#99"])
+    assert err.value.extra == {}

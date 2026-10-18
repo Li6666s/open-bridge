@@ -84,6 +84,8 @@ SCREEN_TIMEOUT = 4
 GITHUB_REF_RE = re.compile(r"^[\w.-]{1,100}/[\w.-]{1,100}#\d{1,9}\Z")
 GITHUB_DETAIL_TIMEOUT = 40
 SCREEN_MAX = 120_000
+SCREEN_CACHE_MS = 1000      # several pages on one tab share one read of its screen within this window
+SCREEN_HASH_RE = re.compile(r"^[0-9a-f]{1,64}\Z")
 CAPS_TTL_S = 300
 CAPS_TIMEOUT = 20
 TAB_REF_RE = re.compile(r"^[A-Za-z0-9%][A-Za-z0-9:%_.@/-]{0,63}\Z")   # the terminal driver's name for a tab
@@ -159,6 +161,9 @@ class App:
         self.code_root = Path(code_root).resolve() if code_root else self.root   # where the page's files come from
         self._caps_lock = threading.Lock()
         self._caps: tuple[float, list[str]] | None = None
+        self._screen_lock = threading.Lock()
+        self._screens: dict[str, tuple[float, str, str]] = {}   # ref -> (read at ms, text, hash), each under its ref's lock
+        self._screen_locks: dict[str, threading.Lock] = {}
         self.cfg = cfg
         self.runner = runner
         self.state_dir = Path(state_dir)
@@ -300,6 +305,29 @@ class App:
         with self._caps_lock:
             self._caps = (now, caps)
         return list(caps)
+
+    def tab_screen(self, ref: str) -> tuple[str | None, str, str]:
+        """The last lines of a tab's terminal as (text, hash, error), read through the terminal driver.
+        A read is kept for a second per tab, and a second page asking meanwhile waits for the read under
+        way instead of starting its own; a read that failed is not kept."""
+        with self._screen_lock:
+            lock = self._screen_locks.setdefault(ref, threading.Lock())
+        with lock:
+            hit = self._screens.get(ref)
+            if hit and 0 <= self.clock() - hit[0] < SCREEN_CACHE_MS:
+                return hit[1], hit[2], ""
+            run = self.run(self.workplace("screen", ref, "--lines", str(SCREEN_LINES), "--json"), SCREEN_TIMEOUT)
+            try:
+                raw = json.loads(run.out).get("text") if run.ok else None
+            except (ValueError, AttributeError):
+                raw = None
+            if not isinstance(raw, str):
+                self._screens.pop(ref, None)
+                return None, "", (run.err or run.out or "the tab could not be read").strip()
+            text = "\n".join(line.rstrip() for line in raw.splitlines()).strip("\n")[-SCREEN_MAX:]
+            digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+            self._screens[ref] = (self.clock(), text, digest)
+            return text, digest, ""
 
     def names_tabs(self) -> bool:
         """Whether a terminal driver lists the tabs, so the control session can be told apart by its tab
@@ -476,6 +504,22 @@ class App:
         self.watcher.shutdown()
 
 
+def static_etag(mtime_ns: int, size: int) -> str:
+    """A strong validator from the file's (mtime, size): changes with every write that a reload must see."""
+    return f'"{mtime_ns:x}-{size:x}"'
+
+
+def etag_matches(header: str | None, etag: str) -> bool:
+    """If-None-Match uses the weak comparison (RFC 9110 13.1.2): a W/ prefix does not matter, * matches."""
+    if not header:
+        return False
+    for part in header.split(","):
+        tag = part.strip()
+        if tag == "*" or (tag[2:] if tag.startswith("W/") else tag) == etag:
+            return True
+    return False
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "bridge-cockpit"
     sys_version = ""
@@ -519,8 +563,10 @@ class Handler(BaseHTTPRequestHandler):
         body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         self.send_bytes(status, body, "application/json; charset=utf-8")
 
-    def send_error_json(self, code: str, message: str, field: str | None = None, status: int | None = None) -> None:
-        self.send_json(status or ERROR_STATUS[code], {"ok": False, "error": {"code": code, "message": message, "field": field}})
+    def send_error_json(self, code: str, message: str, field: str | None = None, status: int | None = None,
+                        extra: dict | None = None) -> None:
+        self.send_json(status or ERROR_STATUS[code],
+                       {"ok": False, "error": {"code": code, "message": message, "field": field}, **(extra or {})})
 
     def send_unauthorized(self, path: str) -> None:
         if path.startswith("/api/"):
@@ -688,23 +734,24 @@ class Handler(BaseHTTPRequestHandler):
             if not TAB_REF_RE.match(ref):
                 self.send_error_json("invalid_argument", "not a tab ref", "ref")
                 return
+            since = one("since")
+            if since and not SCREEN_HASH_RE.match(since):
+                self.send_error_json("invalid_argument", "not a screen hash", "since")
+                return
             tab = app.tabs.find(ref)
             if not tab:
                 self.send_error_json("not_found", "no such tab")
                 return
             # read only: the last lines of the tab's terminal, for the tab view (a CLI chat in the page),
-            # through the terminal driver like everything else done to a tab
-            run = app.run(app.workplace("screen", ref, "--lines", str(SCREEN_LINES), "--json"), SCREEN_TIMEOUT)
-            try:
-                raw = json.loads(run.out).get("text") if run.ok else None
-            except (ValueError, AttributeError):
-                raw = None
-            if not isinstance(raw, str):
-                self.send_error_json("unreadable", app.scrub((run.err or run.out or "the tab could not be read").strip())[:200])
+            # through the terminal driver like everything else done to a tab. A page that names the hash
+            # it holds (since) gets unchanged and no text while the screen stays the same
+            text, digest, err = app.tab_screen(ref)
+            if text is None:
+                self.send_error_json("unreadable", app.scrub(err)[:200])
                 return
-            text = "\n".join(line.rstrip() for line in raw.splitlines()).strip("\n")
-            self.send_json(200, {"ok": True, "ref": ref, "name": tab.get("name"), "state": tab.get("state"),
-                                 "workspace": tab.get("workspace"), "text": text[-SCREEN_MAX:], "at_ms": int(app.clock())})
+            head = {"ok": True, "ref": ref, "name": tab.get("name"), "state": tab.get("state"),
+                    "workspace": tab.get("workspace"), "hash": digest, "at_ms": int(app.clock())}
+            self.send_json(200, {**head, "unchanged": True} if since == digest else {**head, "text": text})
         elif path == "/api/task":
             slug = one("slug")
             if not details.SLUG_RE.match(slug):
@@ -781,8 +828,19 @@ class Handler(BaseHTTPRequestHandler):
         if not target.is_file():
             self.send_error_json("not_found", "not found")
             return
-        body = target.read_bytes()
-        self.send_bytes(200, body, CONTENT_TYPES[ext], html=ext == ".html", static=ext != ".html")
+        if ext == ".html":
+            self.send_bytes(200, target.read_bytes(), CONTENT_TYPES[ext], html=True)
+            return
+        # no-cache makes the browser revalidate every load; the tag lets it keep the body it has (304)
+        st = target.stat()
+        etag = static_etag(st.st_mtime_ns, st.st_size)
+        if etag_matches(self.headers.get("If-None-Match"), etag):
+            self.send_response(304)
+            self.send_header("ETag", etag)
+            self.security_headers(static=True)
+            self.end_headers()
+            return
+        self.send_bytes(200, target.read_bytes(), CONTENT_TYPES[ext], static=True, extra={"ETag": etag})
 
     def events(self) -> None:
         app = self.app
@@ -910,7 +968,7 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self.send_error_json("not_found", "unknown endpoint")
         except ActionError as error:
-            self.send_error_json(error.code, error.message, error.field, status=error.status)
+            self.send_error_json(error.code, error.message, error.field, status=error.status, extra=error.extra)
         except RunnerRefused:
             app.log_error("runner refused a program:\n" + traceback.format_exc())
             self.send_error_json("internal", "internal error")
