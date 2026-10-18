@@ -126,3 +126,54 @@ test('menu: a pick closes it and the focus returns to its button instead of fall
   assert.deepEqual(c.calls.at(-1), ['act', 'row_action', { page: 'p', section: 'x', index: 0, action: 'follow' }])
   assert.ok(document.activeElement === el.$('button'))
 })
+
+test('reply buttons and the text field have accessible names', async () => {
+  const reply = await load('views/reply.js')
+  const s = cockpitState(NOW)
+  const named = b => (b.textContent.trim() || b.getAttribute('aria-label') || '').length > 0
+  for (const ref of ['surface:7', 'surface:12', 'surface:10']) {
+    const tab = s.tabs.tabs.find(t => t.ref === ref)
+    for (const compact of [false, true]) {
+      const el = mountOwn(html`<${reply.TabReply} tab=${tab} s=${s} c=${recorder()} compact=${compact} />`)
+      await settle()
+      const buttons = el.$$('button')
+      assert.ok(buttons.length > 0, ref)
+      assert.ok(buttons.every(named), `${ref}: a button without a name`)
+      for (const box of el.$$('textarea')) {
+        const id = box.getAttribute('id')
+        assert.ok(id && el.$$('label').some(l => l.getAttribute('for') === id && l.textContent.trim()), `${ref}: the field has no label`)
+      }
+      // the folded field opens on a button that says it opens something
+      const opener = el.$$('button').find(b => b.getAttribute('aria-expanded') !== null)
+      if (compact && ref !== 'surface:7') {
+        assert.ok(opener, `${ref}: no opener`)
+        assert.equal(opener.getAttribute('aria-expanded'), 'false')
+        opener.click()
+        await settle()
+        assert.equal(el.$$('textarea').length, 1)
+        assert.ok(document.activeElement === el.$('textarea'), 'the opened field takes the focus')
+      }
+      render(null, el)
+    }
+  }
+})
+
+test('organize checkboxes have labels', async () => {
+  const organize = await load('views/organize.js')
+  const items = [
+    { id: 'ws_color:workspace:2', kind: 'ws_color', ref: 'workspace:2', from: null, to: 'Teal', why: 'x', cap: 'set_color' },
+    { id: 'tab_title:surface:9', kind: 'tab_title', ref: 'surface:9', from: 'release', to: 'Release notes', why: 'y', cap: 'rename' }]
+  const s = cockpitState(NOW, { ui: { organize: { busy: false, proposal: { id: 'o0123456789', at_ms: NOW, scope: 2, items }, ticks: {} } } })
+  const el = mountOwn(html`<${organize.OrganizeView} s=${s} c=${recorder()} />`)
+  await settle()
+  const boxes = el.$$('input[type="checkbox"]')
+  assert.ok(boxes.length >= 3, 'one per item and one per workspace')
+  for (const box of boxes) {
+    const label = box.getAttribute('aria-label') || (box.parentNode?.localName === 'label' ? box.parentNode.textContent.trim() : '')
+    assert.ok(label, 'a checkbox without a name')
+  }
+  const dialog = el.$('[role="dialog"]')
+  assert.ok(dialog && dialog.getAttribute('aria-modal') === 'true' && dialog.getAttribute('aria-labelledby'))
+  assert.ok(el.$$('button').every(b => (b.textContent.trim() || b.getAttribute('aria-label') || '').length > 0))
+  render(null, el)
+})

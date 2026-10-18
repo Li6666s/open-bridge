@@ -210,6 +210,9 @@ kbd {
 }
 .hdr-status > span { overflow: hidden; text-overflow: ellipsis; max-width: 320px; }
 .hdr-relay { padding: 0 4px; flex: 0 0 auto; }
+/* what works in this Bridge's tabs now; a click opens the Sessions page */
+.hdr-agents { flex: 0 0 auto; padding: 0 4px; font-size: 12.5px; white-space: nowrap; color: var(--on-surface-muted); }
+.hdr-agents:hover { color: var(--ink); }
 /* only the loading line and the as-of time give way; buttons and the relay word never overlap */
 .hdr-right > .btn, .hdr-right > .cmd { flex: 0 0 auto; }
 .hdr-status, .hdr-asof { flex: 0 1 auto; overflow: hidden; }
@@ -947,6 +950,11 @@ kbd {
 .info-detail-full { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .send-btns { display: flex; flex-direction: column; gap: 6px; }
 .chat-hint { margin: 6px 0 0; }
+/* the chat's one input: where Enter goes, and once handed on, how that went (views/chat.js ChatFoot) */
+.route-line { margin: 6px 0 0; }
+.route-chip { cursor: pointer; }
+.route-chip.is-tab { font-weight: 600; }
+.handoff-status { margin: 6px 0 0; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .ptab-more { display: inline-flex; }
 .more-menu { position: fixed; right: auto; min-width: 220px; z-index: 70; }
 .more-menu .settle-item { justify-content: space-between; }
@@ -1009,6 +1017,15 @@ kbd {
 .rooms-side { display: grid; grid-template-columns: minmax(0, 1fr); gap: 2px; padding: 8px; max-height: calc(100dvh - 180px); overflow-y: auto; align-content: start; }
 .rooms-side > .room-item { padding-left: 12px; }
 .room-group { margin: 12px 10px 4px; }
+/* the workspaces heading with the order toggle (terminal order or the most urgent first) */
+/* it needs about 374 px and the sidebar gives 268 to 326: the label takes its own line when the buttons do
+   not fit beside it, and the buttons wrap, never cut */
+.room-group-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin: 12px 4px 4px 10px; }
+.room-group-head > .room-group { margin: 0; flex: 1 1 auto; }
+/* what runs in a tab or a workspace: subagents and workflows, each with its icon */
+.room-load { flex: none; display: inline-flex; align-items: center; gap: 6px; font-size: var(--text-label); font-weight: 400;
+  color: var(--on-surface-muted); }
+.room-load-n { display: inline-flex; align-items: center; gap: 2px; }
 .room-ws { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; gap: 1px; padding-left: 6px; border-left: 3px solid var(--ws-color, var(--border)); margin: 4px 0 6px; }
 .room-item { display: flex; align-items: center; gap: 8px; text-align: left; padding: 6px 8px; border: 1px solid transparent;
   border-radius: var(--radius-md); background: none; color: var(--ink); font: inherit; cursor: pointer; min-width: 0; width: 100%; overflow: hidden; }
@@ -1020,6 +1037,9 @@ kbd {
 .room-tab, .room-chat { padding-left: 16px; }
 .room-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .room-meta { flex: none; }
+/* a new name typed in place of a tab's or a workspace's row (views/rooms.js RenameField) */
+.room-rename { display: flex; align-items: center; gap: 6px; padding: 4px 8px; min-width: 0; }
+.room-rename-input { flex: 1 1 auto; }
 /* a quick chat leaves the list by the × beside its row (into the archive); it shows on hover, always on touch */
 .room-chat-row { display: flex; align-items: center; min-width: 0; }
 .room-x { flex: none; width: 24px; height: 24px; padding: 0; border: none; border-radius: var(--radius-md); background: none;
@@ -1036,6 +1056,22 @@ kbd {
 .rooms-main.rooms-agent { display: block; }
 .rooms-main > .tabview-body { overflow-y: auto; padding: 12px 16px; }
 .room-ws-pane { border-top: 3px solid var(--ws-color, var(--border)); }
+/* what a waiting tab asks, and the answers to it (views/reply.js) */
+.reply-group { display: grid; gap: 6px; margin: 0 0 8px; }
+.reply-group > .room-group { margin-bottom: 0; }
+.reply-row { display: grid; gap: 4px; min-width: 0; padding: 6px 8px; margin: 0 4px; border: 1px solid var(--border);
+  border-radius: var(--radius-md); background: var(--surface-raised); }
+.reply-row.is-left { opacity: 0.55; }
+.reply-head { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 0; border: none; background: none;
+  color: inherit; font: inherit; font-weight: 600; text-align: left; cursor: pointer; }
+.reply-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.reply-ask { margin: 0; font-size: 12.5px; white-space: pre-line; overflow-wrap: anywhere; }
+.reply-done, .reply-draft, .reply-note { margin: 0; }
+.reply-note { color: var(--danger); }
+.reply-btns { flex-wrap: wrap; }
+.reply-field { display: flex; gap: 6px; align-items: flex-end; }
+.reply-field .input { flex: 1 1 auto; min-width: 0; resize: vertical; }
+.reply-pane { display: grid; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--border); }
 .room-list { display: grid; gap: 6px; padding-left: 18px; }
 .rooms-agent { overflow: hidden; }
 .rooms-agent .agentspage.is-embedded, .rooms-agent .agents-grid { height: 100%; }
@@ -2631,3 +2667,19 @@ a.ticker-item:hover .ticker-title { text-decoration: underline; text-decoration-
 .agent-convs { align-items: center; }
 .agents-list-toggle { flex: none; }
 .agent-current { font-weight: 600; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* organize with AI (views/organize.js): the proposal grouped by workspace, one checkbox per item */
+.org-groups { display: grid; gap: 14px; margin-top: 12px; }
+.org-group { border-top: 1px solid var(--border); padding-top: 10px; }
+.org-group-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.dialog .org-group-title { font-size: 14px; }
+.org-group-tick { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+.org-items { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 6px; }
+.org-line { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px; cursor: pointer; min-width: 0; }
+.org-line input { align-self: center; }
+.org-subject { font-weight: 500; overflow-wrap: anywhere; }
+.org-from, .org-to { overflow-wrap: anywhere; }
+.org-why { margin: 2px 0 0 26px; }
+.org-busy { display: flex; align-items: center; gap: 8px; }
+.org-result { margin-top: 12px; border-top: 1px solid var(--border); padding-top: 10px; }
+.org-list { margin: 4px 0 8px; padding-left: 18px; }

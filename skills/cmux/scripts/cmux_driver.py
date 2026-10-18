@@ -7,14 +7,28 @@ The plan (which task, which workspace, new or resumed) belongs to CORE
 list the tabs, open the plan, type into a tab, rename a tab. It speaks the CORE
 JSON protocol: one request on stdin, one answer on stdout.
 
-    {"verb": "tabs"}       -> {"tabs": [{"name", "workspace", "ref", "ws_ref", "state", "last"}]}
+    {"verb": "tabs"}       -> {"tabs": [{"name", "workspace", "ref", "ws_ref", "state", "state_source", "last"}]}
     {"verb": "sessions"}   -> {"sessions": {"<tab title>": "<agent session id>"}}
     {"verb": "open", "plan": {...}, "only": [...] | null, "resume": bool, "here": ref | null}
     {"verb": "launch", "tabs": [{"label", "slug", "command", "workspace", "aliases"}],
      "target": "tab" | "workspace" | "area", "here": ref | null}
     {"verb": "send", "tab": ref, "text": "..."}
     {"verb": "rename", "tab": ref, "title": "..."}
-    {"verb": "workspaces"} -> {"workspaces": [{"ref", "title", "color", "description", "cwd", "branch", ...}]}
+    {"verb": "rename_workspace", "workspace": ws_ref, "title": "..."}
+    {"verb": "move_tab", "tab": ref, "workspace": ws_ref, "index": n (optional)}
+    {"verb": "set_color", "workspace": ws_ref, "color": "<palette name>" | null}
+    {"verb": "set_description", "workspace": ws_ref, "text": "..." | null}
+    {"verb": "workspaces"} -> {"workspaces": [{"ref", "title", "color", "color_name", "description", "cwd",
+                                               "branch", ...}]}
+
+`move_tab` moves one tab without focusing it and refuses (an ERROR line) the last tab of a workspace,
+which cmux would drop. `set_color` takes a PALETTE name and sends cmux its hex; null clears the colour,
+as null clears the description in `set_description`. A workspace's `color_name` is the PALETTE name of
+its hex, null for any other colour.
+
+A tab's `state_source` says where its state was read: `hook` (the hook file knows its agent) or
+`glyph` (only the status glyph of its title). cmux drops the glyph once a tab has a title of its own,
+so a renamed tab without a hook reads as a shell from then on.
 
 `workspaces` only reads (workspace list, sidebar-state, list-notifications): what the cmux sidebar
 shows, for the cockpit's own sidebar. Like `workspace list` it covers the current window.
@@ -65,6 +79,15 @@ KEEP_SHELL = cl.KEEP_SHELL
 
 
 LAUNCH_WAIT_SEC = 20.0
+# cmux's named workspace colours with the hex it stores for each (the same map as workplace.py COLORS)
+PALETTE = {
+    "Red": "#C0392B", "Crimson": "#922B21", "Orange": "#A04000", "Amber": "#7D6608",
+    "Olive": "#4A5C18", "Green": "#196F3D", "Teal": "#006B6B", "Aqua": "#0E6B8C",
+    "Blue": "#1565C0", "Navy": "#1A5276", "Indigo": "#283593", "Purple": "#6A1B9A",
+    "Magenta": "#AD1457", "Rose": "#880E4F", "Brown": "#7B3F00", "Charcoal": "#3E4B5E",
+}
+PALETTE_BY_HEX = {v.upper(): k for k, v in PALETTE.items()}
+INDEX_MAX = 99
 
 
 class DriverError(RuntimeError):
@@ -123,7 +146,7 @@ def live_tabs(session: dict, hooks: dict) -> list[dict]:
                     glyph = _glyph(raw)
                     state = "shell" if glyph is None else "waiting" if glyph == "idle" else "working"
                 tabs.append({"workspace": ws_title, "ws_ref": ws.get("workspaceId"),
-                             "surface": pid, "state": state,
+                             "surface": pid, "state": state, "state_source": "hook" if bound else "glyph",
                              "title": p.get("customTitle") or cl.strip_status_glyph(raw),
                              "last": (hook.get("lastBody") or "").replace("\n", " ")[:90]})
     return tabs
@@ -227,6 +250,7 @@ def tabs() -> list[dict]:
         info = live.get(_key(t), {})
         out.append({"name": t["title"], "workspace": t["workspace"], "ref": t["surface"],
                     "ws_ref": t.get("ws_ref"), "state": info.get("state", "shell"),
+                    "state_source": info.get("state_source", "glyph"),
                     "last": info.get("last", ""), "id": t.get("id"),
                     "is_self": own is not None and t.get("id") == own})
     return out
@@ -658,6 +682,74 @@ def rename(req: dict) -> list[str]:
     return [f"{req['tab']} is now named {req['title']!r}"]
 
 
+def rename_workspace(req: dict) -> list[str]:
+    """One workspace gets a title of its own; a ref cmux does not know is an error, never a guess."""
+    ref, title = req.get("workspace"), req.get("title")
+    if not isinstance(ref, str) or not ref.strip() or not isinstance(title, str) or not title.strip():
+        raise DriverError("rename_workspace needs a workspace ref and a title")
+    try:
+        cl.cmux_checked("workspace", "rename", ref, "--title", title)
+    except cl.CmuxError as exc:
+        raise DriverError(f"cmux refused to rename {ref}: {exc}") from exc
+    return [f"{ref} is now named {title!r}"]
+
+
+def _ref(req: dict, key: str, what: str) -> str:
+    value = req.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise DriverError(f"{what} needs a {key} ref")
+    return value
+
+
+def move_tab(req: dict) -> list[str]:
+    """One tab into another workspace, unfocused. A tab that is the last one of its workspace stays (cmux
+    would drop the emptied workspace): an ERROR line, nothing moved. Refs cmux does not show are errors."""
+    tab, ws = _ref(req, "tab", "move_tab"), _ref(req, "workspace", "move_tab")
+    index = req.get("index")
+    if index is not None and (isinstance(index, bool) or not isinstance(index, int) or not 0 <= index <= INDEX_MAX):
+        raise DriverError(f"move_tab index must be 0 to {INDEX_MAX}")
+    tree = read_tree()
+    counts, homes = surface_counts(tree), surface_homes(tree)
+    src = homes.get(tab)
+    if src is None:
+        raise DriverError(f"no open tab {tab}")
+    if ws not in counts:
+        raise DriverError(f"no open workspace {ws}")
+    if src == ws:
+        return [f"{tab} is in {ws} already"]
+    if counts.get(src, 0) <= 1:
+        return [f"ERROR {tab} is the last tab of {src}, moving it would close that workspace"]
+    args = ["move-surface", "--surface", tab, "--workspace", ws, "--focus", "false"]
+    if index is not None:
+        args += ["--index", str(index)]
+    cl.cmux_checked(*args)
+    return [f"moved {tab} into {ws}"]
+
+
+def set_color(req: dict) -> list[str]:
+    ws = _ref(req, "workspace", "set_color")
+    color = req.get("color")
+    if color is None:
+        cl.cmux_checked("workspace-action", "--workspace", ws, "--action", "clear-color")
+        return [f"{ws} has no colour now"]
+    if color not in PALETTE:
+        raise DriverError(f"set_color takes one of {', '.join(PALETTE)} or null")
+    cl.cmux_checked("workspace-action", "--workspace", ws, "--action", "set-color", "--color", PALETTE[color])
+    return [f"{ws} is {color} now"]
+
+
+def set_description(req: dict) -> list[str]:
+    ws = _ref(req, "workspace", "set_description")
+    text = req.get("text")
+    if text is None:
+        cl.cmux_checked("workspace-action", "--workspace", ws, "--action", "clear-description")
+        return [f"{ws} has no description now"]
+    if not isinstance(text, str) or not text.strip():
+        raise DriverError("set_description needs a text or null")
+    cl.cmux_checked("workspace-action", "--workspace", ws, "--action", "set-description", "--description", text)
+    return [f"{ws} has a new description"]
+
+
 # ---------------------------------------------------------------- workspaces, read only
 
 STATUS_ATTR = re.compile(r"\s+(icon|color|priority|work|url)=(\S+)$")
@@ -717,8 +809,10 @@ def workspaces() -> list[dict]:
             return v.strip()[:cap] if isinstance(v, str) and v.strip() else None
 
         latest = text("latest_submitted_message", 500)
+        color = text("custom_color", 20)
         out.append({"ref": w["ref"], "id": text("id", 80), "title": text("title", 120) or w["ref"],
-                    "color": text("custom_color", 20), "description": text("description"),
+                    "color": color, "color_name": PALETTE_BY_HEX.get(color.upper()) if color else None,
+                    "description": text("description"),
                     "pinned": w.get("pinned") is True, "selected": w.get("selected") is True,
                     "cwd": text("current_directory", 500), "branch": side["branch"], "dirty": side["dirty"],
                     "pr": side["pr"], "unread": unread.get(w.get("id") or "", 0),
@@ -729,7 +823,7 @@ def workspaces() -> list[dict]:
 
 # the cockpit steers a tab with these (docs/workplace.md, the optional verbs); cmux serves them all
 CAPS = ["tabs", "sessions", "open", "launch", "send", "rename", "control", "focus", "key", "screen", "close",
-        "workspaces"]
+        "workspaces", "rename_workspace", "move_tab", "set_color", "set_description"]
 # the one key set a driver takes; cmux's own names for the two that are not typed as they are
 KEYS = {"enter": "Enter", "escape": "escape", "y": "y", "n": "n", **{str(i): str(i) for i in range(1, 10)}}
 
@@ -787,6 +881,14 @@ def handle(req: dict) -> dict:
         return {"report": send(req)}
     if verb == "rename":
         return {"report": rename(req)}
+    if verb == "rename_workspace":
+        return {"report": rename_workspace(req)}
+    if verb == "move_tab":
+        return {"report": move_tab(req)}
+    if verb == "set_color":
+        return {"report": set_color(req)}
+    if verb == "set_description":
+        return {"report": set_description(req)}
     if verb == "control":
         return {"report": control(req)}
     if verb == "caps":

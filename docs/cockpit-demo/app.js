@@ -14,7 +14,8 @@ import {
   CONN_GRACE_MS, DAY, pushNoteState, actionFailNote, attentionTabs, createFailNote, createLoaders, displayedRows, errorText, freshMore, indexRows, invalidateDetails,
   isTypingTarget, isoDate, themeOverride, modalKeyAllowed, createWithBusy, createToastTimers, letterShortcut, planBusy, toastLinger, reviewHome, nextMonday, parseShortcut, planShortcut, railShown, rowByNumber, short, startRefusal,
   upsertRecord, addFeed, feedEvents, workPageOf, withLaunch, routesToFetch, newerTicker, tickerRemember,
-  applyQuickLive, quickLiveSnapshot, whenShown,
+  applyQuickLive, quickLiveSnapshot, whenShown, pruneAnswered, organizeGroups, organizeTicks, roomsOf, askContext,
+  listedChats,
 } from './logic.js'
 import { T, language, setControl, setLanguage } from './text.js'
 
@@ -128,7 +129,7 @@ const store = createStore({
   ui: {
     // a new visit opens on the start page, a reload stays where it was; the project chip chosen there is kept
     page: reloaded() ? load('bridge-cockpit.page', START_PAGE) : START_PAGE, homeProject: load('bridge-cockpit.homeProject', null), selectedKey: null,
-    coreConv: null, coreBrief: false, focusKey: null, picked: [], expanded: {},
+    coreConv: null, coreBrief: false, focusKey: null, picked: [], expanded: {}, sent: [],
     // the view of the work tab (due, area, jev); a page with jev: outside it reads area and jev the same way
     workView: load('bridge-cockpit.workTab', 'due'),
     workKind: load('bridge-cockpit.workKind', null),
@@ -136,6 +137,12 @@ const store = createStore({
     settingsSection: load('bridge-cockpit.settingsSection', 'start'),
     busy: {}, snapshotText: null, openMsg: null, tabView: null, room: null, quickConv: null, agentPeer: null, agentConv: null, agentMode: 'question', agentsListHidden: load('bridge-cockpit.agentsList', 'shown') === 'hidden',
     railHidden: load('bridge-cockpit.rail', 'shown') === 'hidden',
+    // the order of the workspaces in the chat as cmux: the terminal's (default) or the most urgent first; kept in this browser
+    roomsSort: load('bridge-cockpit.roomsSort', 'terminal') === 'urgency' ? 'urgency' : 'terminal',
+    answered: {},   // per tab ref the answer the page sent last: { hash, q, ms } (views/reply.js)
+    renaming: null,  // the tab or workspace whose name is being typed: { kind: 'tab' | 'ws', id: ref } (views/rooms.js)
+    // organize with AI (views/organize.js): { busy, applying, proposal, ticks: { id: true }, result } while open
+    organize: null,
     tickerPaused: load('bridge-cockpit.tickerPaused', '0') === '1', tickerRead: loadTickerRead(), tickerSince: tickerSince(), quickModel: load('bridge-cockpit.quickModel', null),
     launchModel: load('bridge-cockpit.launchModel', null), launchEffort: load('bridge-cockpit.launchEffort', null), rvFilter: 'all', rvSort: 'verdict', rvPicked: [],
   },
@@ -274,7 +281,7 @@ const handlers = {
   tabs(tabs) {
     const prev = store.get()
     if (prev.model) noteFeed(feedEvents(prev.model, prev.model, prev.tabs?.tabs, tabs?.tabs, Date.now()))
-    store.set(s => ({ ...s, tabs }))
+    store.set(s => ({ ...s, tabs, ui: { ...s.ui, answered: pruneAnswered(s.ui.answered, Date.now()) } }))
   },
   quick(q) {
     const before = store.get().quick?.convs ?? []
@@ -390,6 +397,9 @@ function rowIndex() {
   return indexRows(store.get().model)
 }
 
+// the refusal of an action, by the args object it was sent with, for reply() to show where it was asked
+const refusals = new WeakMap()
+
 async function act(verb, args = {}) {
   // a bulk leaves out the rows already in flight and says so, and marks each of the others busy (logic.js planBusy)
   const p = planBusy(verb, args, store.get().ui.busy)
@@ -404,6 +414,7 @@ async function act(verb, args = {}) {
       if (res.data?.undo?.length) pushNote({ text: errorText(res.error, T()), tone: 'bad', action: 'undo', undo: res.data.undo }, { linger: 10000 })
       else if (res.status === 401) failNote(res)
       else pushNote(actionFailNote(res, T()))
+      if (res.error) refusals.set(args, res.error)
       return null
     }
     const r = res.data
@@ -422,6 +433,14 @@ async function act(verb, args = {}) {
   }, { rows: p.rows, refuse: p.refuse })
 }
 
+/** An answer to a tab (views/reply.js): act(), and a refusal comes back as { refused, error } as well, so
+ *  the reply shows it beside the field and keeps what was typed */
+async function reply(verb, args) {
+  const sent = { ...args }
+  const r = await act(verb, sent)
+  return r ?? (refusals.has(sent) ? { refused: true, error: refusals.get(sent) } : null)
+}
+
 /** Mark `key` busy while fn runs, and clear it however fn ends; a row action already busy runs nothing and says so (logic.js) */
 const withBusy = createWithBusy(() => store.get().ui.busy, f => setUi(ui => ({ busy: f(ui.busy) })), () => pushNote({ text: T().busyAlready, tone: 'warn' }))
 
@@ -435,7 +454,9 @@ async function ask(kind, args = {}) {
   return withBusy(`ask:${kind}`, kind, async () => {
     const onChat = ui.page === CHAT_PAGE && !ui.tabView
     const conv = kind === 'free' && (ui.tabView === '@ask' || onChat) ? ui.quickConv : null
-    const res = await api.ask(kind, args, { via: 'quick', model: ui.quickModel, ...(conv ? { conv } : {}) })
+    // a free question carries what the page shows right now, as data beside it (the core asks without it)
+    const context = kind === 'free' ? askContext(store.get(), language()) : ''
+    const res = await api.ask(kind, context ? { ...args, context } : args, { via: 'quick', model: ui.quickModel, ...(conv ? { conv } : {}) })
     if (res.ok && res.data?.conv) {
       // asked on the Chat tab it stays there, from anywhere else the chat window opens on it
       setUi(onChat && kind === 'free' ? { quickConv: res.data.conv } : { tabView: '@ask', quickConv: res.data.conv, openMsg: null })
@@ -523,6 +544,7 @@ function clearRoutes(launch) {
 
 const ctl = {
   act,
+  reply,
   ask,
   copy,
   dismissToast,
@@ -652,7 +674,8 @@ const ctl = {
     return r
   },
   pickAgent: peer => {
-    const latest = (store.get().agents?.convs ?? []).filter(x => x.peer === peer)
+    const a = store.get().agents ?? {}
+    const latest = listedChats(a.convs, a.keep_hours, Date.now()).filter(x => x.peer === peer)
       .sort((a, b) => (b.last_ms ?? 0) - (a.last_ms ?? 0))[0]
     setUi({ agentPeer: peer, agentConv: latest?.id ?? null })
   },
@@ -679,6 +702,41 @@ const ctl = {
     const hidden = !store.get().ui.railHidden
     save('bridge-cockpit.rail', hidden ? 'hidden' : 'shown')
     setUi({ railHidden: hidden, drawer: hidden ? store.get().ui.drawer : null })
+  },
+  // an answer that went out to a tab from the page: its row says so until the tab moved on (views/reply.js)
+  // the mark carries the occurrence of the question (logic.js answerMark), so the same words asked again are not hidden
+  markAnswered: (ref, mark) => setUi(ui => ({ answered: { ...pruneAnswered(ui.answered, Date.now()), [ref]: { ...mark, ms: mark?.ms ?? Date.now() } } })),
+  // a name of its own for a tab or a workspace: the field stands in its sidebar row until saved or cancelled
+  startRename: (kind, id) => setUi({ renaming: { kind, id } }),
+  stopRename: () => setUi({ renaming: null }),
+  // organize with AI: one proposal at a time; nothing is ticked until a person ticks it, nothing applied unticked
+  organizePropose: async () => {
+    if (store.get().ui.organize?.busy) return
+    setUi({ organize: { busy: true, applying: false, proposal: null, ticks: {}, result: null } })
+    const r = await act('organize_propose', {})
+    setUi(ui => (ui.organize ? { organize: r?.proposal ? { ...ui.organize, busy: false, proposal: r.proposal } : null } : {}))
+  },
+  organizeToggle: id => setUi(ui => (ui.organize ? { organize: { ...ui.organize, ticks: organizeTicks.toggle(ui.organize.ticks, id) } } : {})),
+  organizeTickAll: () => setUi(ui => (ui.organize ? { organize: { ...ui.organize, ticks: organizeTicks.all(ui.organize.proposal) } } : {})),
+  organizeTickGroup: (ref, on) => setUi(ui => {
+    const o = ui.organize
+    const group = o && organizeGroups(o.proposal, roomsOf(store.get())).find(g => g.ref === ref)
+    return group ? { organize: { ...o, ticks: organizeTicks.group(o.ticks, group, on) } } : {}
+  }),
+  organizeApply: async () => {
+    const o = store.get().ui.organize
+    const items = organizeTicks.ids(o?.ticks, o?.proposal)
+    if (!o || o.applying || !items.length) return
+    setUi({ organize: { ...o, applying: true } })
+    const r = await act('organize_apply', { proposal: o.proposal.id, items })
+    setUi(ui => (ui.organize ? { organize: { ...ui.organize, applying: false, ticks: {},
+      result: r ? { applied: r.applied ?? [], skipped: r.skipped ?? [], failed: r.failed ?? [] } : ui.organize.result } } : {}))
+  },
+  organizeClose: () => setUi({ organize: null }),
+  toggleRoomsSort: () => {
+    const sort = store.get().ui.roomsSort === 'urgency' ? 'terminal' : 'urgency'
+    save('bridge-cockpit.roomsSort', sort)
+    setUi({ roomsSort: sort })
   },
   // the task and inbox pages: filter by the triage, sort again on a click (scripts/web/triage.js)
   // the day column's height, measured by the column itself: how many rows its sections fill up to
@@ -784,6 +842,8 @@ const ctl = {
   // the chat as cmux: what the right side shows ({ kind: 'ws' | 'tab' | 'chat' | 'agent' | 'bridge', id })
   pickRoom: room => setUi({ room }),
   newQuick: () => setUi({ quickConv: null }),
+  // what a chat_tab start from the chat answered (inbox item and launch outcome), for its status line; the last few
+  noteSent: rec => setUi(ui => ({ sent: [...(ui.sent ?? []).slice(-4), rec] })),
   // removes a chat with the Bridge from the list and from the server's file; nothing else knew of it
   quickForget: async conv => {
     const r = await act('quick_forget', { conv })
@@ -1033,6 +1093,7 @@ function onKey(e) {
   if (s.ui.inner) return
   if (e.key === 'Escape') {
     if (s.ui.confirm) return ctl.cancelConfirm()
+    if (s.ui.organize) return s.ui.organize.applying ? undefined : ctl.organizeClose()
     if (s.ui.tabView) return setUi({ tabView: null })
     if (s.ui.drawer) return setUi({ drawer: null, item: null })
     if (s.ui.pageDetail && !isTypingTarget(e.target)) return ctl.closePeek()
@@ -1041,7 +1102,7 @@ function onKey(e) {
   }
   // nothing acts on the list hidden behind an open drawer or confirmation (g t still focuses the tabs)
   if (s.ui.tabView) return
-  if (!modalKeyAllowed(s.ui, e.key, gPending)) return
+  if (!modalKeyAllowed(s.ui, e.key, gPending) || s.ui.organize) return
   if (isTypingTarget(e.target)) return
   if (e.altKey && !e.metaKey && !e.ctrlKey && /^Digit[1-9]$/.test(e.code)) {
     const ids = pageOrder(s)

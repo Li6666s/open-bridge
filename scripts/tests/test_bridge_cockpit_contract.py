@@ -263,9 +263,24 @@ def s_tabs(w: World) -> None:
     w.act("tab_jump", tab_ref="surface:7")
     w.act("tab_send", tab_ref="surface:7", text="--please continue")
     w.act("tab_go_on", tab_ref="surface:13")
+    # a reply that names the question it answers, the tab and the state: the screen is read fresh first
+    screens = {"surface:7": " Do you want to proceed?\n ❯ 1. Yes\n   2. No\n", "surface:13": "⏺ Shall I go on?\n"}
+    w.runner.handlers["workplace.screen"] = lambda argv: ok({"text": screens[argv[argv.index("screen") + 1]]})
+    w.app.asks_enabled = True
+    w.app.tabs.poll()
+    ask = {t["ref"]: t["ask"] for t in w.app.tabs_state()["tabs"]}
+    w.act("tab_option", tab_ref="surface:7", n=2, seen=ask["surface:7"]["hash"], name="demo-task")
+    w.act("tab_send", tab_ref="surface:13", text="--yes", seen=ask["surface:13"]["hash"], expect="waiting",
+          name="waiting plain")
+    w.act("tab_go_on", tab_ref="surface:13", seen=ask["surface:13"]["hash"], name="waiting plain")
     w.act("adopt", key="task:other-task", tab_ref="surface:11")
     w.act("tab_close", tab_ref="surface:8")
     w.act("start_control")
+    # a name of its own for a free tab and for a workspace; the title goes after `--`, so a dash is no flag
+    w.runner.handlers["workplace.caps"] = lambda argv: ok({"caps": [*DRIVER_CAPS, "control"]})
+    w.app.driver_caps(fresh=True)
+    w.act("tab_rename", tab_ref="surface:11", title="--scratch")
+    w.act("workspace_rename", ws_ref="workspace:2", title="-research")
 
 
 def s_rows(w: World) -> None:
@@ -303,6 +318,30 @@ def s_returns(w: World) -> None:
                                 "result": {"kind": "filed", "text": "--the result", "key": "tab-x-result"}})
 
 
+def s_organize(w: World) -> None:
+    """Organize with AI: one proposal with every kind of item, all of them ticked and applied; a colour and a
+    description are set on one workspace and cleared on the other"""
+    root = str(w.root)
+    tabs = [{"name": "one", "workspace": "Alpha", "ref": "surface:31", "ws_ref": "workspace:3", "state": "shell"},
+            {"name": "two", "workspace": "Alpha", "ref": "surface:32", "ws_ref": "workspace:3", "state": "shell"},
+            {"name": "three", "workspace": "Beta", "ref": "surface:33", "ws_ref": "workspace:4", "state": "shell"}]
+    spaces = [{"ref": "workspace:3", "title": "Alpha", "cwd": root, "description": "old words"},
+              {"ref": "workspace:4", "title": "Beta", "cwd": root, "color": "#1565C0"}]
+    answer = {"workspaces": [{"ref": "workspace:3", "title": "-alpha", "color": "Teal", "description": None, "why": "a"},
+                             {"ref": "workspace:4", "color": None, "description": "--new words", "why": "b"}],
+              "tabs": [{"ref": "surface:31", "title": "--first", "workspace": "workspace:4", "why": "c"}]}
+    w.runner.handlers["workplace.status"] = lambda argv: ok(tabs)
+    w.runner.handlers["workplace.workspaces"] = lambda argv: ok(spaces)
+    w.runner.handlers["workplace.caps"] = lambda argv: ok(
+        {"caps": [*DRIVER_CAPS, "control", "workspaces", "move_tab", "set_color", "set_description"]})
+    w.runner.handlers["claude.p"] = lambda argv: ok({"type": "result", "result": json.dumps(answer)})
+    w.app.driver_caps(fresh=True)
+    w.app.tabs.poll()
+    prop = w.act("organize_propose")["proposal"]
+    assert len(prop["items"]) == 7, prop["items"]
+    w.act("organize_apply", proposal=prop["id"], items=[i["id"] for i in prop["items"]])
+
+
 @dataclass
 class Scenario:
     drive: Callable[[World], None]
@@ -330,11 +369,15 @@ SCENARIOS = {
     "reopen": Scenario(s_reopen, {"task.reopen", "inbox.reopen"}),
     "review": Scenario(s_review, {"task.review"}),
     "tabs": Scenario(s_tabs, {"workplace.key", "workplace.focus", "workplace.send", "workplace.adopt",
-                              "workplace.close", "workplace.control"}),
+                              "workplace.close", "workplace.control", "workplace.screen", "workplace.rename",
+                              "workplace.rename-workspace"}),
     "rows": Scenario(s_rows, {"briefing.act"}),
     "reads": Scenario(s_reads, {"inbox.list", "inbox.stats", "inbox.mute", "workplace.screen", "briefing.detail"}),
     "returns": Scenario(s_returns, {"task.note", "inbox.note"}),
     "workspaces": Scenario(s_workspaces, {"workplace.workspaces"}, config=WORKSPACES_CFG),
+    "organize": Scenario(s_organize, {"workplace.workspaces", "workplace.move-tab", "workplace.rename",
+                                      "workplace.rename-workspace", "workplace.workspace-color",
+                                      "workplace.workspace-description"}, config=WORKSPACES_CFG),
 }
 
 # argv the scenarios must produce in these exact shapes, beyond the verb: the optional parts of a launch
@@ -410,7 +453,8 @@ def test_a_missing_required_flag_or_a_value_outside_the_choices_fails(tmp_path):
 
 # ---------------------------------------------------------------- real output of collect and caps
 
-DRIVER_CAPS = ["tabs", "sessions", "open", "launch", "send", "rename", "focus", "key", "screen", "close"]
+DRIVER_CAPS = ["tabs", "sessions", "open", "launch", "send", "rename", "focus", "key", "screen", "close",
+               "rename_workspace", "move_tab", "set_color", "set_description"]
 DRIVER = f"""import json, sys
 verb = json.loads(sys.stdin.read() or "{{}}").get("verb")
 print(json.dumps({{"caps": {DRIVER_CAPS!r}}} if verb == "caps" else {{"tabs": []}} if verb == "tabs"
@@ -545,3 +589,113 @@ def test_the_undo_of_a_task_closed_in_review_parses_with_task_py(tmp_path):
         w.close()
     reopen = [c for c in w.runner.calls if is_target(c) and w.runner.key(c) == "task.reopen"]
     assert len(reopen) == 1 and parse(reopen[0]).as_status == "review"
+
+
+# ---------------------------------------------------------------- the state fields the page reads
+
+# fields the page reads off /api/state that later work added; a path segment `[]` walks every entry of a
+# list, and each value must have one of the listed types. Later packages add their rows here.
+STATE_FIELDS = {
+    "sessions.sessions[].tab.ws_ref": (str, type(None)),
+    "tabs.tabs[].ask": (dict, type(None)),
+    "tabs.tabs[].state_source": (str, type(None)),   # hook | glyph where the driver says, else None
+    "agents.keep_hours": (int, float),                # A2A conversations untouched this long leave (0: never)
+    "quick.convs[].about": (dict, type(None)),        # the row or item a chat is about; None for a free one
+}
+# the keys and types of a tab's question (asks.py), when it has one
+ASK_FIELDS = {"text": str, "options": list, "hash": str, "yes_no": bool, "draft": bool}
+
+
+def state_values(data, path: str) -> list:
+    """Every value at `path`; KeyError names the first segment that is missing."""
+    found = [data]
+    for seg in path.split("."):
+        each = seg.endswith("[]")
+        key = seg[:-2] if each else seg
+        nxt = []
+        for node in found:
+            if not isinstance(node, dict) or key not in node:
+                raise KeyError(f"{path}: no {key!r}")
+            value = node[key]
+            if each:
+                assert isinstance(value, list) and value, f"{path}: {key!r} is no list with entries"
+                nxt.extend(value)
+            else:
+                nxt.append(value)
+        found = nxt
+    return found
+
+
+def test_state_fields_the_page_reads_are_present(tmp_path):
+    w = World(tmp_path)
+    try:
+        now_ms = time.time() * 1000
+        w.clock.now = now_ms
+        w.app.sessions.base = tbc.claude_home(tmp_path, w.root, now_ms)
+        tabs = [{"name": "Web work", "workspace": "Bridge", "ref": "surface:40", "ws_ref": "workspace:9",
+                 "state": "working", "id": tbc.SURF, "state_source": "hook"},
+                {"name": "Asks", "workspace": "Bridge", "ref": "surface:41", "ws_ref": "workspace:9",
+                 "state": "needs-you", "id": "TAB-41"}]
+        w.runner.handlers["workplace.status"] = lambda argv: ok(tabs)
+        w.runner.handlers["eww.-o"] = lambda argv: ok(f"claude CMUX_SURFACE_ID={tbc.SURF} X=1\n")
+        w.runner.handlers["workplace.screen"] = lambda argv: ok({"text": " Proceed?\n ❯ 1. Yes\n   2. No\n"})
+        w.app.asks_enabled = True
+        w.app.tabs.poll()
+        w.runner.handlers["claude.p"] = lambda argv: tbc.claude_answer("About the row.", 0.001)
+        for args in ({"kind": "row", "args": {"key": f"inbox:{tbc.YES_ID}"}}, {"kind": "free", "args": {"text": "hi"}}):
+            assert w.post("/api/ask", {**args, "via": "quick"})[0] == 202
+            tbc.wait_quick(w)
+        state = w.app.state_payload()
+    finally:
+        w.close()
+    about = [x for x in state_values(state, "quick.convs[].about") if x is not None]
+    assert about == [{"kind": "row", "key": f"inbox:{tbc.YES_ID}", "inbox": tbc.YES_ID}]
+    for path, types in STATE_FIELDS.items():
+        values = state_values(state, path)
+        bad = [v for v in values if not isinstance(v, types)]
+        assert not bad, f"{path}: {bad!r} is not {types}"
+    assert state_values(state, "sessions.sessions[].tab.ws_ref") == ["workspace:9"]
+    assert state_values(state, "tabs.tabs[].state_source") == ["hook", None]
+    none, ask = state_values(state, "tabs.tabs[].ask")
+    assert none is None and {k: type(v) for k, v in ask.items()} == ASK_FIELDS
+    assert ask["options"] == [{"n": 1, "label": "Yes"}, {"n": 2, "label": "No"}]
+
+
+def test_state_workspaces_carry_a_palette_name(tmp_path):
+    """The page compares colours by name (organize): every listed workspace has color_name, str or None"""
+    w = World(tmp_path, config=WORKSPACES_CFG)
+    try:
+        w.runner.handlers["workplace.workspaces"] = lambda argv: ok([
+            {"ref": "workspace:1", "title": "A", "color": "#1565C0"}, {"ref": "workspace:2", "title": "B"},
+            {"ref": "workspace:3", "title": "C", "color": "#ABCDEF", "color_name": "Blue"}])
+        w.app.tabs.poll()
+        state = w.app.state_payload()
+    finally:
+        w.close()
+    # a name the driver gives that does not match its hex is not taken: the hex decides
+    assert state_values(state, "tabs.workspaces[].color_name") == ["Blue", None, None]
+
+
+# the record a chat carries once it is handed on (quick.py claim_handoff / set_handed): the page reads it
+# for the status line under the chat (logic.js handoffStatus)
+HANDED_FIELDS = {"to": str, "at_ms": int, "status": str}
+HANDED_STATUSES = {"starting", "started", "running", "busy", "failed", "partly", "manual", "nothing", "queued", "offline"}
+
+
+def test_state_a_handed_chat_carries_its_handoff_record(tmp_path):
+    w = World(tmp_path)
+    try:
+        w.runner.handlers["claude.p"] = lambda argv: tbc.claude_answer("Commit it.", 0.001)
+        conv = json.loads(w.post("/api/ask", {"kind": "free", "args": {"text": "what next?"}, "via": "quick"})[2])["conv"]
+        tbc.wait_quick(w)
+        w.runner.handlers["inbox.add"] = lambda argv: ok("20261010-1300-what-next-a1b2\n")
+        w.act("quick_handoff", conv=conv, to="tab")
+        tab = state_values(w.app.state_payload(), "quick.convs[].handed")[0]
+        w.act("quick_handoff", conv=conv, to="control")
+        control = state_values(w.app.state_payload(), "quick.convs[].handed")[0]
+    finally:
+        w.close()
+    for handed in (tab, control):
+        assert {k: type(handed[k]) for k in HANDED_FIELDS} == HANDED_FIELDS and handed["status"] in HANDED_STATUSES
+    assert isinstance(tab["inbox_id"], str) and tab["to"] == "tab"
+    assert isinstance(control["relay_id"], str) and control["to"] == "control"

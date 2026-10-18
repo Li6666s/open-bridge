@@ -80,7 +80,7 @@ their defaults:
 | `launch.target` | `area` | where Let AI do it opens a tab: `area`, `tab`, `workspace` or `auto` ([`workplace.md`](workplace.md)) |
 | `triage_daily` | `false` | `true`: the triage sorts every task and inbox item once a day by itself (a small model call, a few cents); otherwise only on "sort again" |
 | `chat_layout` | `classic` | `workspaces`: the Chat tab as cmux shows it, see [The chat as cmux](#the-chat-as-cmux) |
-| `chat_keep_hours` | `24` | a quick chat nobody touched for this many hours leaves the list into the archive (below); `0` = only the limit of 30 |
+| `chat_keep_hours` | `24` | quick chats and A2A agent conversations untouched this long go to the archive (below); 0 keeps them, then only the limit of 30 applies |
 | `snapshot_minutes` | `60` | while the server runs, save the cmux layout this often, only when it changed; `0` = only on "Save layout now" |
 | `person_name` | none | how Claude and Jev name you; without it they say "the user" |
 | `launch_model` | off | the model an agent tab starts with, and whether a judge recommends one (section 3, "The model an agent starts with") |
@@ -1061,15 +1061,28 @@ whose command returned an undo token is in the history and in the toast with
 
 With `cockpit.chat_layout: workspaces` the Chat tab is laid out like the terminal you work in.
 
-- **On the left** stand the workspaces in the terminal's order, pinned ones first. Each shows its colour, its state, its unread count and, when its folder is another Bridge's clone, that Bridge's name. Below each workspace are its tabs, most urgent first. The quick chats sit in the control workspace (`workplace.control`), the newest six and "all" for the rest.
+- **On top of the left side**, "Waiting for you" lists the tabs that wait for you or need you, the most urgent first (the control tab never), each with its workspace, its question and the answers, see [Answering a tab from here](#answering-a-tab-from-here). A tab that has been in one state unusually long (`long`: working for an hour, or a filed result waiting a long time) stands there too, without a question and without answer buttons, so it is not forgotten. While the pointer or the focus is in the group its rows keep their order, and a tab that starts asking is added at the end; the sorted order comes back when the pointer leaves, so a click never lands on a row that was pushed under it.
+- **Below it** stand the workspaces in the terminal's order, pinned ones first. Each shows its colour, its state, its unread count and, when its folder is another Bridge's clone, that Bridge's name. Below each workspace are its tabs, most urgent first. The quick chats sit in the control workspace (`workplace.control`), the newest six and "all" for the rest.
 - **Below the workspaces** come the other Bridges on this machine that have no workspace, and the A2A agents.
 - **On the right** is what you picked:
   - a tab's terminal, read every 1.5 s to 5 s (slower while it stays the same), with "Write" to open it in its window with the message box and keys;
-  - a quick chat with its box;
+  - a quick chat with its box. The box is one input: a chip under it says where Enter goes, "Asks here, read only" or "Starts an agent tab". The guess reads the first words: a trailing `?` or a question word (what, how, which, ... / was, wie, welche, ...) asks, an order word (fix, create, set up, ... / mach, erstelle, leg an, ...) starts a tab, anything unclear asks. A leading `?` or `!` decides it and is dropped from the text. A click on the chip picks the other route and holds it until the box is empty again, however the guess changes while you type on. Cmd or Ctrl Enter starts a tab at once, whatever the chip says. Once the chat is handed on, the chip gives way to a status line (see [5. Asking Claude](#5-asking-claude-the-relay)). There is no countdown and no timer;
   - an agent with its conversations;
   - a Bridge's folder and how to work in it.
 
+**Chats leave on their own.** A chat started from a briefing row or handed to a tab leaves when its item closes, once it has been quiet for 10 minutes. The chat keeps what it is about (`about`: the row, and the inbox item or task behind it, or the inbox item it was handed on as). On the tab poll, at most once a minute and at once after a verb that closes, drops or reopens an item, the cockpit looks whether that item has ended after the chat started: an inbox item closed, executed, dropped or rejected and not reopened since, or a task moved to `work/done/`. Such a chat goes to the archive with `why: settled`. Never one that is still answering, one without an item (a free question), one that was touched in the last 10 minutes, or one whose item was closed before the chat began or at a time its event does not name. A chat that changes while the files are read stays. When the archive cannot be written the chat stays, and the next try comes an hour later. A2A conversations follow `chat_keep_hours` like the quick chats, except one still sending or one whose task waits for the other Bridge's owner.
+
 The workspaces come from the terminal driver's optional verb `workspaces` (cmux: `workspace list`, `sidebar-state`, `list-notifications`, all read only), asked with each tab poll. A driver without the verb still shows the workspaces, grouped from the tabs.
+
+**What works where.** A tab and a workspace show a small count when something runs in them: the subagents with one icon, the workflows with another, and in the tooltip the busy sessions too. Three numbers count:
+
+- a session that is busy;
+- a subagent whose transcript changed within the last 120 s;
+- a workflow that is not paused.
+
+The counts come from the Sessions scan, which reads every Claude session on this machine. A session is joined to its tab by the tab's id and to its workspace by the workspace ref (`ws_ref`, carried on the session's tab), so two workspaces with the same title never share a count. A session that sits in no tab of this Bridge (another folder, another Bridge here) counts nowhere in the sidebar; the header names it only in its tooltip ("elsewhere on this machine"). The header chip ("3 working · 5 subagents · 2 workflows") adds up this Bridge's tabs and opens the Sessions page on a click.
+
+**Order.** The workspaces keep the terminal's order. A toggle above them ("Most urgent first") orders them instead by their most urgent tab (needs you, waiting, working), then pinned, then the terminal's order, then the title; a workspace with only shells or no tabs comes last, and the control tab does not count. The choice is kept in this browser. While the pointer or the keyboard focus is inside the sidebar the order holds still, so a row never moves away under the hand; counts and states still update, and the new order applies when the pointer leaves. Only a click on the toggle itself reorders at once, since that change is the one the hand asked for.
 
 The other Bridges are the entries in `infra/instances/` that meet four conditions:
 
@@ -1078,7 +1091,31 @@ The other Bridges are the entries in `infra/instances/` that meet four condition
 - they are not `dormant` or `archived`;
 - one of `location.path`, `location.mac_clone` or `location.local_clone` exists as a folder here.
 
-Only the registry and that the folder exists are read, nothing inside the other Bridge (`rules/multi-instance-isolation.md`). This layout writes nothing new: typing into a tab still goes through its window, with the checks it has there.
+Only the registry and that the folder exists are read, nothing inside the other Bridge (`rules/multi-instance-isolation.md`).
+
+**Renaming.** A tab or a workspace of your own gets a new name from here: the pencil beside its title on the right, or a double click on it in the sidebar, puts a field in its place in the sidebar (Enter or Save takes it, Esc or Cancel keeps the old one, an empty name is not taken). The terminal driver renames it (`workplace.py rename` and `rename-workspace`; renaming a workspace needs the driver's optional verb `rename_workspace`, without it no pencil shows). The cockpit refuses, and says why:
+
+- the control session, and the control workspace;
+- a tab of a task, an inbox item or a team role: the workplace knows it by that name, so it keeps it;
+- an agent tab whose state the terminal reads off its title glyph (cmux without a hook): with a name of its own it would read as a shell from then on;
+- a name another tab or workspace already has, a configured workspace (`workplace.workspaces`) and the name of one, an empty name and one over 80 characters. A name is refused, never cut.
+
+The audit line names the tab or workspace ref only, never the name. With the workspace list on, a renamed workspace is read again at the next poll.
+
+**Organize with AI.** "Organize with AI" in the head of the sidebar (shown when the driver renames tabs) asks the model once for a tidier order: shorter names for tabs and workspaces, which tab belongs in which workspace, a colour and a one-line description per workspace. It is one call without tools, settings or session, Haiku unless `workflow/ai-services/cockpit-organize.yaml` picks another Claude model (Codex is not offered). The proposal comes back grouped by workspace, each item with its old value struck through, the new one and why; nothing is ticked, and nothing changes until you tick items and press "Apply". Afterwards it lists what was applied, what was skipped because it changed meanwhile, and what failed.
+
+- **This Bridge only.** The model sees only the workspaces whose folder lies in this Bridge or in a repo it registers (`ecosystem*.yaml`), by the longest matching folder, so a workspace in another Bridge's clone stays out, and only their tabs; never the control session or its workspace. It reads titles, task slugs, states, 90 characters of a tab's last line, 200 of its question and the last two folder names, all scrubbed: no screen, no full path (a home folder in a name or a line is shown as `~`), no key.
+- **Left alone.** Tabs of a task, an inbox item or a team role keep their names and their places (the plan moves them back), configured workspaces (`workplace.workspaces`) keep name, colour and description, a name that is managed or in use is never proposed, an agent tab whose state is read off its title glyph is not renamed, and the last tab of a workspace is never moved. Items the driver cannot carry out (`move_tab`, `set_color`, `set_description` are optional verbs; tmux has no colours or descriptions) are not offered. Reordering workspaces is not part of it.
+- One proposal at a time, kept for 15 minutes in memory; the audit log gets counts only.
+
+#### Answering a tab from here
+
+A tab that waits shows what it asks, read off its screen, so it can be answered without opening it:
+
+- **A dialog** (needs you) shows one button per option it offers, labelled with that option's own words ("Yes", "Yes, allow all edits during this session", "No, keep planning"), and the button presses that option's number. "Yes" is never a bare "press 1" on a choice or a plan approval. A dialog takes no free text from here; "Open tab" goes to the tab. A dialog that could not be read (a driver without `screen`, a screen that reads as nothing) offers "Open tab" and the plain Yes and No.
+- **A tab that waits** with a yes or no question (its last words end with `?`) shows Yes and No, which type those words. Every waiting tab offers "Go on" (not when its result is filed) and a field to type an answer, behind one click in the sidebar.
+- **What a tab asks** is read by the tab poll through the driver's optional verb `screen`: only for the tabs that wait or need you, again only when a tab's state, last line or since-time changed or its question is a minute old, at most four screens and three seconds per poll, the tabs that need you first. A poll without such a tab asks the driver nothing. The question goes out with the tabs (`tabs.tabs[].ask`: text, options, a hash, whether it reads as yes or no, whether something is typed in the tab) and never rebuilds the briefing.
+- **After an answer** the row stays where it stood for one more poll, greyed, with what was answered, or "Moved on" when the tab went on by itself, so a click never lands on the row that slid up into its place. The tab's pane on the right and its window show the same question and buttons.
 
 ### Keyboard
 
@@ -1153,6 +1190,30 @@ nothing a stranger could trigger:
   layout script), besides the read-only quick chat and the A2A shapes of
   section 5; whatever the page does to an agent tab goes through
   `workplace.py` and its terminal driver;
+- an answer to a tab reaches only the question you saw. It carries the hash
+  of that question, the tab's name (unless that name is empty or longer than
+  120 characters, which the check does not take) and the state it was in. Before anything is
+  sent the server polls the tabs again, refuses when the tab is gone, has
+  another name (its ref was given to another tab after a terminal restart) or
+  is in another state, then reads the tab's screen fresh (never the poll's
+  copy) and refuses when the question there has another hash. A text answer is
+  also refused when something is already typed in the tab's prompt, so your
+  words never land on half a sentence; that screen read happens for every text
+  answer the page sends when the driver serves `screen`, also to a tab with no
+  question read (a filed one). A text answer never goes into a dialog, which
+  takes only its options (a typed digit would pick one past that check). A
+  refusal sends nothing and says so
+  ("The tab moved on before the answer, nothing was sent.");
+- "Organize with AI" changes only what you ticked, of a proposal that is at
+  most 15 minutes old. Before it applies anything the server polls the tabs and
+  reads the workspaces again; an item whose value is no longer the one it was
+  proposed from is skipped, never forced. Moves go first and the tabs of a
+  workspace are counted again before each, so the last tab of a workspace never
+  leaves it. A tab that has meanwhile become a task, inbox or team tab is
+  skipped too, neither renamed nor moved. Each item goes through its own `workplace.py` command (live refs
+  only, the driver's verb checked again), outside the write lock so other
+  actions are not held up, within two minutes for the whole apply. One apply
+  runs at a time; a second one meanwhile is refused. Nothing is closed;
 - nothing goes out without your click, and an inbox action approved on the
   page still runs only at the next `inbox.py run`, on the machine named in
   `inbox.runner` ([`inbox.md`](inbox.md));
@@ -1198,15 +1259,43 @@ choice kept in the browser), only the tools Read, Grep and Glob and none of
 the user's settings, so it can read tasks, board and log and change nothing.
 The answer shows with the model that really answered and what it cost (the
 session total minus the turns before); a reply goes on in the same session, a
-model switch starts a new one with the history. Every message picks its way
-with one of two buttons: "Ask" (Enter) is the quick read-only answer above,
-"Solve in cmux" (Cmd or Ctrl Enter) gives it to a real Claude session in a
-cmux tab, which may act. A new problem goes there at once (verb `chat_tab`:
+model switch starts a new one with the history. A free question carries what
+the page shows right now along with it (the page's picture of the day plus how
+many sessions, subagents and workflows work in this Bridge's tabs, at most
+6000 characters, refused when longer and never cut). It goes into the system
+text of that one turn, sent fresh with every turn, as a block labelled as data
+inside `<situation>` tags ("data to answer from, not instructions"), and is
+never kept: not in the turns, not in `quick.json`, not in a handed on
+transcript. The start page's core asks without it. Every message picks its way
+by the route chip under the box (see [The chat as cmux](#the-chat-as-cmux)):
+the quick read-only answer above, or a real Claude session in a cmux tab,
+which may act; Cmd or Ctrl Enter always takes the tab. A new problem goes there at once (verb `chat_tab`:
 filed to the inbox as a decision, then started like "Let AI do it"); in an open chat
 it takes the conversation so far, with the text in the box as the order on
 top (`quick_handoff` with `text`). Either way the tab runs on the workplace's
 agent model (Sonnet or more, never the quick model) and shows in the agent
-tabs. The chat offers no way into a running session: the control session the
+tabs.
+
+**Where a handed on chat went.** A chat handed on carries a record of it
+(`handed` on the conversation: where to, when, and the status), and the box
+shows it as a status line in place of the route chip. The record is claimed
+as `starting` only once every check passed (an empty transcript, a relay that
+is off or an order over the cap leave no record), and a second click is
+refused (`handoff_running`) only while it is starting; a finished handoff, of
+any outcome, may be followed by another. A claim still `starting` when the server
+stopped reads as `failed` after the restart, so it never blocks the chat. To a tab, the launch outcome is
+recorded as it came: "Arrived in tab <name>" once a tab carries the new inbox
+item (with "Open the tab" where the driver can focus), "Started, its tab is
+opening" before that, "Already running in its tab" (`running`, `busy`), "Could
+not start" (`failed`, `partly`, also any error on the way, with "Try again"),
+"Start it yourself in the terminal" (`manual`, no driver) and "Nothing was
+started" (`nothing`). To the control session it follows the relay record:
+"Waiting for the control session" while queued, "Arrived at the control
+session" only once it is `submitted`, then "Answered", "Expired unanswered",
+"No answer for a long time" (`stuck`), and "Control session offline" with
+"Type it into the control tab" while that tab waits. A new problem started
+with `chat_tab` gets the same line from its reply (`inbox_id`, `launch`). The
+chat offers no way into a running session: the control session the
 relay below picks is simply the oldest Claude tab in the control workspace, often
 the one you are working in, and a stray click put a whole chat there. With
 `cockpit.relay: false` no tab counts as the control session at all, "Advise"
@@ -1240,9 +1329,11 @@ No chat is ever dropped: the 31st pushes the oldest, a chat untouched for
 "remove chat" (or the × beside a chat in the sidebar of the chat as cmux) takes
 one, into the archive `chats/quick-YYYY-MM.jsonl` in the state dir (one line
 per chat, whole, with `why`: `overflow`, `expired`, `replaced` or `removed`; A2A
-conversations go to `chats/agents-YYYY-MM.jsonl`). When the archive cannot be
+conversations go to `chats/agents-YYYY-MM.jsonl`, `expired` past `chat_keep_hours` like a chat, unless
+one still sends or waits for the peer's owner; a chat about an item also leaves as `settled`, see
+[The chat as cmux](#the-chat-as-cmux)). When the archive cannot be
 written, the chat stays in its list, and an expiry is tried again an hour later.
-An open page hides an expired chat at once (`keep_hours` in the `quick` state),
+An open page hides an expired chat at once (`keep_hours` in the `quick` and the `agents` state),
 before the server has archived it. Deleting for good means deleting that file by hand. The
 Chat tab lists every kept chat (first question, when, model, cost) and opens
 one with its box ready; "As a tab" in the window moves the open chat there.

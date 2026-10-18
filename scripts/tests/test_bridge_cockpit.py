@@ -268,7 +268,7 @@ def make_bridge(base: Path, config: str | None = None) -> Path:
 
 class World:
     def __init__(self, base: Path, config: str | None = None, cmux: str | None = "/fake/bin/cmux",
-                 serve: bool = True, prepare: bool = True):
+                 serve: bool = True, prepare: bool = True, asks: bool = False):
         self.root = make_bridge(base, config)
         self.state = base / "state"
         self.clock = FakeClock()
@@ -277,6 +277,9 @@ class World:
         self.server = make_server(self.root, port=0, runner=self.runner, state_dir=self.state, clock=self.clock,
                                   background=False, key_dir=self.keys)
         self.app = self.server.app
+        # the questions of waiting tabs read their screens on every poll: off here, so the tests that count
+        # screen reads and driver calls stay as they are; the tests of the questions switch it on
+        self.app.asks_enabled = asks
         self.port = self.app.port
         self.thread = None
         if serve:
@@ -3276,6 +3279,29 @@ def test_sessions_lists_live_claude_sessions_with_subagents_and_their_tab(world,
     assert len([c for c in world.runner.calls if c[0] == "/bin/ps"]) == 1
 
 
+def test_a_session_tab_carries_its_workspace_ref(world, tmp_path):
+    # two workspaces may share a title; the page joins a session to its room by the workspace ref
+    now_ms = time.time() * 1000
+    world.clock.now = now_ms
+    world.app.sessions.base = claude_home(tmp_path, world.root, now_ms)
+    tabs = [{"name": "Web work", "workspace": "Bridge", "ref": "surface:40", "ws_ref": "workspace:9",
+             "state": "working", "id": SURF},
+            {"name": "Other", "workspace": "Bridge", "ref": "surface:41", "ws_ref": "workspace:3", "state": "idle"}]
+    world.runner.handlers["workplace.status"] = lambda argv: ok(tabs)
+    world.runner.handlers["eww.-o"] = lambda argv: ok(f"claude CMUX_SURFACE_ID={SURF} X=1\n")
+    world.app.tabs.poll()
+    x = world.app.state_payload()["sessions"]["sessions"][0]
+    assert x["tab"]["ref"] == "surface:40" and x["tab"]["ws_ref"] == "workspace:9"
+    # a driver without workspace refs (tmux panes) leaves it empty, never another workspace's
+    tmux = [{"name": "Web work", "workspace": "Bridge", "ref": "%3", "state": "working", "id": "%3"}]
+    world.runner.handlers["workplace.status"] = lambda argv: ok(tmux)
+    world.runner.handlers["eww.-o"] = lambda argv: ok("claude TMUX_PANE=%3 X=1\n")
+    world.app.sessions.surfaces.clear()
+    world.app.tabs.poll()
+    x = world.app.sessions.state()[0]
+    assert x["tab"]["ref"] == "%3" and "ws_ref" in x["tab"] and not x["tab"]["ws_ref"]
+
+
 def test_a_session_in_a_task_tab_links_itself_one_can_link_by_hand_and_go_on_in_an_ended_one(world, tmp_path):
     now_ms = time.time() * 1000
     world.clock.now = now_ms
@@ -4034,6 +4060,266 @@ def test_a_tab_started_from_the_chat_reaches_the_return_channel(world):
     world.act("chat_tab", text="Fix the printer queue\n" + "x" * 3000)
     assert [x["key"] for x in world.app.launches.all()] == [f"inbox:{new_id}"]
     assert any(world.runner.key(c) == "inbox.note" for c in world.runner.calls)
+
+
+# ---------------------------------------------------------------- the chat: situation, route, handoff (package 5)
+
+SITUATION = "Waiting for you: Review the demo report\nTabs at work: demo-task"
+
+
+def free_ask(world, text="how many agents run?", **extra):
+    return world.post("/api/ask", {"kind": "free", "args": {"text": text, **extra}, "via": "quick"})
+
+
+def system_of(argv):
+    return argv[argv.index("--append-system-prompt") + 1]
+
+
+def test_a_free_question_carries_the_situation_as_labelled_system_data_not_as_the_question(world):
+    from lib.bridge_cockpit.text import EN
+    world.runner.handlers["claude.p"] = lambda argv: claude_answer("Two tabs work.", 0.001)
+    world.runner.calls.clear()
+    status, _, _ = free_ask(world, context=SITUATION)
+    assert status == 202
+    wait_quick(world)
+    argv = world.runner.of("claude.p")[0]
+    system = system_of(argv)
+    head = EN["quick_situation"].split("{text}")[0]
+    assert head in system and "<situation>\n" + SITUATION + "\n</situation>" in system
+    assert system.index(head) > system.index(EN["quick_system"][:30])          # after the system text, as data
+    assert argv[-1] == "how many agents run?" and SITUATION not in argv[-1]      # the question stays the question
+
+
+def test_a_free_question_without_context_still_works(world):
+    world.runner.handlers["claude.p"] = lambda argv: claude_answer("ok", 0.001)
+    world.runner.calls.clear()
+    for extra in ({}, {"context": ""}):
+        status, _, _ = free_ask(world, **extra)
+        assert status == 202
+        wait_quick(world)
+    for argv in world.runner.of("claude.p"):
+        assert "<situation>" not in system_of(argv)
+
+
+def test_the_situation_is_sent_again_on_a_resumed_turn(world):
+    answers = iter([claude_answer("first", 0.001), claude_answer("second", 0.002)])
+    world.runner.handlers["claude.p"] = lambda argv: next(answers)
+    conv = json.loads(free_ask(world, context="Tabs at work: one")[2])["conv"]
+    wait_quick(world)
+    world.runner.calls.clear()
+    status, _, _ = world.post("/api/ask", {"kind": "free", "args": {"text": "and now?", "context": "Tabs at work: two"},
+                                           "via": "quick", "conv": conv})
+    assert status == 202
+    wait_quick(world)
+    argv = world.runner.of("claude.p")[0]
+    assert argv[argv.index("--resume") + 1] == SID
+    assert "Tabs at work: two" in system_of(argv) and "Tabs at work: one" not in system_of(argv)
+
+
+def test_a_too_long_situation_is_refused_not_cut(world):
+    world.runner.calls.clear()
+    status, _, body = free_ask(world, context="x" * 6001)
+    assert status == 400 and json.loads(body)["error"]["field"] == "context"
+    status, _, body = free_ask(world, context=["not", "text"])
+    assert status == 400 and json.loads(body)["error"]["field"] == "context"
+    assert world.runner.of("claude.p") == []
+    world.runner.handlers["claude.p"] = lambda argv: claude_answer("ok", 0.001)
+    assert free_ask(world, context="y" * 6000)[0] == 202                       # the limit itself is fine
+    wait_quick(world)
+
+
+def test_context_is_refused_for_kinds_other_than_free_and_for_the_control_route(world):
+    world.runner.calls.clear()
+    status, _, body = world.post("/api/ask", {"kind": "row", "args": {"key": "task:other-task", "context": SITUATION},
+                                              "via": "quick"})
+    assert status == 400 and json.loads(body)["error"]["field"] == "context"
+    status, _, body = world.post("/api/ask", {"kind": "free", "args": {"text": "hi", "context": SITUATION}, "via": "control"})
+    assert status == 400 and json.loads(body)["error"]["field"] == "context"
+    assert world.runner.of("claude.p") == [] and world.app.relay_state()["records"] == []
+
+
+def test_the_situation_is_never_kept_in_quick_json(world):
+    world.runner.handlers["claude.p"] = lambda argv: claude_answer("kept", 0.001)
+    free_ask(world, context="SECRET-SITUATION-LINE")
+    convs = wait_quick(world)
+    kept = (world.state / "quick.json").read_text(encoding="utf-8")
+    assert "SECRET-SITUATION-LINE" not in kept and "SECRET-SITUATION-LINE" not in json.dumps(convs)
+    assert world.app.quick.transcript(convs[0]["id"]).count("SECRET") == 0
+
+
+def answered_conv(world, answer="Commit the yaml change."):
+    world.runner.handlers["claude.p"] = lambda argv: claude_answer(answer, 0.002)
+    conv = json.loads(free_ask(world, "what next?")[2])["conv"]
+    wait_quick(world)
+    return conv
+
+
+def handed_of(world, conv):
+    return next(c for c in world.app.quick.state()["convs"] if c["id"] == conv).get("handed")
+
+
+def test_handoff_to_a_tab_marks_the_chat_handed_with_inbox_and_launch_status(world):
+    conv = answered_conv(world)
+    new_id = "20261010-1300-what-next-a1b2"
+    world.runner.handlers["inbox.add"] = lambda argv: ok(new_id + "\n")
+    seen = []
+    publish = world.app.broadcast
+    world.app.broadcast = lambda ev, payload: (seen.append((ev, payload)), publish(ev, payload))
+    res = world.act("quick_handoff", conv=conv, to="tab")
+    handed = handed_of(world, conv)
+    assert handed == {"to": "tab", "at_ms": handed["at_ms"], "status": "started", "inbox_id": new_id}
+    assert res["handed"] == handed
+    # the page saw the claim and the outcome, each as a `quick` event
+    states = [next(c for c in p["convs"] if c["id"] == conv).get("handed", {}).get("status")
+              for ev, p in seen if ev == "quick"]
+    assert states[0] == "starting" and states[-1] == "started"
+    kept = json.loads((world.state / "quick.json").read_text(encoding="utf-8"))
+    assert next(c for c in kept if c["id"] == conv)["handed"]["status"] == "started"
+
+
+def test_a_handoff_click_while_one_is_starting_is_refused_before_any_launch(world):
+    conv = answered_conv(world)
+    world.app.quick.claim_handoff(conv, "tab", world.app.clock())
+    world.runner.calls.clear()
+    with pytest.raises(ActionError) as err:
+        world.act("quick_handoff", conv=conv, to="tab")
+    assert err.value.status == 409 and err.value.code == "handoff_running"
+    assert writes(world) == []
+    with pytest.raises(RuntimeError):
+        world.app.quick.claim_handoff(conv, "control", world.app.clock())
+    assert handed_of(world, conv)["status"] == "starting"
+
+
+def test_a_handoff_left_starting_by_a_stopped_server_reads_as_failed_and_can_be_tried_again(tmp_path):
+    # only the try/finally of a running server ends a claim; a server stopped mid launch must not leave the
+    # chat refusing every later handoff with handoff_running
+    w = World(tmp_path)
+    try:
+        conv = answered_conv(w)
+        w.app.quick.claim_handoff(conv, "tab", w.app.clock())
+    finally:
+        w.close()
+    w2 = World(tmp_path / "again")
+    try:
+        w2.app.quick.path = tmp_path / "state" / "quick.json"
+        w2.app.quick.convs.clear()
+        w2.app.quick.load()
+        assert handed_of(w2, conv)["status"] == "failed"
+        w2.app.quick.claim_handoff(conv, "tab", w2.app.clock())
+        assert handed_of(w2, conv)["status"] == "starting"
+    finally:
+        w2.close()
+
+
+def test_a_refused_handoff_leaves_no_handed_record(tmp_path):
+    w = World(tmp_path, config=RELAY_OFF)
+    try:
+        conv = answered_conv(w)
+        with pytest.raises(ActionError) as err:
+            w.act("quick_handoff", conv=conv, to="control")
+        assert err.value.code == "not_applicable"
+        assert handed_of(w, conv) is None
+        # an empty transcript: the question is still being answered
+        w.runner.handlers["claude.p"] = lambda argv: claude_answer("later", 0.001)
+        w.app.quick.convs[conv]["turns"] = [{**w.app.quick.convs[conv]["turns"][0], "a": None}]
+        with pytest.raises(ActionError) as err:
+            w.act("quick_handoff", conv=conv, to="tab")
+        assert err.value.code == "stale_row" and handed_of(w, conv) is None
+        # an order over the cap is refused before the claim too
+        w.app.quick.convs[conv]["turns"][0]["a"] = "now answered"
+        with pytest.raises(ActionError):
+            w.act("quick_handoff", conv=conv, to="tab", text="Z" * 3001)
+        assert handed_of(w, conv) is None
+    finally:
+        w.close()
+
+
+def test_a_handoff_that_raises_or_cannot_file_ends_as_failed(world, monkeypatch):
+    conv = answered_conv(world)
+    world.runner.handlers["inbox.add"] = lambda argv: fail("inbox is locked")
+    res = world.act("quick_handoff", conv=conv, to="tab")
+    assert res["ok"] is False and handed_of(world, conv)["status"] == "failed"
+    assert world.runner.of("workplace.launch") == []
+    # a launch that raises still ends the claim as failed, and the chat can be handed on again
+    world.runner.handlers["inbox.add"] = lambda argv: ok("20261010-1300-what-next-a1b2\n")
+
+    def boom(*a, **k):
+        raise OSError("disk gone")
+    monkeypatch.setattr(world.app.actions, "launch", boom)
+    with pytest.raises(OSError):
+        world.act("quick_handoff", conv=conv, to="tab")
+    assert handed_of(world, conv)["status"] == "failed"
+    # the control route: the relay raising ends as failed as well
+    monkeypatch.setattr(world.app.relay, "ask", boom)
+    with pytest.raises(OSError):
+        world.act("quick_handoff", conv=conv, to="control")
+    handed = handed_of(world, conv)
+    assert handed["status"] == "failed" and handed["to"] == "control"
+
+
+@pytest.mark.parametrize("outcome", ["started", "running", "busy", "failed", "nothing", "manual", "partly"])
+def test_every_launch_outcome_is_recorded_and_manual_nothing_partly_failed_can_be_tried_again(world, monkeypatch, outcome):
+    conv = answered_conv(world)
+    new_id = "20261010-1300-what-next-a1b2"
+    world.runner.handlers["inbox.add"] = lambda argv: ok(new_id + "\n")
+    monkeypatch.setattr(world.app.actions, "launch", lambda *a, **k: outcome)
+    res = world.act("quick_handoff", conv=conv, to="tab")
+    assert res["handed"]["status"] == outcome and res["handed"]["inbox_id"] == new_id
+    assert handed_of(world, conv)["status"] == outcome
+    # only a handoff still starting blocks the next one: any finished outcome may be followed by another
+    res = world.act("quick_handoff", conv=conv, to="tab", text="Then push it.")
+    assert res["handed"]["status"] == outcome
+
+
+def test_a_real_launch_without_a_driver_is_recorded_as_manual(world):
+    conv = answered_conv(world)
+    world.runner.handlers["inbox.add"] = lambda argv: ok("20261010-1300-what-next-a1b2\n")
+    world.runner.handlers["workplace.caps"] = lambda argv: ok({"caps": ["tabs"]})
+    # the quick answer asked the driver already (quick.py _can_launch): its cached caps are read again
+    world.app.driver_caps(fresh=True)
+    world.app.tabs.poll()
+    world.runner.handlers["workplace.launch"] = lambda argv: ok({"ok": True, "items": [], "report": ["cd /x && claude"]})
+    world.act("quick_handoff", conv=conv, to="tab")
+    assert handed_of(world, conv)["status"] == "manual"
+
+
+def test_handoff_to_control_offline_marks_offline_and_a_retry_is_allowed(world, monkeypatch):
+    conv = answered_conv(world)
+    assert world.app.relay_state(with_records=False)["online"] is False
+    res = world.act("quick_handoff", conv=conv, to="control")
+    handed = handed_of(world, conv)
+    assert handed["status"] == "offline" and handed["to"] == "control"
+    assert handed["relay_id"] == res["relay"]["id"] and res["handed"] == handed
+    # once the control session is up the same chat goes again, and waits as queued
+    real_ask = world.app.relay.ask
+    monkeypatch.setattr(world.app.relay, "ask", lambda kind, prompt, *a: (real_ask(kind, prompt, *a)[0], True))
+    res = world.act("quick_handoff", conv=conv, to="control")
+    assert handed_of(world, conv)["status"] == "queued" and res["handed"]["relay_id"] == res["relay"]["id"]
+
+
+def test_chat_tab_answers_with_the_inbox_id_and_the_launch_outcome(world):
+    new_id = "20261012-2300-fix-the-printer-a1b2"
+    world.runner.handlers["inbox.add"] = lambda argv: ok(new_id + "\n")
+    res = world.act("chat_tab", text="Fix the printer queue", routed="words")
+    assert res["inbox_id"] == new_id and res["launch"] == "started"
+    audit = (world.state / "audit.log").read_text(encoding="utf-8").splitlines()[-1]
+    assert " chat_tab " in audit and "routed=words" in audit and "printer" not in audit
+    world.runner.handlers["inbox.add"] = lambda argv: fail("locked")
+    res = world.act("chat_tab", text="Fix the printer queue again")
+    assert res["inbox_id"] is None and res["launch"] == "failed"
+    for bad in ("guess", "", 3):
+        with pytest.raises(ActionError) as err:
+            world.act("chat_tab", text="x", routed=bad)
+        assert err.value.field == "routed"
+
+
+def test_quick_argv_with_situation_still_passes_the_runner(tmp_path):
+    from lib.bridge_cockpit.quick import build_argv, system_text
+    from lib.bridge_cockpit.text import EN
+    r = Runner(tmp_path, cmux=None, claude="/x/claude")
+    system = system_text("en", None) + "\n\n" + EN["quick_situation"].format(text=SITUATION)
+    r.check(build_argv("/x/claude", "haiku", "hi", system))
+    r.check(build_argv("/x/claude", "haiku", "hi", system, SID))
 
 
 def test_code_and_data_can_live_apart(tmp_path):
@@ -5579,6 +5865,1051 @@ def test_a_refusal_before_any_write_hands_back_nothing_more(world):
     with pytest.raises(ActionError) as err:
         world.act("do_it", keys=["ref:example/repo#99"])
     assert err.value.extra == {}
+
+
+# --- renaming a tab or a workspace (tab_rename, workspace_rename) ---
+
+RENAME_CAPS = ["tabs", "sessions", "open", "launch", "send", "rename", "control", "focus", "key", "screen", "close",
+               "workspaces", "rename_workspace"]
+
+
+def with_caps(w: World, caps: list) -> None:
+    w.runner.handlers["workplace.caps"] = lambda argv: ok({"caps": caps})
+    w.app.driver_caps(fresh=True)
+
+
+def test_tab_rename_calls_workplace_rename_and_repolls(world):
+    world.runner.calls.clear()
+    res = world.act("tab_rename", tab_ref="surface:11", title="  Scratch pad ")
+    assert writes(world) == [W(world, "rename", "surface:11", "--", "Scratch pad")]
+    assert res["ok"] and res["note"] == "Renamed." and res["reload"] == "tabs"
+    assert world.app.tabs.next_extra < float("inf")          # a poll follows, so the new name shows
+
+
+def test_tab_rename_refuses_a_task_tab_and_the_control_tab_by_ref(world):
+    item_tab = {"name": "Inbox tidy", "workspace": "Demo", "ref": "surface:20", "ws_ref": "workspace:2",
+                "state": "waiting", "item": YES_ID, "id": "TAB-20"}
+    team_tab = {"name": "Build Review", "workspace": "Demo", "ref": "surface:21", "ws_ref": "workspace:2",
+                "state": "waiting", "team": "build", "id": "TAB-21"}
+    world.runner.handlers["workplace.status"] = lambda argv: ok(STATUS + [item_tab, team_tab])
+    world.app.tabs.poll()
+    world.runner.calls.clear()
+    for ref, code in (("surface:7", "task_tab_name"), ("surface:20", "task_tab_name"), ("surface:21", "task_tab_name"),
+                      ("surface:3", "control_tab")):
+        with pytest.raises(ActionError) as err:
+            world.act("tab_rename", tab_ref=ref, title="Mine now")
+        assert (err.value.status, err.value.code, err.value.field) == (409, code, None), ref
+    with pytest.raises(ActionError) as err:
+        world.act("tab_rename", tab_ref="surface:404", title="Mine now")
+    assert err.value.code == "stale_tab"
+    assert writes(world) == []
+
+
+def test_tab_rename_refuses_a_glyph_state_agent_tab(world):
+    glyph = [dict(t, state_source="glyph") if t["ref"] == "surface:11" else t for t in STATUS]
+    world.runner.handlers["workplace.status"] = lambda argv: ok(glyph)
+    world.app.tabs.poll()
+    assert next(t for t in world.app.tabs_state()["tabs"] if t["ref"] == "surface:11")["state_source"] == "glyph"
+    world.runner.calls.clear()
+    with pytest.raises(ActionError) as err:
+        world.act("tab_rename", tab_ref="surface:11", title="Scratch")
+    assert (err.value.status, err.value.code) == (409, "rename_loses_state")
+    assert writes(world) == []
+    # a shell has no state to lose
+    shell = [dict(t, state="shell") if t["ref"] == "surface:11" else t for t in glyph]
+    world.runner.handlers["workplace.status"] = lambda argv: ok(shell)
+    world.app.tabs.poll()
+    world.act("tab_rename", tab_ref="surface:11", title="Scratch")
+    assert writes(world) == [W(world, "rename", "surface:11", "--", "Scratch")]
+
+
+def test_workspace_rename_without_the_cap_is_driver_cannot(world):
+    world.runner.calls.clear()
+    with pytest.raises(ActionError) as err:
+        world.act("workspace_rename", ws_ref="workspace:2", title="Research")
+    assert (err.value.status, err.value.code) == (503, "driver_cannot")
+    with_caps(world, [c for c in RENAME_CAPS if c != "rename"])
+    with pytest.raises(ActionError) as err:
+        world.act("tab_rename", tab_ref="surface:11", title="Research")
+    assert (err.value.status, err.value.code) == (503, "driver_cannot")
+    assert writes(world) == []
+
+
+def test_workspace_rename_forces_a_workspaces_refresh(tmp_path):
+    w = rooms_world(tmp_path)
+    try:
+        with_caps(w, RENAME_CAPS)
+        w.runner.handlers["workplace.workspaces"] = lambda argv: ok(WORKSPACES)
+        w.app.tabs.poll()
+        w.runner.calls.clear()
+        w.app.tabs.poll()
+        assert w.runner.of("workplace.workspaces") == []          # kept for half a minute
+        res = w.act("workspace_rename", ws_ref="workspace:2", title="Research")
+        assert writes(w) == [W(w, "rename-workspace", "workspace:2", "--", "Research")]
+        assert res["ok"] and res["note"] == "Renamed." and res["reload"] == "tabs"
+        w.app.tabs.poll()
+        assert len(w.runner.of("workplace.workspaces")) == 1      # read again at once, not after half a minute
+    finally:
+        w.close()
+
+
+def test_workspace_rename_takes_a_room_built_from_tabs(world):
+    """tmux: no workspace list, the ref is the session id the tabs carry"""
+    tabs = [dict(t, ws_ref="$2") if t["ws_ref"] == "workspace:2" else t for t in STATUS]
+    world.runner.handlers["workplace.status"] = lambda argv: ok(tabs)
+    with_caps(world, RENAME_CAPS)
+    world.app.tabs.poll()
+    world.runner.calls.clear()
+    world.act("workspace_rename", ws_ref="$2", title="Research")
+    assert writes(world) == [W(world, "rename-workspace", "$2", "--", "Research")]
+
+
+def test_workspace_rename_refuses_an_unknown_ref_and_the_control_workspace(world):
+    with_caps(world, RENAME_CAPS)
+    world.runner.calls.clear()
+    with pytest.raises(ActionError) as err:
+        world.act("workspace_rename", ws_ref="workspace:99", title="Research")
+    assert (err.value.status, err.value.code) == (409, "stale_workspace")
+    with pytest.raises(ActionError) as err:
+        world.act("workspace_rename", ws_ref="workspace:1", title="Research")
+    assert (err.value.status, err.value.code) == (409, "control_tab")
+    for bad in ("work space", "-workspace", "a" * 70, "x;rm"):
+        with pytest.raises(ActionError) as err:
+            world.act("workspace_rename", ws_ref=bad, title="Research")
+        assert (err.value.code, err.value.field) == ("invalid_argument", "ws_ref")
+    assert writes(world) == []
+
+
+def test_a_driver_refusal_reaches_the_note_from_stdout(world):
+    with_caps(world, RENAME_CAPS)
+    world.runner.handlers["workplace.rename"] = lambda argv: RunResult(False, 1, "ERROR cmux refused the title", "", 1)
+    res = world.act("tab_rename", tab_ref="surface:11", title="Scratch")
+    assert not res["ok"] and "cmux refused the title" in res["note"]
+    # a refusal of the workplace (exit 2) is the action's refusal, each reason with a code of its own and no
+    # field: none of them is about a form field the page could point at
+    for err_text, code in (("refused: name in use", "name_in_use"),
+                           ("refused: configured workspace, rename it in workplace.workspaces", "name_managed"),
+                           ("refused: a task, inbox or team tab is known by this name", "name_managed"),
+                           ("no open tab with the ref 'surface:11'", "stale_tab"),
+                           ("no open workspace with the ref 'workspace:2'", "stale_workspace"),
+                           ("refused: a title has 1 to 80 characters", "title_invalid"),
+                           ("refused: control characters in the title", "title_invalid"),
+                           ("something nobody expected", "rename_refused")):
+        world.runner.handlers["workplace.rename"] = lambda argv, e=err_text: fail(e, 2)
+        world.runner.handlers["workplace.rename-workspace"] = lambda argv, e=err_text: fail(e, 2)
+        for verb, args in (("tab_rename", {"tab_ref": "surface:11"}), ("workspace_rename", {"ws_ref": "workspace:2"})):
+            with pytest.raises(ActionError) as err:
+                world.act(verb, title="Scratch", **args)
+            assert (err.value.status, err.value.code, err.value.field) == (409, code, None), (verb, err_text)
+
+
+@pytest.mark.parametrize("title", ["", "   ", "x" * 81, "two\nlines", "tab\there", "bell\x07", "nul\x00", 7, None, ["a"]])
+def test_rename_titles_are_refused_not_cut(world, title):
+    with_caps(world, RENAME_CAPS)
+    world.runner.calls.clear()
+    for verb, args in (("tab_rename", {"tab_ref": "surface:11"}), ("workspace_rename", {"ws_ref": "workspace:2"})):
+        with pytest.raises(ActionError) as err:
+            world.act(verb, title=title, **args)
+        assert (err.value.status, err.value.code, err.value.field) == (400, "invalid_argument", "title")
+    assert writes(world) == []
+    world.act("tab_rename", tab_ref="surface:11", title="y" * 80)
+    assert writes(world) == [W(world, "rename", "surface:11", "--", "y" * 80)]
+
+
+def test_rename_audit_line_carries_no_title(world):
+    with_caps(world, RENAME_CAPS)
+    world.act("tab_rename", tab_ref="surface:11", title="secret tab name")
+    world.act("workspace_rename", ws_ref="workspace:2", title="hidden workspace name")
+    lines = (world.state / "audit.log").read_text().strip().splitlines()
+    assert lines[-2].split()[1:] == ["tab_rename", "surface:11", "exits=0", "ok=true"]
+    assert lines[-1].split()[1:] == ["workspace_rename", "workspace:2", "exits=0", "ok=true"]
+    log = "\n".join(lines)
+    assert "secret" not in log and "hidden" not in log
+
+
+def test_a_workplace_refusal_for_a_task_tab_is_task_tab_name(world):
+    """the CLI refuses a tab the workplace knows by its name; the page says the same as the cockpit's own check"""
+    with_caps(world, RENAME_CAPS)
+    world.runner.handlers["workplace.rename"] = lambda argv: fail("refused: a task, inbox or team tab keeps its name", 2)
+    with pytest.raises(ActionError) as err:
+        world.act("tab_rename", tab_ref="surface:11", title="Scratch")
+    assert (err.value.status, err.value.code) == (409, "task_tab_name")
+
+
+def test_workspace_rename_takes_a_listed_workspace_without_a_title(tmp_path):
+    """a workspace the terminal lists is live even with an empty title and no tab in it"""
+    w = rooms_world(tmp_path)
+    try:
+        with_caps(w, RENAME_CAPS)
+        w.runner.handlers["workplace.workspaces"] = lambda argv: ok(WORKSPACES + [{"ref": "workspace:7", "title": ""}])
+        w.app.tabs.poll()
+        w.runner.calls.clear()
+        w.act("workspace_rename", ws_ref="workspace:7", title="Research")
+        assert writes(w) == [W(w, "rename-workspace", "workspace:7", "--", "Research")]
+    finally:
+        w.close()
+
+
+# --- organize with AI: one model call proposes, ticked items are applied (organize_propose, organize_apply) ---
+
+ORG_CAPS = [*RENAME_CAPS, "move_tab", "set_color", "set_description"]
+CLAUDE = "/fake/bin/claude"
+
+
+def organize_world(tmp_path, caps=ORG_CAPS, layout="workspaces"):
+    """A Bridge with workspaces of its own (its folder, a sub folder, a repo it registers), one of a sibling
+    Bridge and one far away; Ops is configured, Control is the control workspace"""
+    base = tmp_path / "base"
+    base.mkdir()
+    repo = (tmp_path / "repos" / "app")
+    repo.mkdir(parents=True)
+    sibling = tmp_path / "other-bridge"
+    sibling.mkdir()
+    w = World(base, config=f"cockpit:\n  enabled: true\n  language: en\n  relay: true\n  chat_layout: {layout}\n"
+                           "workplace:\n  control:\n    name: Control\n"
+                           "  workspaces:\n    - {name: Ops, aliases: [operations]}\n")
+    (w.root / "ecosystem.yaml").write_text(f"local_root: {tmp_path / 'repos'}\nrepos:\n  app:\n    github: example/app\n",
+                                           encoding="utf-8")
+    (w.root / "infra" / "instances").mkdir(parents=True)
+    (w.root / "infra" / "instances" / "other.yaml").write_text(
+        f"name: Other\nrelationship: sibling\nlocation:\n  path: {sibling}\n", encoding="utf-8")
+    (w.root / "sub").mkdir()
+    root = str(w.root)
+    w.org = {
+        "workspaces": [
+            {"ref": "workspace:1", "title": "Control", "cwd": root, "pinned": True},
+            {"ref": "workspace:2", "title": "Demo", "cwd": f"{root}/sub", "color": "#1565C0", "color_name": "Blue"},
+            {"ref": "workspace:5", "title": "Ops", "cwd": root, "description": "Releases"},
+            {"ref": "workspace:6", "title": "misc", "cwd": str(repo), "color": "#ABCDEF"},
+            {"ref": "workspace:8", "title": "Other", "cwd": str(sibling)},
+            {"ref": "workspace:9", "title": "Far", "cwd": "/x/elsewhere"},
+        ],
+        "tabs": [
+            {"name": "Control", "workspace": "Control", "ref": "surface:3", "ws_ref": "workspace:1", "state": "waiting",
+             "id": "CTRL-UUID-0001"},
+            {"name": "demo-task", "workspace": "Demo", "ref": "surface:7", "ws_ref": "workspace:2", "state": "waiting",
+             "slug": "demo-task", "id": "TAB-7"},
+            {"name": "free tab", "workspace": "Demo", "ref": "surface:11", "ws_ref": "workspace:2", "state": "working",
+             "state_source": "hook", "last": "building the docs", "id": "TAB-11"},
+            {"name": "Notes", "workspace": "Demo", "ref": "surface:14", "ws_ref": "workspace:2", "state": "shell",
+             "state_source": "glyph", "id": "TAB-14"},
+            {"name": "glyph agent", "workspace": "Ops", "ref": "surface:15", "ws_ref": "workspace:5", "state": "waiting",
+             "state_source": "glyph", "id": "TAB-15"},
+            {"name": "ops shell", "workspace": "Ops", "ref": "surface:17", "ws_ref": "workspace:5", "state": "shell",
+             "id": "TAB-17"},
+            {"name": "lonely", "workspace": "misc", "ref": "surface:16", "ws_ref": "workspace:6", "state": "shell",
+             "id": "TAB-16"},
+            {"name": "far tab", "workspace": "Far", "ref": "surface:20", "ws_ref": "workspace:9", "state": "shell",
+             "id": "TAB-20"},
+        ],
+    }
+    w.runner.handlers["workplace.status"] = lambda argv: ok(w.org["tabs"])
+    w.runner.handlers["workplace.workspaces"] = lambda argv: ok(w.org["workspaces"])
+    w.model = {"workspaces": [], "tabs": []}
+    w.runner.handlers["claude.p"] = lambda argv: ok({"type": "result", "result": json.dumps(w.model)})
+    with_caps(w, caps)
+    w.app.tabs.poll()
+    w.runner.calls.clear()
+    return w
+
+
+@pytest.fixture
+def org(tmp_path):
+    w = organize_world(tmp_path)
+    yield w
+    w.close()
+
+
+def org_items(res: dict) -> dict:
+    return {i["id"]: i for i in res["proposal"]["items"]}
+
+
+def org_data(w: World) -> dict:
+    (argv,) = w.runner.of("claude.p")
+    prompt = argv[-1]
+    return json.loads(prompt[prompt.index("{"):])
+
+
+def test_organize_propose_makes_one_model_call_without_tools_or_session_and_returns_items(org):
+    org.model = {"workspaces": [{"ref": "workspace:6", "title": "App", "color": "Teal", "description": "The app repo",
+                                 "why": "named after its repo"}],
+                 "tabs": [{"ref": "surface:11", "title": "Docs build", "why": "says what runs"},
+                          {"ref": "surface:14", "workspace": "workspace:6", "why": "belongs to the app"}]}
+    res = org.act("organize_propose")
+    (argv,) = org.runner.of("claude.p")
+    assert argv[:12] == [CLAUDE, "-p", "--model", "claude-haiku-5-5", "--output-format", "json",
+                         "--no-session-persistence", "--setting-sources", "", "--tools", "", "--append-system-prompt"]
+    assert argv[13] == "--" and len(argv) == 15 and argv[12] == text_mod.TABLES["en"]["organize_system"]
+    prop = res["proposal"]
+    assert re.fullmatch(r"o[0-9a-f]{10}", prop["id"]) and prop["scope"] == 3 and prop["at_ms"] == int(org.clock.now)
+    items = org_items(res)
+    assert set(items) == {"ws_title:workspace:6", "ws_color:workspace:6", "ws_description:workspace:6",
+                          "tab_title:surface:11", "tab_move:surface:14"}
+    assert items["ws_title:workspace:6"] == {"id": "ws_title:workspace:6", "kind": "ws_title", "ref": "workspace:6",
+                                             "from": "misc", "to": "App", "why": "named after its repo",
+                                             "cap": "rename_workspace"}
+    assert (items["ws_color:workspace:6"]["from"], items["ws_color:workspace:6"]["to"]) == (None, "Teal")
+    assert (items["tab_move:surface:14"]["from"], items["tab_move:surface:14"]["to"]) == ("workspace:2", "workspace:6")
+    assert items["tab_move:surface:14"]["cap"] == "move_tab" and items["tab_title:surface:11"]["cap"] == "rename"
+    assert res["ok"]
+
+
+def test_organize_propose_changes_nothing_in_the_terminal_and_writes_one_audit_line(org):
+    org.model = {"workspaces": [{"ref": "workspace:6", "title": "Secret Project", "why": "a secret why"}], "tabs": []}
+    log = org.state / "audit.log"
+    before = log.read_text().splitlines() if log.exists() else []
+    res = org.act("organize_propose")
+    assert {org.runner.key(c) for c in org.runner.calls} <= {"workplace.status", "workplace.workspaces",
+                                                             "workplace.caps", "claude.p"}
+    lines = log.read_text().splitlines()[len(before):]
+    assert len(lines) == 1 and lines[0].split()[1] == "organize_propose" and "items=1" in lines[0]
+    assert "Secret" not in lines[0] and "secret" not in lines[0]
+    assert len(res["proposal"]["items"]) == 1
+
+
+def test_a_second_organize_propose_while_one_runs_is_organize_running(org):
+    entered, gate = threading.Event(), threading.Event()
+
+    def slow(argv):
+        entered.set()
+        gate.wait(5)
+        return ok({"type": "result", "result": json.dumps({"workspaces": [], "tabs": []})})
+    org.runner.handlers["claude.p"] = slow
+    first: dict = {}
+    t = threading.Thread(target=lambda: first.update(org.act("organize_propose")))
+    t.start()
+    try:
+        assert entered.wait(5)
+        with pytest.raises(ActionError) as err:
+            org.act("organize_propose")
+        assert (err.value.status, err.value.code) == (409, "organize_running")
+    finally:
+        gate.set()
+        t.join(5)
+    assert first["proposal"]["items"] == []
+    org.act("organize_propose")                       # free again once the first one ended
+
+
+def test_organize_sees_only_workspaces_of_this_bridge(org):
+    org.act("organize_propose")
+    data = org_data(org)
+    assert [x["ref"] for x in data["workspaces"]] == ["workspace:2", "workspace:5", "workspace:6"]
+    assert {t["ref"] for t in data["tabs"]} == {"surface:7", "surface:11", "surface:14", "surface:15", "surface:17",
+                                                 "surface:16"}
+    tab = next(t for t in data["tabs"] if t["ref"] == "surface:7")
+    assert tab["task_bound"] is True and tab["slug"] == "demo-task" and tab["workspace"] == "workspace:2"
+    ws = next(x for x in data["workspaces"] if x["ref"] == "workspace:2")
+    assert set(ws) == {"ref", "title", "color_name", "description", "pinned", "cwd"} and ws["color_name"] == "Blue"
+    assert ws["cwd"] == "bridge/sub"
+    # nothing of this Bridge listed: nothing to organize
+    org.org["workspaces"] = [w for w in org.org["workspaces"] if w["ref"] in ("workspace:1", "workspace:8", "workspace:9")]
+    with pytest.raises(ActionError) as err:
+        org.act("organize_propose")
+    assert (err.value.status, err.value.code) == (409, "organize_nothing")
+
+
+def test_organize_drops_unknown_refs_control_refs_and_no_ops(org):
+    org.model = {"workspaces": [{"ref": "workspace:99", "title": "Ghost", "why": "x"},
+                                {"ref": "workspace:1", "title": "Steering", "why": "x"},
+                                {"ref": "workspace:9", "title": "Near", "why": "x"},
+                                {"ref": "workspace:2", "title": "Demo", "color": "Blue", "why": "the same"},
+                                {"ref": "workspace:6", "description": "", "why": "x"}],
+                 "tabs": [{"ref": "surface:3", "title": "Steer", "why": "x"},
+                          {"ref": "surface:404", "title": "Ghost tab", "why": "x"},
+                          {"ref": "surface:20", "title": "Near tab", "why": "x"},
+                          {"ref": "surface:11", "title": "free tab", "workspace": "workspace:2", "why": "x"},
+                          {"ref": "surface:11", "workspace": "workspace:1", "why": "into control"},
+                          {"ref": "surface:11", "workspace": "workspace:9", "why": "far away"}]}
+    res = org.act("organize_propose")
+    assert res["proposal"]["items"] == []
+
+
+def test_organize_never_touches_task_tabs_or_configured_workspaces(org):
+    org.model = {"workspaces": [{"ref": "workspace:5", "title": "Releases", "color": "Red", "description": "x",
+                                 "why": "x"},
+                                {"ref": "workspace:6", "title": "operations", "why": "an alias of Ops"},
+                                {"ref": "workspace:2", "title": "OPS", "why": "configured"}],
+                 "tabs": [{"ref": "surface:7", "title": "Demo work", "workspace": "workspace:6", "why": "x"}]}
+    res = org.act("organize_propose")
+    assert res["proposal"]["items"] == []
+
+
+def test_organize_never_proposes_a_managed_or_used_name(org):
+    org.model = {"workspaces": [{"ref": "workspace:6", "title": "control", "why": "x"},
+                                {"ref": "workspace:2", "title": "Misc", "why": "the other one is called misc"}],
+                 "tabs": [{"ref": "surface:11", "title": "demo-task", "why": "a task's name"},
+                          {"ref": "surface:16", "title": "notes", "why": "used by another tab"},
+                          {"ref": "surface:15", "title": "Ops agent", "why": "glyph state"},
+                          {"ref": "surface:17", "title": "Shell", "why": "first"},
+                          {"ref": "surface:14", "title": "shell", "why": "the same new name twice"}]}
+    res = org.act("organize_propose")
+    assert set(org_items(res)) == {"tab_title:surface:17"}
+
+
+def test_organize_never_proposes_moving_the_last_tab_of_a_workspace(org):
+    org.model = {"workspaces": [], "tabs": [
+        {"ref": "surface:16", "workspace": "workspace:2", "why": "the only tab of misc"},
+        {"ref": "surface:15", "workspace": "workspace:6", "why": "first of two"},
+        {"ref": "surface:17", "workspace": "workspace:6", "why": "second of two: Ops would be empty"},
+        {"ref": "surface:11", "workspace": "workspace:6", "why": "Demo keeps two"},
+        {"ref": "surface:14", "workspace": "workspace:6", "why": "Demo keeps its task tab"}]}
+    res = org.act("organize_propose")
+    assert set(org_items(res)) == {"tab_move:surface:15", "tab_move:surface:11", "tab_move:surface:14"}
+
+
+def test_organize_drops_items_the_driver_cannot_apply(tmp_path):
+    w = organize_world(tmp_path, caps=[*RENAME_CAPS])
+    try:
+        w.model = {"workspaces": [{"ref": "workspace:6", "title": "App", "color": "Teal", "description": "Repo",
+                                   "why": "x"}],
+                   "tabs": [{"ref": "surface:11", "title": "Docs", "workspace": "workspace:6", "why": "x"}]}
+        res = w.act("organize_propose")
+        assert set(org_items(res)) == {"ws_title:workspace:6", "tab_title:surface:11"}
+    finally:
+        w.close()
+
+
+def test_organize_compares_colours_by_palette_name(org):
+    org.model = {"workspaces": [{"ref": "workspace:2", "color": "blue", "why": "the same colour"},
+                                {"ref": "workspace:6", "color": "red", "why": "a custom hex now"}], "tabs": []}
+    res = org.act("organize_propose")
+    items = org_items(res)
+    assert set(items) == {"ws_color:workspace:6"}
+    assert (items["ws_color:workspace:6"]["from"], items["ws_color:workspace:6"]["to"]) == (None, "Red")
+    # the poll gives every workspace its palette name, also when the driver reports only the hex
+    listed = {x["ref"]: x for x in org.app.tabs_state()["workspaces"]}
+    assert listed["workspace:6"]["color_name"] is None and listed["workspace:1"]["color_name"] is None
+    org.org["workspaces"][3] = {**org.org["workspaces"][3], "color": "#006b6b"}
+    org.app.tabs.read_workspaces()
+    assert {x["ref"]: x for x in org.app.tabs_state()["workspaces"]}["workspace:6"]["color_name"] == "Teal"
+    # an invalid colour is no item
+    org.model = {"workspaces": [{"ref": "workspace:6", "color": "#ff0000", "why": "x"},
+                                {"ref": "workspace:2", "color": "Sky", "why": "x"}], "tabs": []}
+    assert org.act("organize_propose")["proposal"]["items"] == []
+
+
+def test_an_unreadable_model_answer_is_organize_unreadable(org):
+    for answer in (ok("not json at all"), ok({"type": "result", "result": "no braces here"}),
+                   ok({"type": "result", "is_error": True, "result": "{}"}), fail("claude crashed")):
+        org.runner.handlers["claude.p"] = lambda argv, a=answer: a
+        with pytest.raises(ActionError) as err:
+            org.act("organize_propose")
+        assert (err.value.status, err.value.code) == (502, "organize_unreadable")
+    # a refusal leaves the single flight free
+    org.runner.handlers["claude.p"] = lambda argv: ok({"type": "result", "result": '{"workspaces": [], "tabs": []}'})
+    assert org.act("organize_propose")["proposal"]["items"] == []
+
+
+def full_proposal(w: World) -> dict:
+    w.model = {"workspaces": [{"ref": "workspace:2", "color": "Teal", "description": "Docs and demos", "why": "c"},
+                              {"ref": "workspace:6", "title": "App", "why": "t"}],
+               "tabs": [{"ref": "surface:11", "title": "Docs build", "why": "n"},
+                        {"ref": "surface:14", "workspace": "workspace:6", "why": "m"}]}
+    res = w.act("organize_propose")
+    assert len(res["proposal"]["items"]) == 5
+    w.runner.calls.clear()
+    return res["proposal"]
+
+
+def org_writes(w: World) -> list[list[str]]:
+    return [c[4:] for c in w.runner.calls if w.runner.key(c) in (
+        "workplace.move-tab", "workplace.rename", "workplace.rename-workspace", "workplace.workspace-color",
+        "workplace.workspace-description")]
+
+
+def test_organize_apply_runs_only_ticked_items_in_the_safe_order(org):
+    prop = full_proposal(org)
+    ticked = ["ws_color:workspace:2", "ws_title:workspace:6", "tab_title:surface:11", "tab_move:surface:14"]
+    res = org.act("organize_apply", proposal=prop["id"], items=ticked)
+    assert org_writes(org) == [["move-tab", "surface:14", "workspace:6"],
+                               ["rename", "surface:11", "--", "Docs build"],
+                               ["rename-workspace", "workspace:6", "--", "App"],
+                               ["workspace-color", "workspace:2", "Teal"]]
+    assert sorted(res["applied"]) == sorted(ticked) and res["skipped"] == [] and res["failed"] == []
+    assert res["ok"] and res["reload"] == "tabs"
+    line = (org.state / "audit.log").read_text().splitlines()[-1]
+    assert line.split()[1:3] == ["organize_apply", prop["id"]] and "applied=4" in line
+    assert "Docs" not in line and "Teal" not in line and "App" not in line
+    # the description, never ticked, never ran; a clear goes as --clear
+    assert not [c for c in org_writes(org) if c[0] == "workspace-description"]
+
+
+def test_organize_apply_reports_a_failed_step_and_goes_on(org):
+    prop = full_proposal(org)
+    org.runner.handlers["workplace.rename"] = lambda argv: fail("refused: name in use", 2)
+    res = org.act("organize_apply", proposal=prop["id"], items=["tab_title:surface:11", "ws_title:workspace:6"])
+    assert res["applied"] == ["ws_title:workspace:6"]
+    assert res["failed"] == [{"id": "tab_title:surface:11", "error": "name_in_use", "detail": "refused: name in use"}]
+    assert not res["ok"]
+
+
+def test_organize_apply_skips_an_item_whose_value_changed_since_the_proposal(org):
+    prop = full_proposal(org)
+    org.org["tabs"] = [dict(t, name="renamed meanwhile") if t["ref"] == "surface:11" else t for t in org.org["tabs"]]
+    org.org["workspaces"] = [dict(x, color="#C0392B", color_name="Red") if x["ref"] == "workspace:2" else x
+                             for x in org.org["workspaces"]]
+    org.org["tabs"] = [t for t in org.org["tabs"] if t["ref"] != "surface:14"]      # gone
+    res = org.act("organize_apply", proposal=prop["id"],
+                  items=["tab_title:surface:11", "ws_color:workspace:2", "tab_move:surface:14", "ws_title:workspace:6"])
+    assert sorted(x["id"] for x in res["skipped"]) == ["tab_move:surface:14", "tab_title:surface:11",
+                                                       "ws_color:workspace:2"]
+    assert all(x["why"] == "changed" for x in res["skipped"])
+    assert org_writes(org) == [["rename-workspace", "workspace:6", "--", "App"]]
+
+
+def test_organize_apply_recounts_the_last_tab_before_each_move(org):
+    org.model = {"workspaces": [], "tabs": [{"ref": "surface:11", "workspace": "workspace:6", "why": "a"},
+                                            {"ref": "surface:14", "workspace": "workspace:6", "why": "b"}]}
+    prop = org.act("organize_propose")["proposal"]
+    # meanwhile the task tab left Demo: of its two free tabs only one may go
+    org.org["tabs"] = [t for t in org.org["tabs"] if t["ref"] != "surface:7"]
+    org.runner.calls.clear()
+    res = org.act("organize_apply", proposal=prop["id"], items=["tab_move:surface:11", "tab_move:surface:14"])
+    assert org_writes(org) == [["move-tab", "surface:11", "workspace:6"]]
+    assert res["skipped"] == [{"id": "tab_move:surface:14", "why": "last_tab"}]
+
+
+def test_organize_apply_does_not_hold_the_write_lock_during_driver_calls(org):
+    prop = full_proposal(org)
+    seen = []
+
+    def rename(argv):
+        seen.append(org.app.actions.write_lock.locked())
+        return ok("renamed")
+    org.runner.handlers["workplace.rename"] = rename
+    org.runner.handlers["workplace.rename-workspace"] = rename
+    org.act("organize_apply", proposal=prop["id"], items=["tab_title:surface:11", "ws_title:workspace:6"])
+    assert seen == [False, False]
+    assert not org.app.actions.write_lock.locked()
+
+
+def test_organize_apply_stops_at_its_time_budget(org, monkeypatch):
+    from lib.bridge_cockpit import organize
+    prop = full_proposal(org)
+    monkeypatch.setattr(organize, "APPLY_BUDGET_S", -1)
+    res = org.act("organize_apply", proposal=prop["id"], items=["tab_title:surface:11", "ws_title:workspace:6"])
+    assert res["applied"] == [] and {x["error"] for x in res["failed"]} == {"timeout"} and len(res["failed"]) == 2
+    assert org_writes(org) == []
+
+
+def test_organize_apply_refuses_an_expired_or_unknown_proposal(org):
+    prop = full_proposal(org)
+    with pytest.raises(ActionError) as err:
+        org.act("organize_apply", proposal="o0123456789", items=["tab_title:surface:11"])
+    assert (err.value.status, err.value.code) == (409, "stale_proposal")
+    with pytest.raises(ActionError) as err:
+        org.act("organize_apply", proposal=prop["id"], items=["tab_title:surface:99"])
+    assert (err.value.status, err.value.code) == (400, "invalid_argument")
+    for bad in ({"proposal": "x123", "items": ["tab_title:surface:11"]}, {"proposal": prop["id"], "items": []},
+                {"proposal": prop["id"], "items": ["tab_title:surface:11", "tab_title:surface:11"]},
+                {"proposal": prop["id"], "items": ["Bad Id"]}, {"proposal": prop["id"], "items": "tab_title:surface:11"}):
+        with pytest.raises(ActionError) as err:
+            org.act("organize_apply", **bad)
+        assert err.value.code == "invalid_argument", bad
+    org.clock.advance(16 * 60)
+    with pytest.raises(ActionError) as err:
+        org.act("organize_apply", proposal=prop["id"], items=["tab_title:surface:11"])
+    assert (err.value.status, err.value.code) == (409, "stale_proposal")
+    assert org_writes(org) == []
+
+
+def test_the_runner_lets_claude_through_in_the_organize_shape_only(tmp_path):
+    from lib.bridge_cockpit import organize
+    r = Runner(tmp_path, cmux=None, claude=CLAUDE, codex=None)
+    good = organize.argv(CLAUDE, "claude-haiku-5-5", "Sort these.", '{"workspaces": []}')
+    r.check(good)
+    bad = [
+        organize.argv(CLAUDE, "haiku", "Sort these.", "{}"),                       # a short name, not a full id
+        organize.argv(CLAUDE, "claude-other-1", "Sort these.", "{}"),
+        organize.argv(CLAUDE, "claude-haiku-5-5", "S" * 4001, "{}"),
+        organize.argv(CLAUDE, "claude-haiku-5-5", "Sort these.", "x" * 24001),
+        organize.argv(CLAUDE, "claude-haiku-5-5", "Sort these.", ""),
+        good[:10] + ["Read"] + good[11:],                                          # a tool
+        good[:13] + ["--resume", "x"] + good[13:],
+        good[:13] + good[14:],                                                     # no --
+        ["/other/claude", *good[1:]],
+    ]
+    for argv in bad:
+        with pytest.raises(RunnerRefused):
+            r.check(argv)
+
+
+def test_the_organize_model_is_checked_against_the_full_model_ids(org):
+    services = org.root / "workflow" / "ai-services"
+    services.mkdir(parents=True)
+    path = services / "cockpit-organize.yaml"
+    path.write_text("schema_version: 1\nscope: user\nid: cockpit-organize\nprovider: claude\n"
+                    "models: {claude: sonnet}\n", encoding="utf-8")
+    org.act("organize_propose")
+    assert org.runner.of("claude.p")[-1][3] == "claude-sonnet-5-5"
+    for text in ("models: {claude: claude-other-9}\n", "provider: codex\n"):
+        body = "schema_version: 1\nscope: user\nid: cockpit-organize\n" + (
+            "provider: claude\n" + text if text.startswith("models") else text)
+        path.write_text(body, encoding="utf-8")
+        with pytest.raises(ActionError) as err:
+            org.act("organize_propose")
+        assert (err.value.status, err.value.code) == (503, "organize_unavailable"), text
+    path.unlink()
+    org.runner.claude = None
+    with pytest.raises(ActionError) as err:
+        org.act("organize_propose")
+    assert (err.value.status, err.value.code) == (503, "cli_unavailable")
+
+
+def test_the_organize_prompt_carries_no_token_and_no_full_home_paths(org, monkeypatch):
+    monkeypatch.setenv("HOME", str(org.root.parent))
+    token = org.app.token
+    assert token
+    org.org["tabs"] = [dict(t, last=f"export KEY={token} done") if t["ref"] == "surface:11" else t
+                       for t in org.org["tabs"]]
+    org.app.tabs.poll()
+    org.act("organize_propose")
+    (argv,) = org.runner.of("claude.p")
+    blob = "\n".join(argv)
+    assert token not in blob and str(org.root) not in blob and str(org.root.parent) not in blob
+    assert "[token]" in blob
+    data = org_data(org)
+    assert all(not x["cwd"].startswith("/") for x in data["workspaces"])
+    tab = next(t for t in data["tabs"] if t["ref"] == "surface:11")
+    assert len(tab["last"]) <= 90
+
+
+def test_the_organize_prompt_shows_home_paths_in_names_and_lines_as_tilde(org, monkeypatch):
+    home = str(org.root.parent)
+    monkeypatch.setenv("HOME", home)
+    org.org["tabs"] = [dict(t, name=f"me@host: {home}/Developer/app", last=f"cd {home}/Developer/app && make")
+                       if t["ref"] == "surface:11" else t for t in org.org["tabs"]]
+    org.org["workspaces"] = [dict(x, title=f"{home}/notes", description=f"from {home}/notes")
+                             if x["ref"] == "workspace:6" else x for x in org.org["workspaces"]]
+    org.app.tabs.poll()
+    org.act("organize_propose")
+    blob = "\n".join(org.runner.of("claude.p")[0])
+    assert home not in blob
+    data = org_data(org)
+    tab = next(t for t in data["tabs"] if t["ref"] == "surface:11")
+    assert tab["title"] == "me@host: ~/Developer/app" and tab["last"] == "cd ~/Developer/app && make"
+    ws = next(x for x in data["workspaces"] if x["ref"] == "workspace:6")
+    assert ws["title"] == "~/notes" and ws["description"] == "from ~/notes"
+
+
+def test_organize_reads_the_workspaces_itself_also_without_the_workspaces_layout(tmp_path):
+    w = organize_world(tmp_path, layout="classic")
+    try:
+        assert w.app.tabs.workspace_list() is None
+        w.act("organize_propose")
+        assert [x["ref"] for x in org_data(w)["workspaces"]] == ["workspace:2", "workspace:5", "workspace:6"]
+    finally:
+        w.close()
+
+
+def test_a_second_organize_apply_while_one_runs_is_organize_running(org):
+    prop = full_proposal(org)
+    entered, gate = threading.Event(), threading.Event()
+
+    def slow(argv):
+        entered.set()
+        gate.wait(5)
+        return ok("moved")
+    org.runner.handlers["workplace.move-tab"] = slow
+    first: dict = {}
+    t = threading.Thread(target=lambda: first.update(
+        org.act("organize_apply", proposal=prop["id"], items=["tab_move:surface:14"])))
+    t.start()
+    try:
+        assert entered.wait(5)
+        with pytest.raises(ActionError) as err:
+            org.act("organize_apply", proposal=prop["id"], items=["tab_move:surface:14"])
+        assert (err.value.status, err.value.code) == (409, "organize_running")
+    finally:
+        gate.set()
+        t.join(5)
+    assert first["applied"] == ["tab_move:surface:14"]
+    assert len([c for c in org_writes(org) if c[0] == "move-tab"]) == 1
+    # free again once the first one ended
+    org.act("organize_apply", proposal=prop["id"], items=["ws_title:workspace:6"])
+
+
+# ---------------------------------------------------------------- chats leave on their own (package 6)
+
+QUIET = 11 * 60          # seconds: past the ten quiet minutes a settled chat waits for
+
+
+def end_item(world, item, at_ms, verb="close", name=None):
+    """An end event of an inbox item, the way inbox.py names it: a UTC stamp, a counter, who, the verb"""
+    events = world.root / "work" / "inbox" / item / "events"
+    events.mkdir(parents=True, exist_ok=True)
+    stamp = dt.datetime.fromtimestamp(at_ms / 1000, dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    (events / (name or f"{stamp}-09-web-{verb}.yaml")).write_text(f"verb: {verb}\nby: web\n", encoding="utf-8")
+
+
+def chat_on(world, kind, **args):
+    world.runner.handlers["claude.p"] = lambda argv: claude_answer("Here is what it is about.", 0.001)
+    status, _, body = world.post("/api/ask", {"kind": kind, "args": args, "via": "quick"})
+    assert status == 202, body
+    conv = json.loads(body)["conv"]
+    wait_quick(world)
+    return conv
+
+
+def conv_of(world, conv):
+    return next((c for c in world.app.quick.state()["convs"] if c["id"] == conv), None)
+
+
+def sweep(world, force=True):
+    return world.app.quick.sweep_settled(world.app.clock(), force=force)
+
+
+def test_a_chat_from_a_briefing_row_goes_to_the_archive_when_its_inbox_item_closes(world):
+    conv = chat_on(world, "row", key=f"inbox:{YES_ID}")
+    assert conv_of(world, conv)["about"] == {"kind": "row", "key": f"inbox:{YES_ID}", "inbox": YES_ID}
+    world.clock.advance(QUIET)
+    assert sweep(world) is False and conv_of(world, conv)       # still open: it stays
+    end_item(world, YES_ID, world.app.clock() - 60_000)
+    assert sweep(world) is True and conv_of(world, conv) is None
+    _, rows = archived(world, "quick")
+    assert [(r["conv"]["id"], r["why"]) for r in rows] == [(conv, "settled")]
+    assert conv not in [c["id"] for c in json.loads((world.app.state_dir / "quick.json").read_text())]
+
+
+def test_a_chat_from_an_info_row_finds_its_inbox_item(world):
+    world.runner.handlers["inbox.list"] = lambda argv: ok([
+        {"id": YES_ID, "state": "open"}, {"id": FILED_ID, "state": "open", "key": "briefing:morning:checks:backup-stale"}])
+    world.app.inbox_cache = (0.0, None)
+    conv = chat_on(world, "info", page="systems", section="checks", index=0)
+    about = conv_of(world, conv)["about"]
+    assert about["kind"] == "info" and about["inbox"] == FILED_ID
+    # the key is the row's own `item:` key, the one the page and page_item_by_key use
+    found = world.app.collector.page_item_by_key(about["key"])
+    assert found and found[2] == world.app.collector.page_item("systems", "checks", 0)[1]
+    world.clock.advance(QUIET)
+    end_item(world, FILED_ID, world.app.clock() - 60_000, "executed")
+    assert sweep(world) is True and conv_of(world, conv) is None
+    # a row nobody filed has no item to wait for: that chat stays
+    world.runner.handlers["inbox.list"] = lambda argv: ok([])
+    world.app.inbox_cache = (0.0, None)
+    other = chat_on(world, "info", page="systems", section="upstream", index=0)
+    assert conv_of(world, other)["about"]["inbox"] is None
+    world.clock.advance(QUIET)
+    assert sweep(world) is False and conv_of(world, other)
+
+
+def test_a_chat_on_a_task_row_leaves_when_the_task_moves_to_done(world):
+    conv = chat_on(world, "follow_up", key="task:other-task")
+    assert conv_of(world, conv)["about"] == {"kind": "follow_up", "key": "task:other-task", "task": "other-task"}
+    world.clock.advance(QUIET)
+    assert sweep(world) is False
+    done = world.root / "work" / "done" / "2026-10" / "other-task"
+    done.mkdir(parents=True)
+    (done / "STATUS.md").write_text("---\nstatus: done\n---\n", encoding="utf-8")
+    assert sweep(world) is True and conv_of(world, conv) is None
+
+
+def test_a_chat_on_an_item_closed_before_it_started_stays(world):
+    end_item(world, YES_ID, world.app.clock() - 5 * 60_000)
+    conv = chat_on(world, "row", key=f"inbox:{YES_ID}")
+    world.clock.advance(QUIET)
+    assert sweep(world) is False and conv_of(world, conv)
+
+
+def test_a_close_without_a_readable_time_does_not_settle(world):
+    conv = chat_on(world, "row", key=f"inbox:{YES_ID}")
+    world.clock.advance(QUIET)
+    end_item(world, YES_ID, 0, name="zz-no-stamp-close.yaml")
+    assert sweep(world) is False and conv_of(world, conv)
+
+
+def test_a_reopened_item_keeps_its_chat(world):
+    conv = chat_on(world, "row", key=f"inbox:{YES_ID}")
+    world.clock.advance(QUIET)
+    end_item(world, YES_ID, world.app.clock() - 3 * 60_000)
+    end_item(world, YES_ID, world.app.clock() - 2 * 60_000, "reopen")
+    assert sweep(world) is False and conv_of(world, conv)
+
+
+def test_a_chat_touched_in_the_last_ten_minutes_stays(world):
+    conv = chat_on(world, "row", key=f"inbox:{YES_ID}")
+    end_item(world, YES_ID, world.app.clock() + 1000)
+    world.clock.advance(9 * 60)
+    assert sweep(world) is False and conv_of(world, conv)
+    world.clock.advance(2 * 60)
+    assert sweep(world) is True and conv_of(world, conv) is None
+
+
+def test_a_running_chat_is_never_archived_by_the_sweep(world):
+    gate = threading.Event()
+    world.runner.handlers["claude.p"] = lambda argv: (gate.wait(5), claude_answer("late", 0.001))[1]
+    status, _, body = world.post("/api/ask", {"kind": "row", "args": {"key": f"inbox:{YES_ID}"}, "via": "quick"})
+    conv = json.loads(body)["conv"]
+    try:
+        end_item(world, YES_ID, world.app.clock() + 1000)
+        world.clock.advance(QUIET)
+        assert conv_of(world, conv)["running"] is True
+        assert sweep(world) is False and conv_of(world, conv)
+    finally:
+        gate.set()
+        wait_quick(world)
+
+
+def test_a_chat_that_restarts_during_the_sweep_is_not_archived(world, monkeypatch):
+    import lib.bridge_cockpit.returns as returns_mod
+    conv = chat_on(world, "row", key=f"inbox:{YES_ID}")
+    end_item(world, YES_ID, world.app.clock() + 1000)
+    world.clock.advance(QUIET)
+    real = returns_mod.ended_at
+
+    def meanwhile(root, item):
+        # a new question lands while the files are read, outside the lock
+        world.app.quick.convs[conv]["last_ms"] = int(world.app.clock())
+        return real(root, item)
+    monkeypatch.setattr(returns_mod, "ended_at", meanwhile)
+    assert sweep(world) is False and conv_of(world, conv)
+    assert archived(world, "quick")[1] == []
+
+
+def test_a_free_chat_without_an_item_is_never_archived_by_the_sweep(world):
+    conv = chat_on(world, "free", text="what is open?")
+    assert conv_of(world, conv)["about"] is None
+    world.clock.advance(QUIET)
+    assert sweep(world) is False and conv_of(world, conv)
+
+
+def test_a_handed_chat_leaves_with_its_inbox_item(world):
+    conv = answered_conv(world)
+    new_id = "20261010-1300-what-next-a1b2"
+    world.runner.handlers["inbox.add"] = lambda argv: ok(new_id + "\n")
+    world.act("quick_handoff", conv=conv, to="tab")
+    assert conv_of(world, conv)["about"] == {"kind": "handoff", "inbox": new_id}
+    world.clock.advance(QUIET)
+    assert sweep(world) is False
+    end_item(world, new_id, world.app.clock() - 60_000, "executed")
+    assert sweep(world) is True and conv_of(world, conv) is None
+    # a chat that already has its row keeps that one when it is handed on
+    row_conv = chat_on(world, "row", key=f"inbox:{YES2_ID}")
+    world.runner.handlers["inbox.add"] = lambda argv: ok("20261010-1400-other-chat-a1b2\n")
+    world.act("quick_handoff", conv=row_conv, to="tab")
+    assert conv_of(world, row_conv)["about"]["inbox"] == YES2_ID
+
+
+def test_an_info_chat_without_an_item_takes_the_item_it_is_handed_on_as(world):
+    """An info row nobody filed gives its chat an `about` without an item: handed to a tab, the chat is about
+    the inbox item the handoff filed, and leaves with it like any handed chat"""
+    world.runner.handlers["inbox.list"] = lambda argv: ok([])
+    world.app.inbox_cache = (0.0, None)
+    conv = chat_on(world, "info", page="systems", section="upstream", index=0)
+    assert conv_of(world, conv)["about"]["inbox"] is None
+    new_id = "20261010-1500-info-chat-a1b2"
+    world.runner.handlers["inbox.add"] = lambda argv: ok(new_id + "\n")
+    world.act("quick_handoff", conv=conv, to="tab")
+    assert conv_of(world, conv)["about"] == {"kind": "handoff", "inbox": new_id}
+    world.clock.advance(QUIET)
+    end_item(world, new_id, world.app.clock() - 60_000, "executed")
+    assert sweep(world) is True and conv_of(world, conv) is None
+
+
+def test_settle_verbs_trigger_the_sweep_on_the_next_poll(world):
+    conv = chat_on(world, "row", key=f"inbox:{ONLY_ID}")
+    world.clock.advance(QUIET)
+    world.app.tabs.poll()                      # a plain poll sweeps: nothing ended yet
+    assert conv_of(world, conv)
+    end_item(world, ONLY_ID, world.app.clock() - 1000)
+    world.app.tabs.poll()                      # within the minute: no second read on its own
+    assert conv_of(world, conv)
+    res = world.act("done", key=f"inbox:{ONLY_ID}")
+    assert world.app.quick.settle_due is True and res["reload"] in ("delta", "tabs")
+    world.app.tabs.poll()
+    assert conv_of(world, conv) is None and world.app.quick.settle_due is False
+    # the other verbs that end or take back an item ask for the same
+    for verb, args in (("drop", {"key": f"inbox:{YES_ID}"}), ("settle", {"keys": [f"inbox:{YES2_ID}"], "outcome": "done"}),
+                       ("task_close", {"keys": ["task:other-task"], "reason": "done"}), ("inbox_reopen", {"id": YES_ID}),
+                       ("task_reopen", {"slug": "other-task"})):
+        world.app.quick.settle_due = False
+        world.act(verb, **args)
+        assert world.app.quick.settle_due is True, verb
+
+
+def test_the_sweep_reads_files_at_most_once_a_minute_on_plain_polls(world, monkeypatch):
+    import lib.bridge_cockpit.returns as returns_mod
+    chat_on(world, "row", key=f"inbox:{YES_ID}")
+    world.clock.advance(QUIET)
+    reads = []
+    real = returns_mod.ended_at
+    monkeypatch.setattr(returns_mod, "ended_at", lambda root, item: (reads.append(item), real(root, item))[1])
+    for _ in range(4):
+        sweep(world, force=False)
+    assert len(reads) == 1
+    world.clock.advance(30)
+    sweep(world, force=False)
+    assert len(reads) == 1
+    world.clock.advance(31)
+    sweep(world, force=False)
+    assert len(reads) == 2
+    world.app.quick.settle_soon()
+    sweep(world, force=False)
+    assert len(reads) == 3
+
+
+def test_a_failed_settle_archive_keeps_the_chat_and_backs_off(world, monkeypatch):
+    conv = chat_on(world, "row", key=f"inbox:{YES_ID}")
+    end_item(world, YES_ID, world.app.clock() + 1000)
+    world.clock.advance(QUIET)
+    (world.app.state_dir / "chats").write_text("not a folder")
+    errors = []
+    monkeypatch.setattr(world.app, "log_error", errors.append)
+    for _ in range(3):
+        assert sweep(world) is False and conv_of(world, conv)
+    assert len([e for e in errors if "not archived" in e]) == 1
+    world.clock.advance(3601)
+    sweep(world)
+    assert len([e for e in errors if "not archived" in e]) == 2
+    (world.app.state_dir / "chats").unlink()
+    world.clock.advance(3601)
+    assert sweep(world) is True and conv_of(world, conv) is None
+
+
+def agents_conv(world, answer):
+    a2a_peers(world, "alpha")
+    world.runner.handlers["a2a.ask"] = lambda argv: answer
+    conv = world.act("a2a_ask", peer="alpha", text="where does it stand?")["conv"]
+    wait_agents(world)
+    return conv
+
+
+def test_a2a_conversations_past_keep_hours_go_to_the_archive(world):
+    conv = agents_conv(world, a2a_answer(text="Done."))
+    world.clock.advance(23 * 3600)
+    assert [c["id"] for c in world.app.agents.state()["convs"]] == [conv]
+    world.clock.advance(2 * 3600)
+    assert world.app.agents.state()["convs"] == []
+    _, rows = archived(world, "agents")
+    assert [(r["conv"]["id"], r["why"]) for r in rows] == [(conv, "expired")]
+    assert json.loads((world.app.state_dir / "agents.json").read_text()) == []
+
+
+def test_a2a_running_or_waiting_conversations_stay(world):
+    waiting = agents_conv(world, a2a_answer(state="input-required", text="The owner decides."))
+    assert world.app.agents.state()["convs"][0]["turns"][-1]["waiting"] is True
+    gate = threading.Event()
+    world.runner.handlers["a2a.ask"] = lambda argv: (gate.wait(5), a2a_answer())[1]
+    running = world.act("a2a_ask", peer="alpha", text="and the other one?")["conv"]
+    try:
+        world.clock.advance(48 * 3600)
+        assert {c["id"] for c in world.app.agents.state()["convs"]} == {waiting, running}
+    finally:
+        gate.set()
+        wait_agents(world)
+
+
+def test_a2a_keep_hours_zero_keeps_everything(tmp_path):
+    w = World(tmp_path, config="cockpit:\n  enabled: true\n  language: en\n  chat_keep_hours: 0\n")
+    try:
+        conv = agents_conv(w, a2a_answer())
+        w.clock.advance(30 * 24 * 3600)
+        st = w.app.agents.state()
+        assert [c["id"] for c in st["convs"]] == [conv] and st["keep_hours"] == 0
+    finally:
+        w.close()
+
+
+def test_a2a_expiry_the_archive_refuses_keeps_them_and_backs_off(world, monkeypatch):
+    conv = agents_conv(world, a2a_answer())
+    (world.app.state_dir / "chats").write_text("not a folder")
+    errors = []
+    monkeypatch.setattr(world.app, "log_error", errors.append)
+    world.clock.advance(25 * 3600)
+    for _ in range(3):
+        assert [c["id"] for c in world.app.agents.state()["convs"]] == [conv]
+    assert len([e for e in errors if "not archived" in e]) == 1
+
+
+def test_a2a_state_carries_keep_hours(world):
+    assert world.app.agents.state()["keep_hours"] == 24
+
+
+# --- review findings: organize at its declared caps, task tabs at apply, readable failures ---
+
+def test_organize_keeps_the_prompt_within_its_limit_at_the_declared_caps(org):
+    """30 workspaces and 80 tabs with ordinary titles, full last lines and questions: the snapshot is cut to
+    the prompt limit (last lines and questions shortened first, then tabs left out), never refused as a 500"""
+    from lib.bridge_cockpit import organize
+    root = str(org.root)
+    org.org["workspaces"] = [org.org["workspaces"][0]] + [
+        {"ref": f"workspace:{100 + i}", "title": f"Workspace number {i:02d} of the demo", "cwd": f"{root}/sub"}
+        for i in range(30)]
+    org.org["tabs"] = [org.org["tabs"][0]] + [
+        {"name": f"A tab with a rather ordinary title {i:03d}", "workspace": f"Workspace number {i % 30:02d} of the demo",
+         "ref": f"surface:{200 + i}", "ws_ref": f"workspace:{100 + i % 30}", "state": "waiting", "id": f"TAB-{200 + i}",
+         "last": ("the agent wrote a long last line about the build and the docs " * 3)[:90]}
+        for i in range(80)]
+    org.app.tabs.poll()
+    by_ref = {}
+    for t in org.app.tabs.tab_list():
+        by_ref[t["ref"]] = t
+    # every waiting tab carries a long question as well
+    org.app.tabs.asks = {ref: ((t["state"], t.get("last"), 0), {"text": "Should I go on with the next step? " * 8,
+                                                                "options": [], "hash": "0" * 16, "yes_no": True,
+                                                                "draft": False}, org.clock.now * 1000)
+                         for ref, t in by_ref.items()}
+    org.runner.calls.clear()
+    res = org.act("organize_propose")
+    (argv,) = org.runner.of("claude.p")
+    assert len(argv[-1]) <= organize.PROMPT_MAX
+    data = org_data(org)
+    assert len(data["workspaces"]) == 30
+    assert data["tabs"], "tabs stay in, shortened"
+    assert res["proposal"]["scope"] == 30
+    # a tab the snapshot left out is no item either: apply compares only what the model saw
+    seen = {t["ref"] for t in data["tabs"]}
+    missing = [f"surface:{200 + i}" for i in range(80) if f"surface:{200 + i}" not in seen]
+    if missing:
+        org.model = {"workspaces": [], "tabs": [{"ref": missing[0], "title": "Renamed", "why": "x"}]}
+        assert org.act("organize_propose")["proposal"]["items"] == []
+
+
+def test_organize_fit_shortens_lines_before_it_leaves_tabs_out():
+    from lib.bridge_cockpit import organize
+    spaces = [{"ref": f"workspace:{i}", "title": "W", "color_name": None, "description": None, "pinned": False,
+               "cwd": "a/b"} for i in range(3)]
+    tabs = [{"ref": f"surface:{i}", "title": "T", "workspace": "workspace:0", "state": "waiting", "slug": None,
+             "task_bound": False, "last": "x" * 90, "ask": "y" * 200} for i in range(10)]
+    small = organize.fit(spaces, tabs, 100000)
+    assert small == (spaces, tabs)
+    budget = len(organize.serialize(spaces, [dict(t, last="x" * 30, ask="y" * 60) for t in tabs])) + 5
+    kept_spaces, kept_tabs = organize.fit(spaces, tabs, budget)
+    assert len(kept_tabs) == 10 and all(len(t["last"]) < 90 for t in kept_tabs)
+    assert len(organize.serialize(kept_spaces, kept_tabs)) <= budget
+    tight = organize.fit(spaces, tabs, len(organize.serialize(spaces, [])) + 200)
+    assert 0 < len(tight[1]) < 10 and len(organize.serialize(*tight)) <= len(organize.serialize(spaces, [])) + 200
+
+
+def test_organize_apply_skips_a_tab_that_became_a_task_tab_since_the_proposal(org):
+    """adopted for a task in the meantime: its name finds it and the plan moves it back, so neither its
+    name nor its place is changed, even when the value compared is still the one proposed from"""
+    prop = full_proposal(org)
+    org.org["tabs"] = [dict(t, slug="adopted-task") if t["ref"] in ("surface:11", "surface:14") else t
+                       for t in org.org["tabs"]]
+    res = org.act("organize_apply", proposal=prop["id"], items=["tab_title:surface:11", "tab_move:surface:14"])
+    assert sorted((x["id"], x["why"]) for x in res["skipped"]) == [("tab_move:surface:14", "task_tab"),
+                                                                     ("tab_title:surface:11", "task_tab")]
+    assert org_writes(org) == []
+
+
+@pytest.mark.parametrize("answer, code", [
+    (fail("refused: name in use", 2), "name_in_use"),
+    (fail("refused: a task, inbox or team tab keeps its name", 2), "managed"),
+    (fail("refused: configured workspace, rename it in workplace.workspaces", 2), "managed"),
+    (fail("no open tab with the ref 'surface:11'", 2), "gone"),
+    (RunResult(False, 1, "ERROR surface:11 is the last tab of workspace:2, moving it would close that workspace", "", 1),
+     "last_tab"),
+    (fail("", 1), "driver_failed"),
+    (fail("something nobody expected", 1), "driver_failed"),
+])
+def test_organize_apply_names_a_failed_step_by_a_short_code(org, answer, code):
+    prop = full_proposal(org)
+    org.runner.handlers["workplace.rename"] = lambda argv: answer
+    res = org.act("organize_apply", proposal=prop["id"], items=["tab_title:surface:11"])
+    (failed,) = res["failed"]
+    assert failed["id"] == "tab_title:surface:11" and failed["error"] == code
+    assert "\n" not in failed.get("detail", "") and len(failed.get("detail", "")) <= 160
 
 
 # ---------------------------------------------------------------- relay: every direction signed

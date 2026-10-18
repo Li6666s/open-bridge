@@ -18,6 +18,11 @@ from .actions_base import (ACTIVE_INBOX_STATES, CMUX_TIMEOUT, INBOX_ID_RE, LAUNC
 class LaunchSteps:
     """A part of Actions (actions.py), which holds the registry and the helpers called here."""
 
+    def settle_soon(self, ctx: Ctx) -> None:
+        """An item ended or came back: the chats about it are looked at on the next tab poll (quick.py)."""
+        self.app.quick.settle_soon()
+        ctx.tabs_after(1)
+
     def settle(self, ctx: Ctx, row: dict, text: str) -> None:
         self.app.collector.settle(row["key"], text)
         ctx.settled.append(row["key"])
@@ -230,18 +235,25 @@ class LaunchSteps:
         has no such key: it is filed for a person to close."""
         inbox_key = page.get("inbox_key")
         if inbox_key:
-            # the same row filed under any profile's name: the cockpit's profile often extends the briefing's
-            same = page["row"]
-            for e in self.app.inbox_listing() or []:
-                key = str(e.get("key") or "") if isinstance(e, dict) else ""
-                if ((key == inbox_key or key.startswith("briefing:") and key.endswith(same))
-                        and e.get("state") in ACTIVE_INBOX_STATES and INBOX_ID_RE.match(str(e.get("id")))):
-                    return e["id"]
+            filed = self.filed_page_item(inbox_key, page["row"])
+            if filed:
+                return filed
         detail = " ".join(x for x in [page.get("detail"), m.row_url(row) or ""] if x)
         summary = f"{page['section']}: {row['title']}"
         if inbox_key:
             return self.inbox_add(ctx, row["key"], summary, detail, key=inbox_key, closer="reporter")
         return self.inbox_add(ctx, row["key"], summary, detail)
+
+    def filed_page_item(self, inbox_key: str, same: str | None) -> str | None:
+        """The active inbox item filed for a page row: under `inbox_key`, or the same row (`same` is
+        ":<section>:<item>") filed under any profile's name, since the cockpit's profile often extends the
+        briefing's. None when there is none."""
+        for e in self.app.inbox_listing() or []:
+            key = str(e.get("key") or "") if isinstance(e, dict) else ""
+            if ((inbox_key and key == inbox_key or same and key.startswith("briefing:") and key.endswith(same))
+                    and e.get("state") in ACTIVE_INBOX_STATES and INBOX_ID_RE.match(str(e.get("id")))):
+                return e["id"]
+        return None
 
     def inbox_add(self, ctx: Ctx, row_key: str, summary: str, detail: str, key: str | None = None,
                   closer: str = "person") -> str | None:

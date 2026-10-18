@@ -81,6 +81,9 @@ const WORDS = {
     'Running the link check (12 of 40 pages)': 'Linkprüfung läuft (12 von 40 Seiten)', 'Reading the meeting notes': 'Lese die Besprechungsnotizen',
     'Review the dashboard change': 'Die Dashboard-Änderung prüfen', 'Find where sessions are stored': 'Finden, wo Sitzungen gespeichert werden',
     'Run the migration tests': 'Die Migrationstests laufen lassen',
+    'Check the release notes': 'Die Release Notes prüfen', 'Summarise the meeting notes': 'Die Besprechungsnotizen zusammenfassen',
+    'Find the action items': 'Die offenen Punkte finden', 'Releases and checks': 'Releases und Prüfungen',
+    'A second workspace with the same title': 'Ein zweiter Workspace mit demselben Titel',
     // chat and relay
     'My briefing state from the dashboard (09:10): 2 for you today, next: Review the demo report':
       'Mein Briefing-Stand aus dem Dashboard (09:10): 2 für dich heute, als Nächstes: Den Demo-Bericht prüfen',
@@ -116,6 +119,19 @@ const WORDS = {
     'Mock: ticker settings from the config again': 'Demo: Band wieder nach Config',
     'Mock: reading the feeds': 'Demo: Feeds werden gelesen',
     'Mock: the editor is at work, nothing is asked for real': 'Demo: die Redaktion arbeitet, nichts wird wirklich gefragt',
+    // chats handed on, one per status (handedConvs)
+    'Tidy the demo board labels': 'Die Labels auf dem Demo-Board aufräumen',
+    'Add a changelog entry for the demo release': 'Einen Changelog-Eintrag für die Demo-Version anlegen',
+    'Rename the old demo branch': 'Den alten Demo-Branch umbenennen',
+    'Update the example fixtures': 'Die Beispiel-Fixtures aktualisieren',
+    'Fix the broken link check': 'Den kaputten Linkcheck reparieren',
+    'Move the notes into the docs folder': 'Die Notizen in den Doku-Ordner verschieben',
+    'Set up the demo test run': 'Den Demo-Testlauf einrichten',
+    'Write the release summary': 'Die Zusammenfassung zur Version schreiben',
+    'Plan the next demo sprint': 'Den nächsten Demo-Sprint planen',
+    'Check the open demo reviews': 'Die offenen Demo-Reviews prüfen',
+    'Sort the demo inbox': 'Den Demo-Posteingang sortieren',
+    'Example answer from the mock: the steps are clear, an agent can take it from here.': 'Beispielantwort aus der Demo: die Schritte sind klar, ein Agent kann übernehmen.',
   },
 }
 
@@ -264,6 +280,28 @@ function calFacts(startMs, minutes, more) {
 function hhmm(ms) {
   const d = new Date(ms)
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+
+// tabs whose state the terminal reads off the title glyph (cmux without a hook): a name of their own would hide
+// whether they wait, so the page offers no rename for the agent among them (logic.js canRename)
+const GLYPH_TABS = new Set(['surface:9', 'surface:11'])
+// what the terminal driver serves (workplace.py caps): everything, renaming workspaces included
+const DRIVER_CAPS = ['tabs', 'sessions', 'open', 'launch', 'send', 'rename', 'control', 'focus', 'key', 'screen', 'close',
+  'workspaces', 'rename_workspace', 'move_tab', 'set_color', 'set_description']
+// the portable workspace colours (workplace.py COLORS): a workspace reports its hex and the name of it
+const PALETTE = { Red: '#C0392B', Crimson: '#922B21', Orange: '#A04000', Amber: '#7D6608', Olive: '#4A5C18', Green: '#196F3D',
+  Teal: '#006B6B', Aqua: '#0E6B8C', Blue: '#1565C0', Navy: '#1A5276', Indigo: '#283593', Purple: '#6A1B9A', Magenta: '#AD1457',
+  Rose: '#880E4F', Brown: '#7B3F00', Charcoal: '#3E4B5E' }
+const paletteName = hex => Object.keys(PALETTE).find(k => PALETTE[k] === String(hex ?? '').toUpperCase()) ?? null
+// what "Organize with AI" proposes in the demo: one item of every kind, invented, nothing asked for real
+function organizeProposal(now) {
+  return { id: `o${String(now % 1e10).padStart(10, '0').replace(/[^0-9]/g, '0').slice(0, 10)}`, at_ms: now, scope: 4, items: [
+    { id: 'ws_title:workspace:5', kind: 'ws_title', ref: 'workspace:5', from: 'Demo', to: 'Side project', why: 'Two workspaces share the title Demo', cap: 'rename_workspace' },
+    { id: 'ws_color:workspace:4', kind: 'ws_color', ref: 'workspace:4', from: null, to: 'Teal', why: 'One colour for the writing', cap: 'set_color' },
+    { id: 'ws_description:workspace:4', kind: 'ws_description', ref: 'workspace:4', from: null, to: 'Docs and link checks', why: 'Says what happens here', cap: 'set_description' },
+    { id: 'tab_title:surface:11', kind: 'tab_title', ref: 'surface:11', from: 'zsh', to: 'Docs shell', why: 'A shell name says nothing', cap: 'rename' },
+    { id: 'tab_move:surface:9', kind: 'tab_move', ref: 'surface:9', from: 'workspace:3', to: 'workspace:4', why: 'Notes belong with the docs', cap: 'move_tab' },
+  ] }
 }
 
 export function buildState(now = Date.now(), opts = {}) {
@@ -475,6 +513,16 @@ export function buildState(now = Date.now(), opts = {}) {
     },
   ]
 
+  // what the waiting tabs ask, as the tab poll reads it off their screens (asks.py): a dialog with three
+  // options, a yes or no question, a summary with a draft typed in the tab; every other tab asks nothing.
+  // Only tabs the poll reads carry one: needs-you, and waiting ones that are not filed (model.is_waiting),
+  // so the filed report-draft has none
+  const asks = {
+    'surface:7': { text: 'Edit file RELEASE_NOTES.md\nDo you want to make this edit?', hash: '7a1f0c3e9b2d4a68', yes_no: true, draft: false,
+      options: [{ n: 1, label: 'Yes' }, { n: 2, label: 'Yes, allow all edits during this session' }, { n: 3, label: 'No, and tell Claude what to do differently' }] },
+    'surface:12': { text: 'I found three sources.\nShould I summarise them in team.md?', hash: 'c4e8b1d27f3a9056', yes_no: true, draft: false, options: [] },
+    'surface:13': { text: 'Changelog entry written for the release.', hash: '5d0b7e2a8c1f4936', yes_no: false, draft: true, options: [] },
+  }
   const tabs = empty ? [] : [
     { ref: 'surface:3', ws_ref: 'workspace:1', name: 'Control', workspace: 'Control', state: 'waiting', last: '', slug: null, item: null,
       team: null, role: null, live: true, waiting: false, is_control: true, filed_by: null, since_ms: now - 15 * MIN, long: null },
@@ -487,6 +535,9 @@ export function buildState(now = Date.now(), opts = {}) {
     { ref: 'surface:12', ws_ref: 'workspace:3', name: 'demo-task research', workspace: 'Demo', state: 'waiting',
       last: 'I found three sources. Should I summarise them in team.md?', slug: 'demo-task', item: null, team: 'research', role: 'evidence',
       live: true, waiting: true, is_control: false, filed_by: null, since_ms: now - 11 * MIN, long: null },
+    { ref: 'surface:13', ws_ref: 'workspace:2', name: 'changelog', workspace: 'Ops', state: 'waiting',
+      last: 'Changelog entry written for the release.', slug: null, item: null, team: null, role: null, live: true, waiting: true,
+      is_control: false, filed_by: null, since_ms: now - 8 * MIN, long: null },
     { ref: 'surface:8', ws_ref: 'workspace:4', name: 'docs-refresh', workspace: 'Docs', state: 'working', last: 'Running the link check (12 of 40 pages)',
       slug: 'docs-refresh', item: null, team: null, role: null, live: true, waiting: false, is_control: false, filed_by: null,
       since_ms: now - 26 * MIN, long: null },
@@ -494,7 +545,7 @@ export function buildState(now = Date.now(), opts = {}) {
       slug: null, item: null, team: null, role: null, live: true, waiting: false, is_control: false, filed_by: null, since_ms: now - 6 * MIN, long: null },
     { ref: 'surface:11', ws_ref: 'workspace:4', name: 'zsh', workspace: 'Docs', state: 'shell', last: '', slug: null, item: null,
       team: null, role: null, live: false, waiting: false, is_control: false, filed_by: null, since_ms: now - 140 * MIN, long: null },
-  ]
+  ].map(t => ({ ...t, ask: asks[t.ref] ?? null, state_source: GLYPH_TABS.has(t.ref) ? 'glyph' : 'hook' }))
 
   const relayOnline = !opts.offline
   return localize({
@@ -527,8 +578,16 @@ export function buildState(now = Date.now(), opts = {}) {
       // what the server sends: the Now section's total, the same number as counts.now
       briefing_badge: sections[0].total,
     },
-    tabs: { at_ms: now - 8000, error: null, control: { name: 'Control', ref: 'surface:3' }, tabs },
-    quick: { available: true, default: 'haiku', models: ['haiku', 'sonnet', 'opus'], keep_hours: 24, convs: [] },
+    // the terminal's workspace list (the chat as cmux); two workspaces share a title and are told apart by ref
+    tabs: { at_ms: now - 8000, error: null, control: { name: 'Control', ref: 'surface:3' }, tabs, workspaces: empty ? [] : [
+      { ref: 'workspace:1', title: 'Control', pinned: true, cwd: '/demo/bridge' },
+      { ref: 'workspace:2', title: 'Ops', cwd: '/demo/bridge', description: 'Releases and checks' },
+      { ref: 'workspace:3', title: 'Demo', cwd: '/demo/bridge' },
+      { ref: 'workspace:4', title: 'Docs', cwd: '/demo/bridge' },
+      { ref: 'workspace:5', title: 'Demo', cwd: '/demo/other-repo', description: 'A second workspace with the same title' }]
+      .map(w => ({ ...w, color: w.color ?? null, color_name: paletteName(w.color) })) },
+    driver: { caps: DRIVER_CAPS },
+    quick: { available: true, default: 'haiku', models: ['haiku', 'sonnet', 'opus'], keep_hours: 24, convs: empty ? [] : [aboutConv(now), ...handedConvs(now)] },
     jev: createMockJev ? { enabled: true, ready: true, reason: null } : { enabled: false, ready: false, reason: 'off' },
     agents: empty ? { peers: [], convs: [] } : agentsState(now),
     triage: empty ? { running: null, error: null, last: null, items: {} } : triageState(now),
@@ -546,21 +605,37 @@ export function buildState(now = Date.now(), opts = {}) {
           preview: 'My briefing state from the dashboard (09:10): 2 for you today, next: Review the demo report',
           answer: '1. Review the demo report first, it is due tomorrow and only you can do it.\n2. Give your yes to the two label and docs items, they run alone.\n3. The flaky test can wait until after the team call.',
           answered_ms: now - 29 * MIN },
+        ...handedRecords(now),
       ],
     },
     cmux: { ok: true, error: null },
     sessions: { at_ms: now - 8000, sessions: empty ? [] : [
       { id: '7a16c7b2', pid: 101, name: 'demo-bridge-fc', project: 'demo-bridge', cwd: '/demo/bridge', here: true, status: 'busy',
         since_ms: now - 4 * MIN, started_ms: now - 95 * MIN, kind: 'interactive', version: '2.1.0', remote: true,
-        tab: { ref: 'surface:3', name: 'Control', workspace: 'Control', state: 'working', is_control: true },
+        tab: { ref: 'surface:3', ws_ref: 'workspace:1', name: 'Control', workspace: 'Control', state: 'working', is_control: true },
         agents: { running_count: 2, done_recent: 3, running: [
           { id: 'a1efe80', type: 'code-reviewer', description: 'Review the dashboard change', since_ms: now - 2 * MIN, background: true },
           { id: 'b77c012', type: 'Explore', description: 'Find where sessions are stored', since_ms: now - 40000, background: false }] },
-        workflows: [{ name: 'demo-build', status: 'running', agents: 6, since_ms: now - 12 * MIN }] },
+        workflows: [{ name: 'demo-build', status: 'running', agents: 4, since_ms: now - 12 * MIN },
+          { name: 'demo-nightly', status: 'paused', agents: 2, since_ms: now - 50 * MIN }] },
       { id: 'd8db96ad', pid: 102, name: 'demo-bridge-4b', project: 'demo-bridge', cwd: '/demo/bridge', here: true, status: 'idle',
         since_ms: now - 31 * MIN, started_ms: now - 5 * 60 * MIN, kind: 'interactive', version: '2.1.0', remote: false,
-        tab: { ref: 'surface:7', name: 'alpha-release', workspace: 'Ops', state: 'needs-you', is_control: false },
+        tab: { ref: 'surface:7', ws_ref: 'workspace:2', name: 'alpha-release', workspace: 'Ops', state: 'needs-you', is_control: false },
         agents: { running_count: 0, done_recent: 0, running: [] }, workflows: [] },
+      // a second session on the same tab (a resumed one): the tab counts both
+      { id: '5e0b3d91', pid: 104, name: 'demo-bridge-7c', project: 'demo-bridge', cwd: '/demo/bridge', here: true, status: 'busy',
+        since_ms: now - 2 * MIN, started_ms: now - 15 * MIN, kind: 'interactive', version: '2.1.0', remote: false,
+        tab: { ref: 'surface:7', ws_ref: 'workspace:2', name: 'alpha-release', workspace: 'Ops', state: 'needs-you', is_control: false },
+        agents: { running_count: 1, done_recent: 0, running: [
+          { id: 'd51e2b0', type: 'Explore', description: 'Check the release notes', since_ms: now - 50000, background: false }] },
+        workflows: [] },
+      { id: '9f2c6a17', pid: 105, name: 'demo-bridge-notes', project: 'demo-bridge', cwd: '/demo/bridge', here: true, status: 'busy',
+        since_ms: now - 6 * MIN, started_ms: now - 30 * MIN, kind: 'interactive', version: '2.1.0', remote: false,
+        tab: { ref: 'surface:9', ws_ref: 'workspace:3', name: 'notes', workspace: 'Demo', state: 'working', is_control: false },
+        agents: { running_count: 2, done_recent: 1, running: [
+          { id: 'e8a4c11', type: 'general-purpose', description: 'Summarise the meeting notes', since_ms: now - 3 * MIN, background: true },
+          { id: 'f19b7d3', type: 'Explore', description: 'Find the action items', since_ms: now - 70000, background: false }] },
+        workflows: [{ name: 'demo-check', status: 'running', agents: null, since_ms: now - 5 * MIN }] },
       { id: '3c9a1e44', pid: 103, name: 'other-repo-2a', project: 'other-repo', cwd: '/demo/other-repo', here: false, status: 'busy',
         since_ms: now - 9 * MIN, started_ms: now - 20 * MIN, kind: 'interactive', version: '2.1.0', remote: false,
         tab: null, agents: { running_count: 1, done_recent: 0, running: [
@@ -778,6 +853,51 @@ function historyEntries(now) {
 }
 
 // the other Bridges and A2A agents (agents.py state()): what their cards say and one conversation
+/** Chats handed on, one per status the chat's status line shows (logic.js handoffStatus): a tab start with each
+ *  launch outcome, and the control session waiting, arrived and offline (their relay records below) */
+export const HANDED_EXAMPLES = [
+  ['Tidy the demo board labels', { to: 'tab', status: 'starting' }],
+  ['Add a changelog entry for the demo release', { to: 'tab', status: 'started' }],
+  ['Rename the old demo branch', { to: 'tab', status: 'running' }],
+  ['Update the example fixtures', { to: 'tab', status: 'busy' }],
+  ['Fix the broken link check', { to: 'tab', status: 'failed' }],
+  ['Move the notes into the docs folder', { to: 'tab', status: 'partly' }],
+  ['Set up the demo test run', { to: 'tab', status: 'manual' }],
+  ['Write the release summary', { to: 'tab', status: 'nothing' }],
+  ['Plan the next demo sprint', { to: 'control', status: 'queued', relay_id: '20261009T113000-0a0b0c01' }],
+  ['Check the open demo reviews', { to: 'control', status: 'queued', relay_id: '20261009T113100-0a0b0c02' }],
+  ['Sort the demo inbox', { to: 'control', status: 'offline', relay_id: '20261009T113200-0a0b0c03' }],
+]
+
+export function handedConvs(now) {
+  return HANDED_EXAMPLES.map(([q, handed], i) => {
+    const at = now - (60 - i * 4) * MIN
+    const inbox = handed.to === 'tab' && handed.status !== 'starting' ? `20261009-11${String(i).padStart(2, '0')}-demo-chat-a1b${i}` : null
+    return { id: `qd${String(i + 1).padStart(9, '0')}`, kind: 'free', started_ms: at, session: null, total_usd: 0.002, running: false,
+      last_ms: at + MIN, turns: [{ q, a: 'Example answer from the mock: the steps are clear, an agent can take it from here.', model_asked: 'haiku',
+        model: 'haiku-5-5', cost_usd: 0.002, at_ms: at, error: null }],
+      // a chat handed to a tab is about the item it became: it leaves with that item (quick.py sweep_settled)
+      about: inbox ? { kind: 'handoff', inbox } : null,
+      handed: { at_ms: at + MIN, ...handed, ...(inbox ? { inbox_id: inbox } : {}) } }
+  })
+}
+
+/** A chat asked on a briefing row: it carries the row and its inbox item, and leaves once that item is closed */
+function aboutConv(now) {
+  const at = now - 18 * MIN
+  return { id: 'qa000000001', kind: 'row', started_ms: at, session: null, total_usd: 0.001, running: false, last_ms: at + MIN,
+    about: { kind: 'row', key: 'inbox:20261009-0910-tidy-labels-c3d4', inbox: '20261009-0910-tidy-labels-c3d4' },
+    turns: [{ q: 'What is behind: Tidy the issue labels on the demo board', a: 'Twelve labels overlap; the item asks to merge them into five.',
+      model_asked: 'haiku', model: 'haiku-5-5', cost_usd: 0.001, at_ms: at, error: null }] }
+}
+
+/** The relay records of the chats handed to the control session: still queued, arrived, and offline */
+function handedRecords(now) {
+  return [['20261009T113000-0a0b0c01', 'queued'], ['20261009T113100-0a0b0c02', 'submitted'], ['20261009T113200-0a0b0c03', 'offline']]
+    .map(([id, status], i) => ({ id, kind: 'free', created_ms: now - (24 - i * 4) * MIN, status, preview: 'From a quick question in the dashboard',
+      answer: null, answered_ms: null }))
+}
+
 function agentsState(now) {
   const card = (name, description, skills) => ({ name, description, version: '0.4.0', protocol: '0.3', binding: 'JSONRPC',
     provider: { name: 'Example Org' }, endpoint: 'https://example.org/a2a/', input: ['text'], output: ['text'], streaming: false, docs: null, skills })
@@ -793,7 +913,12 @@ function agentsState(now) {
       { id: 'docs-agent', reach: 'unknown', last_error: null, summary: 'An example agent for the public docs', owner: null, network: 'public',
         needs_token: false, usage: { allowed: ['ask'], human_gate: null }, card: null, card_error: null, card_at_ms: null, last_ms: null },
     ],
+    keep_hours: 24,
     convs: [
+      // three days untouched: past keep_hours, so the page lists it no more (the server archives it on its next look)
+      { id: 'g0f0e0d0c0b', peer: 'team-bridge', started_ms: now - 72 * 3600000, last_ms: now - 72 * 3600000, context_id: null, running: false,
+        turns: [{ q: 'Is the old demo branch still needed?', mode: 'ask', a: 'No, it was merged and can go.', state: 'completed', task_id: null,
+          waiting: false, at_ms: now - 72 * 3600000, answered_ms: now - 72 * 3600000, error: null }] },
       { id: 'g0a1b2c3d4e', peer: 'team-bridge', started_ms: now - 2 * 3600000 - 5 * MIN, last_ms: now - 2 * 3600000, context_id: 'ctx-demo', running: false,
         turns: [{ q: 'Where does the alpha release stand?', mode: 'ask', a: 'Two of five items are open, the release notes and one test fix. The date holds.',
           state: 'completed', task_id: null, waiting: false, at_ms: now - 2 * 3600000 - 5 * MIN, answered_ms: now - 2 * 3600000, error: null }] },
@@ -846,6 +971,7 @@ export function createMockTransport(opts = {}) {
   let handlers = {}
   const mockMutes = [{ id: '20261008-0900-board-radar-0a1b', source: 'board-radar', scope: 'family', key_prefix: 'radar:stale:' }]   // invented, for the noise card
   let seq = state.model.seq
+  let mockOrganize = null   // the demo's current organize proposal
   const jev = createMockJev ? createMockJev() : null   // the Jev tab's mock: the server's once-per-day rule, invented tokens
   const history = opts.empty ? [] : historyEntries(now())
   const orders = {}                                       // the kept Jev order per work page, as jev.py keeps it
@@ -981,6 +1107,9 @@ export function createMockTransport(opts = {}) {
         return { status: 202, ok: true, data: { ok: true, loading }, error: null }
       }
       if (path === '/api/ask' && body?.via === 'quick') {
+        // a free question may bring what the page shows (actions.py ask `context`): refused when too long, never cut
+        const context = body?.args?.context
+        if (context != null && (body.kind !== 'free' || typeof context !== 'string' || context.length > 6000)) return fail(400, 'invalid_argument', 'bad context')
         // a short session of its own: invented answer, invented cost, nothing is asked for real
         const model = body.model || 'haiku'
         const q = body?.kind === 'free' ? String(body.args?.text ?? '') : `Example question of kind ${body?.kind}`
@@ -1054,6 +1183,98 @@ export function createMockTransport(opts = {}) {
         const result = { ok: true, verb, note: `Mock: ${verb} ${keys.join(', ') || args.tab_ref || ''}`.trim(), steps: [], settled: [],
           reload: 'none', jump: null, relay: null, confirm: null }
         if (verb === 'approve_all' && !args.confirm) return ok({ ...result, note: '', confirm: { count: keys.length } })
+        // an answer to a tab: refused like the server when the question it names is no longer on screen
+        // (the third option of the dialog stands for that here) or a draft is typed in the tab
+        if (['tab_send', 'tab_option', 'tab_yes', 'tab_no', 'tab_go_on'].includes(verb)) {
+          const tab = state.tabs.tabs.find(t => t.ref === args.tab_ref)
+          if (!tab || (args.seen && args.seen !== tab.ask?.hash) || (verb === 'tab_option' && args.n === 3)) {
+            return fail(409, 'tab_moved', 'The tab moved on before the answer, nothing was sent.')
+          }
+          if ((verb === 'tab_send' || verb === 'tab_go_on') && tab.ask?.draft) {
+            return fail(409, 'tab_draft', 'Something is typed in that tab, nothing was sent.')
+          }
+          // a dialog takes its options, never typed words (actions.py v_tab_send)
+          if (verb === 'tab_send' && tab.state === 'needs-you' && (args.seen || args.expect || args.name)) {
+            return fail(409, 'not_applicable', 'A dialog takes its options, not text.')
+          }
+          const said = verb === 'tab_option' ? tab.ask?.options.find(o => o.n === args.n)?.label : verb === 'tab_send' ? args.text : verb
+          result.note = `Mock: ${tab.name}: ${said}`
+        }
+        // a start from the chat answers with its inbox item and the launch outcome (actions.py v_chat_tab)
+        if (verb === 'chat_tab') {
+          result.inbox_id = `20261009-1200-demo-chat-${Math.random().toString(16).slice(2, 6).padEnd(4, '0')}`
+          result.launch = 'started'
+        }
+        // a chat handed on carries how it went (quick.py handed); a second click while one starts is refused
+        if (verb === 'quick_handoff') {
+          const conv = state.quick.convs.find(x => x.id === args.conv)
+          if (!conv) return fail(409, 'stale_row', 'the conversation is gone')
+          if (conv.handed?.status === 'starting') return fail(409, 'handoff_running', 'This chat is being handed on right now.')
+          if (args.to === 'control') {
+            const record = { id: `${new Date(now()).toISOString().replace(/[-:]/g, '').slice(0, 15)}-${Math.random().toString(16).slice(2, 10).padEnd(8, '0')}`,
+              kind: 'free', created_ms: now(), status: state.relay.online ? 'queued' : 'offline', preview: 'From a quick question in the dashboard', answer: null, answered_ms: null }
+            state.relay = { ...state.relay, records: [...state.relay.records, record] }
+            result.relay = record
+            conv.handed = { to: 'control', at_ms: now(), status: record.status, relay_id: record.id }
+          } else {
+            conv.handed = { to: 'tab', at_ms: now(), status: 'started', inbox_id: `20261009-1200-demo-chat-${Math.random().toString(16).slice(2, 6).padEnd(4, '0')}` }
+          }
+          result.handed = { ...conv.handed }
+          emit('quick', JSON.parse(JSON.stringify(state.quick)))
+        }
+        // a name of its own for a tab or a workspace, refused like the server (actions.py v_tab_rename)
+        if (verb === 'tab_rename' || verb === 'workspace_rename') {
+          const title = String(args.title ?? '').trim()
+          const all = state.tabs.tabs
+          if (verb === 'tab_rename') {
+            const tab = all.find(t => t.ref === args.tab_ref)
+            if (!tab) return fail(409, 'stale_tab', 'This tab is gone or changed meanwhile.')
+            if (tab.is_control) return fail(409, 'control_tab', 'The control session keeps its name.')
+            if (tab.slug || tab.item || tab.team) return fail(409, 'task_tab_name', 'This tab\'s name comes from its task and stays.')
+            if (tab.state_source === 'glyph' && tab.state !== 'shell') return fail(409, 'rename_loses_state', 'Renaming this tab would hide whether it waits.')
+            if (all.some(t => t.ref !== tab.ref && t.name.toLowerCase() === title.toLowerCase())) return fail(409, 'name_in_use', 'That name is already in use.')
+            state.tabs = { ...state.tabs, tabs: all.map(t => t.ref === tab.ref ? { ...t, name: title } : t) }
+          } else {
+            const spaces = state.tabs.workspaces ?? []
+            const ws = spaces.find(w => w.ref === args.ws_ref)
+            if (!ws) return fail(409, 'stale_workspace', 'This workspace is gone or changed meanwhile.')
+            if (ws.title === state.tabs.control?.name) return fail(409, 'control_tab', 'The control session keeps its name.')
+            if (spaces.some(w => w.ref !== ws.ref && w.title.toLowerCase() === title.toLowerCase())) return fail(409, 'name_in_use', 'That name is already in use.')
+            state.tabs = { ...state.tabs, workspaces: spaces.map(w => w.ref === ws.ref ? { ...w, title } : w),
+              tabs: all.map(t => t.ws_ref === ws.ref ? { ...t, workspace: title } : t) }
+          }
+          emit('tabs', state.tabs)
+          result.note = `Mock: now named ${title}`
+        }
+        // organize with AI: an invented proposal; apply changes the mock state as the terminal would
+        if (verb === 'organize_propose') {
+          mockOrganize = organizeProposal(now())
+          result.proposal = mockOrganize
+          result.note = ''
+        }
+        if (verb === 'organize_apply') {
+          if (!mockOrganize || mockOrganize.id !== args.proposal) return fail(409, 'stale_proposal', 'This proposal is no longer current. Ask for a new one.')
+          const picked = mockOrganize.items.filter(i => (args.items ?? []).includes(i.id))
+          let spaces = state.tabs.workspaces ?? []
+          let all = state.tabs.tabs
+          for (const it of picked) {
+            if (it.kind === 'ws_title') {
+              spaces = spaces.map(w => w.ref === it.ref ? { ...w, title: it.to } : w)
+              all = all.map(t => t.ws_ref === it.ref ? { ...t, workspace: it.to } : t)
+            }
+            if (it.kind === 'ws_color') spaces = spaces.map(w => w.ref === it.ref ? { ...w, color: it.to ? PALETTE[it.to] : null, color_name: it.to } : w)
+            if (it.kind === 'ws_description') spaces = spaces.map(w => w.ref === it.ref ? { ...w, description: it.to } : w)
+            if (it.kind === 'tab_title') all = all.map(t => t.ref === it.ref ? { ...t, name: it.to } : t)
+            if (it.kind === 'tab_move') {
+              const dest = spaces.find(w => w.ref === it.to)
+              all = all.map(t => t.ref === it.ref ? { ...t, ws_ref: it.to, workspace: dest?.title ?? t.workspace } : t)
+            }
+          }
+          state.tabs = { ...state.tabs, workspaces: spaces, tabs: all }
+          emit('tabs', state.tabs)
+          Object.assign(result, { applied: picked.map(i => i.id), skipped: [], failed: [] })
+          result.note = `Mock: ${picked.length} applied`
+        }
         if (['drop', 'done', 'later', 'hide', 'task_close', 'settle'].includes(verb) || (verb === 'approve_all' && args.confirm)) {
           result.settled = keys
           remember(verb, keys)

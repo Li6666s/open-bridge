@@ -164,6 +164,7 @@ class WorkVerbs:
         if muted:
             ctx.extra["muted"] = muted
         self.settle(ctx, row, self.tx["dropped_muted" if muted else "dropped"])
+        self.settle_soon(ctx)
 
     def v_inbox_unmute(self, ctx: Ctx, id: str) -> None:  # noqa: A002 - the API name
         run = ctx.call("inbox.unmute", id, self.inbox("unmute", id), SHORT_TIMEOUT)
@@ -183,6 +184,7 @@ class WorkVerbs:
             return
         ctx.history.append(history_item(row["key"], row["title"], "inbox", "done", item))
         self.settle(ctx, row, self.tx["res_done"])
+        self.settle_soon(ctx)
 
     def v_urgency(self, ctx: Ctx, key: str, value: str) -> None:
         row = self.entry(key)["row"]
@@ -260,6 +262,8 @@ class WorkVerbs:
         if len(rows) > 1:
             ctx.note(self.tx["tasks_closed"].format(n=done) + (f" · {failed} ✗" if failed else ""), bad=bool(failed))
             ctx.delta()
+        if done:
+            self.settle_soon(ctx)
 
     def v_settle(self, ctx: Ctx, keys: list[str], outcome: str, text: str | None = None) -> None:
         """Done or not doing, for any row: a finite task closes through task.py, an inbox item closes or
@@ -293,6 +297,7 @@ class WorkVerbs:
                     continue
                 ctx.history.append(history_item(key, row["title"], "inbox", "done" if outcome == "done" else "dropped", item))
                 self.settle(ctx, row, self.tx["res_done" if outcome == "done" else "dropped"])
+                self.settle_soon(ctx)
             elif kind == "other":
                 # not collector.settle: its source still lists the row, so it would stay invisible for good;
                 # dismissed it shows under the hidden rows with "show again"
@@ -320,6 +325,7 @@ class WorkVerbs:
         if not run.ok:
             ctx.note(self.tx["reopen_failed"].format(err=m.short(run.err, 100)), bad=True)
             return
+        self.settle_soon(ctx)
         self.reopened(ctx, "task_reopen", slug, (f"task:{slug}",),
                       self.tx[{"doing": "task_reopened", "review": "task_reopened_review"}.get(status, "task_reopened_backlog")])
 
@@ -328,6 +334,7 @@ class WorkVerbs:
         if not run.ok:
             ctx.note(self.tx["reopen_failed"].format(err=m.short(run.err, 100)), bad=True)
             return
+        self.settle_soon(ctx)
         self.reopened(ctx, "inbox_reopen", id, (f"inbox:{id}",), self.tx["inbox_reopened"])
 
     def v_task_review(self, ctx: Ctx, keys: list[str] | None = None, escalate: bool = False,

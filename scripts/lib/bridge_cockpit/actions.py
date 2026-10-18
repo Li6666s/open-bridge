@@ -21,6 +21,7 @@ from typing import Any, Callable
 
 from .. import model_route as mr
 from . import model as m
+from . import organize as og
 from .config import TARGETS
 from .agents import CONV_RE as AGENT_CONV_RE, MODES as AGENT_MODES, PEER_RE as AGENT_PEER_RE
 from .quick import CONV_RE
@@ -29,10 +30,11 @@ from .history import REOPEN_AS
 from .store import append_log
 # every shared name stays importable from here (ActionError, SPEC, the patterns): callers never changed
 from .actions_base import *  # noqa: F401,F403
-from .actions_base import (ACCOUNT_STATUSES, BOARD_MODES, CLOSE_REASONS, CMUX_VERBS, DROP_REASONS, INBOX_ID_RE,
-                           LAYOUT_VERBS, LOCAL_VERBS, NEEDS_CAP, PAGE_ID_RE, PRIORITIES, READ_ONLY_VERBS, ROW_REF_RE,
-                           ROW_STEP_RE, SESSION_ID_RE, SLUG_RE, SPEC, TAB_REF_RE, TEAM_RE, TILE_ID_RE,
-                           UNDO_TOKEN_RE, URGENCIES, ActionError, Ctx, bad_arg, check_date, check_key, check_text)
+from .actions_base import (ACCOUNT_STATUSES, ASK_HASH_RE, BOARD_MODES, CLOSE_REASONS, CMUX_VERBS, CONTROL_RE,
+                           DROP_REASONS, INBOX_ID_RE, LAYOUT_VERBS, LOCAL_VERBS, NEEDS_CAP, PAGE_ID_RE, PRIORITIES,
+                           READ_ONLY_VERBS, ROUTE_BY, ROW_REF_RE, ROW_STEP_RE, SESSION_ID_RE, SLUG_RE, SPEC, TAB_REF_RE,
+                           TAB_STATES, TEAM_RE, TILE_ID_RE, TITLE_MAX, UNDO_TOKEN_RE, URGENCIES, WS_REF_RE, ActionError,
+                           Ctx, bad_arg, check_date, check_key, check_text)
 from .actions_chats import ChatVerbs
 from .actions_launch import LaunchSteps
 from .actions_pages import PageVerbs
@@ -45,6 +47,7 @@ from .actions_work import WorkVerbs
 PATTERN_KINDS: dict[str, tuple[re.Pattern, str]] = {
     "conv": (CONV_RE, "not a conversation id"),
     "tab_ref": (TAB_REF_RE, "not a tab ref"),
+    "ws_ref": (WS_REF_RE, "not a workspace ref"),
     "peer": (AGENT_PEER_RE, "not a peer id"),
     "agent_conv": (AGENT_CONV_RE, "not a conversation id"),
     "slug": (SLUG_RE, "not a task slug"),
@@ -55,6 +58,8 @@ PATTERN_KINDS: dict[str, tuple[re.Pattern, str]] = {
     "undo_token": (UNDO_TOKEN_RE, "not an undo token"),
     "row_ref": (ROW_REF_RE, "not a row id"),
     "relay_id": (RELAY_ID_RE, "not a relay id"),
+    "ask_hash": (ASK_HASH_RE, "not a question hash"),
+    "organize_id": (og.ID_RE, "not a proposal id"),
 }
 _LAUNCH_MODELS = ("auto", *mr.MODELS)
 _LAUNCH_EFFORTS = ("auto", "standard", *mr.EFFORTS)
@@ -73,6 +78,8 @@ CHOICE_KINDS: dict[str, tuple[tuple, str]] = {
     "restore_as": (REOPEN_AS, " or ".join(REOPEN_AS)),
     "account_status": (ACCOUNT_STATUSES, "unknown status"),
     "board_mode": (BOARD_MODES, "off, mine or all"),
+    "route_by": (ROUTE_BY, f"must be one of {', '.join(ROUTE_BY)}"),
+    "tab_state": (TAB_STATES, f"must be one of {', '.join(TAB_STATES)}"),
 }
 
 
@@ -122,6 +129,35 @@ def _index(actions: "Actions", value: Any, name: str, today: dt.date) -> int:
     return value
 
 
+def _title(actions: "Actions", value: Any, name: str, today: dt.date) -> str:
+    # a name as typed: refused when it does not fit, never cut (a cut name is not the one asked for)
+    if isinstance(value, str) and re.search(r"[\n\t]", value):
+        raise bad_arg(name, "one line, no tabs")
+    return check_text(value, name, TITLE_MAX)
+
+
+def _tab_name(actions: "Actions", value: Any, name: str, today: dt.date) -> str:
+    # compared with the tab's name as it is, so never stripped
+    if not isinstance(value, str) or not 1 <= len(value) <= 120 or "\x00" in value or CONTROL_RE.search(value):
+        raise bad_arg(name, "must be a tab name of 1 to 120 characters")
+    return value
+
+
+def _digit(actions: "Actions", value: Any, name: str, today: dt.date) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= 9:
+        raise bad_arg(name, "must be a number from 1 to 9")
+    return value
+
+
+def _organize_items(actions: "Actions", value: Any, name: str, today: dt.date) -> list[str]:
+    if (not isinstance(value, list) or not 1 <= len(value) <= og.MAX_ITEMS
+            or not all(isinstance(x, str) and og.ITEM_ID_RE.match(x) for x in value)):
+        raise bad_arg(name, f"must be a list of 1 to {og.MAX_ITEMS} item ids")
+    if len(set(value)) != len(value):
+        raise bad_arg(name, "an item is listed twice")
+    return list(value)
+
+
 SPECIAL_KINDS: dict[str, Callable[["Actions", Any, str, dt.date], Any]] = {
     "keys": _keys,
     "key": lambda actions, value, name, today: check_key(value, name),
@@ -135,6 +171,10 @@ SPECIAL_KINDS: dict[str, Callable[["Actions", Any, str, dt.date], Any]] = {
     "bool": _bool,
     "team": _team,
     "index": _index,
+    "title": _title,
+    "tab_name": _tab_name,
+    "digit": _digit,
+    "organize_items": _organize_items,
 }
 ARG_KINDS = frozenset(PATTERN_KINDS) | frozenset(CHOICE_KINDS) | frozenset(SPECIAL_KINDS)
 
@@ -145,6 +185,7 @@ class Actions(LaunchSteps, WorkVerbs, TabVerbs, ChatVerbs, PageVerbs):
         self.write_lock = threading.Lock()
         self.layout_lock = threading.Lock()
         self.control_starting = False  # a control tab is being opened (start_control, outside the write lock)
+        self.proposals = og.Proposals(lambda: self.app.clock())
 
     # ------------------------------------------------------------ helpers
 
@@ -303,8 +344,8 @@ class Actions(LaunchSteps, WorkVerbs, TabVerbs, ChatVerbs, PageVerbs):
         if verb in NEEDS_CAP and NEEDS_CAP[verb] not in self.app.driver_caps():
             raise ActionError(503, "driver_cannot", f"the terminal driver cannot {NEEDS_CAP[verb]} a tab")
         ctx = Ctx(self, verb)
-        ctx.subject = ",".join(clean.get("keys", [])) or clean.get("key") or clean.get("tab_ref") or clean.get("relay_id") \
-            or clean.get("slug") or clean.get("id") or ""
+        ctx.subject = ",".join(clean.get("keys", [])) or clean.get("key") or clean.get("tab_ref") or clean.get("ws_ref") \
+            or clean.get("proposal") or clean.get("relay_id") or clean.get("slug") or clean.get("id") or ""
         handler = getattr(self, f"v_{verb}")
         ctx.pick = {k: clean.pop(k) for k in ("model", "effort") if k in clean}
         if verb in READ_ONLY_VERBS:
@@ -349,7 +390,7 @@ class Actions(LaunchSteps, WorkVerbs, TabVerbs, ChatVerbs, PageVerbs):
     def audit(self, ctx: Ctx) -> None:
         exits = ",".join(str(s["exit"]) for s in ctx.steps) or "-"
         ok = all(s["ok"] for s in ctx.steps)
-        self.audit_line(ctx.verb, ctx.subject, exits=exits, ok=ok)
+        self.audit_line(ctx.verb, ctx.subject, exits=exits, ok=ok, **ctx.audit_extra)
 
     def audit_line(self, verb: str, subject: str = "", **fields: Any) -> None:
         """One line in audit.log: time, verb, subject, then key=value. The one writer of that file, for

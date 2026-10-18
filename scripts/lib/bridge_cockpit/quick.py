@@ -15,7 +15,20 @@ from the closing `result` line; `total_cost_usd` is the sum of the whole session
 difference. Each question runs on a thread of its own; the page gets the conversations as the `quick`
 event. The conversations are kept in the state dir (quick.json), so a chat goes on after a restart.
 When the answer turns into work, the page hands it on: "Do it" starts an agent tab (Sonnet or more,
-the workplace config), or it goes to the control session.
+the workplace config), or it goes to the control session. The conversation then carries `handed`: where it
+went, when, and how that went (`starting` while it is handed on, then the launch outcome or the relay's
+`queued` / `offline`, `failed` on any error), so the page shows a status line instead of a silent click.
+
+A free question may come with `context`: what the page shows right now (logic.js situationText). It goes
+into the system text of that one turn as a block labelled as data, sent fresh with every turn, and is never
+kept: not in `turns`, not in quick.json, not in a transcript.
+
+A chat may be about something: `about` names the briefing row it was asked on and the inbox item or task
+behind it, or the inbox item it was handed on as. Once that item has ended after the chat started (an inbox
+item closed, executed, dropped or rejected and not reopened, a task moved to work/done/) and the chat has
+been quiet for SETTLE_QUIET_MS, the sweep takes it into the archive (why `settled`). The sweep rides on the
+tab poll, reads the files at most every SETTLE_EVERY_MS unless a verb that ends an item asked for it
+(settle_soon), and never touches a chat that is answering, has no item, or changed while it read.
 """
 from __future__ import annotations
 
@@ -28,6 +41,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 from .. import ai_services as ai
+from . import returns as ret
 from .text import TABLES
 
 MODELS = dict(ai.CLAUDE_MODELS)
@@ -38,6 +52,8 @@ MAX_CONVS = 30
 MAX_TURNS = 30
 LIVE_EVERY = 0.3
 LIVE_KEEP = 20000        # the most of a live text a page is sent in one piece
+SETTLE_EVERY_MS = 60_000     # the settle sweep reads the item files at most this often on plain polls
+SETTLE_QUIET_MS = 600_000    # a chat about an item that ended leaves only after this long untouched
 OUTPUT = ["--output-format", "stream-json", "--verbose", "--include-partial-messages"]
 SESSION_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\Z")
 CONV_RE = re.compile(r"^q[0-9a-f]{10}\Z")
@@ -181,6 +197,8 @@ class Quick:
         self.lock = threading.Lock()
         self.convs: dict[str, dict] = {}
         self.expire_failed_ms = 0
+        self.settle_at_ms = 0            # when the settle sweep last read the files
+        self.settle_due = False          # a verb ended or reopened an item: the next poll sweeps at once
         self.live: dict[str, dict] = {}      # per running conversation what the pages were sent: text, doing, seq
         self.seq = 0
         self.path = Path(app.state_dir) / "quick.json" if getattr(app, "state_dir", None) else None
@@ -202,6 +220,12 @@ class Quick:
                 last = c["turns"][-1]
                 if isinstance(last, dict) and last.get("a") is None and not last.get("error"):
                     last["error"] = "interrupted"
+            handed = c.get("handed")
+            if isinstance(handed, dict) and handed.get("status") == "starting":
+                # the server stopped in the middle of handing it on: nothing will end that claim now, so it
+                # reads as failed and the chat can be handed on again
+                handed["status"] = "failed"
+            c.setdefault("about", None)
             self.convs[c["id"]] = c
 
     def save(self) -> None:
@@ -269,9 +293,10 @@ class Quick:
                     "convs": json.loads(json.dumps(convs))}
 
     def start(self, prompt: str, model: str | None, conv: str | None = None, kind: str = "free",
-              place: str | None = None) -> str:
+              place: str | None = None, context: str | None = None, about: dict | None = None) -> str:
         """Ask in a new conversation, or go on in `conv`; returns the conversation id at once. A new one with
-        `place` "core" (the start page's core) takes the place of the last: it goes to the archive."""
+        `place` "core" (the start page's core) takes the place of the last: it goes to the archive. `about`
+        (a new one only) names the row and the item it is about, for the settle sweep."""
         model, provider, actual_model = self.selection(model)
         now = int(self.app.clock())
         with self.lock:
@@ -286,7 +311,7 @@ class Quick:
             else:
                 conv = "q" + uuid.uuid4().hex[:10]
                 c = {"id": conv, "kind": kind, "started_ms": now, "session": None, "total_usd": 0.0, "turns": [],
-                     "running": False, "last_ms": now}
+                     "running": False, "last_ms": now, "about": dict(about) if about else None}
                 if place:
                     c["place"] = place
                     for old in [x for x in self.convs.values() if x.get("place") == place and not x["running"]]:
@@ -313,10 +338,99 @@ class Quick:
             c["last_ms"] = now
             self.save()
         thread = threading.Thread(target=self._run, args=(conv, model, history + prompt, session, provider, actual_model),
-                                  name="bridge-cockpit-quick", daemon=True)
+                                  kwargs={"context": context}, name="bridge-cockpit-quick", daemon=True)
         thread.start()
         self.app.broadcast("quick", self.state())
         return conv
+
+    def claim_handoff(self, conv: str, to: str, now: float) -> dict:
+        """Mark `conv` as being handed on to `to`; RuntimeError("handoff_running") while an earlier handoff is
+        still starting. Any finished one (started, failed, offline, ...) may be followed by another."""
+        with self.lock:
+            c = self.convs.get(conv)
+            if c is None:
+                raise KeyError("no such conversation")
+            if (c.get("handed") or {}).get("status") == "starting":
+                raise RuntimeError("handoff_running")
+            c["handed"] = {"to": to, "at_ms": int(now), "status": "starting"}
+            self.save()
+            handed = dict(c["handed"])
+        self.app.broadcast("quick", self.state())
+        return handed
+
+    def set_handed(self, conv: str, **fields: Any) -> dict | None:
+        """How the handoff went: the fields go onto the record, it is kept, and the pages are told."""
+        with self.lock:
+            c = self.convs.get(conv)
+            if c is None or not isinstance(c.get("handed"), dict):
+                return None
+            c["handed"].update(fields)
+            self.save()
+            handed = dict(c["handed"])
+        self.app.broadcast("quick", self.state())
+        return handed
+
+    def set_about(self, conv: str, about: dict) -> bool:
+        """Name what a chat is about when it names no item yet (a handed chat: the inbox item it became). A chat
+        from an info row nobody filed has an `about` without an item: that one takes the handed item too."""
+        with self.lock:
+            c = self.convs.get(conv)
+            old = c.get("about") if c is not None else None
+            if c is None or isinstance(old, dict) and (old.get("inbox") or old.get("task")):
+                return False
+            c["about"] = dict(about)
+            self.save()
+        return True
+
+    def settle_soon(self) -> None:
+        """An item ended or came back: the next tab poll sweeps without waiting for the minute."""
+        self.settle_due = True
+
+    def sweep_settled(self, now: float, force: bool = False) -> bool:
+        """Chats about an item that has ended since the chat started go to the archive (why `settled`), once
+        they have been quiet for SETTLE_QUIET_MS. Reads files outside the lock and checks again under it that
+        nothing changed meanwhile. True when a chat left."""
+        now = int(now)
+        if not force and not self.settle_due and now - self.settle_at_ms < SETTLE_EVERY_MS:
+            return False
+        if now - self.expire_failed_ms < 3600 * 1000:
+            return False                  # the archive refused lately: try again after the back-off
+        self.settle_at_ms, self.settle_due = now, False
+        with self.lock:
+            candidates = [(c["id"], c.get("last_ms") or c["started_ms"], c["started_ms"], dict(c["about"]))
+                          for c in self.convs.values()
+                          if not c.get("running") and isinstance(c.get("about"), dict)
+                          and (c["about"].get("inbox") or c["about"].get("task"))]
+        root = self.app.root
+        settled = []
+        for cid, last, started, about in candidates:
+            if now - last < SETTLE_QUIET_MS:
+                continue
+            inbox, task = about.get("inbox"), about.get("task")
+            if inbox:
+                at = ret.ended_at(root, str(inbox))
+                ended = at is not None and at >= started
+            else:
+                ended = ret.task_done(root, str(task))
+            if ended:
+                settled.append((cid, last, about))
+        if not settled:
+            return False
+        gone = False
+        with self.lock:
+            for cid, last, about in settled:
+                c = self.convs.get(cid)
+                # a new question, a reply or a handoff while the files were read: it stays
+                if c is None or c.get("running") or (c.get("last_ms") or c["started_ms"]) != last or c.get("about") != about:
+                    continue
+                if not self._archive(c, "settled", now):
+                    self.expire_failed_ms = now   # the archive is down: keep them, try again in an hour
+                    break
+                del self.convs[cid]
+                gone = True
+            if gone:
+                self.save()
+        return gone
 
     def forget(self, conv: str) -> None:
         """Take a chat off the list into the archive; one still answering stays until it is done."""
@@ -383,10 +497,13 @@ class Quick:
         return (f"{f['history']}:\n" + "\n\n".join(parts) + f"\n\n{f['new']}: ") if parts else ""
 
     def _run(self, conv: str, model: str, prompt: str, session: str | None,
-             provider: str = "claude", actual_model: str | None = None) -> None:
+             provider: str = "claude", actual_model: str | None = None, context: str | None = None) -> None:
         app = self.app
         system = system_text(self.lang(), getattr(app.cfg, "person_name", None), self._can_launch(),
                              time.strftime("%Y-%m-%d", time.localtime(app.clock() / 1000)))
+        if context:
+            # what the page shows, as data after the system text, fresh on every turn and kept nowhere
+            system += "\n\n" + TABLES[self.lang()]["quick_situation"].format(text=app.scrub(context))
         live = ai.CodexStream() if provider == "codex" else Live(getattr(app, "root", None))
         sent = [0.0]
 

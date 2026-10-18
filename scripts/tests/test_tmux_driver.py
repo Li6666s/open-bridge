@@ -202,9 +202,59 @@ def tm(tmp_path):
 
 
 @needs_tmux
-def test_caps_lists_all_twelve_verbs(tm):
+def test_caps_lists_all_fourteen_verbs(tm):
     assert set(tm.call({"verb": "caps"})["caps"]) == set(td.VERBS)
-    assert len(td.VERBS) == 12
+    assert len(td.VERBS) == 14 and {"rename_workspace", "move_tab"} <= set(td.VERBS)
+    assert not {"set_color", "set_description"} & set(td.VERBS)      # tmux has no colour or description
+
+
+@needs_tmux
+def test_move_tab_moves_the_window_into_the_session(tm):
+    tm.raw("new-session", "-d", "-s", "Other", "-n", "three", "sh")
+    one, other = tm.by_name("one"), tm.by_name("three")
+    report = tm.call({"verb": "move_tab", "tab": one["ref"], "workspace": other["ws_ref"]})["report"]
+    assert report and not report[0].startswith("ERROR")
+    moved = tm.by_name("one")
+    assert moved["ref"] == one["ref"] and moved["ws_ref"] == other["ws_ref"] and moved["workspace"] == "Other"
+    assert tm.by_name("two")["workspace"] == "Work"                  # the other window stays
+    # a malformed or unknown ref is an error, never a guess
+    assert "not a tmux session ref" in tm.call({"verb": "move_tab", "tab": one["ref"], "workspace": "Work"},
+                                               ok=False)["error"]
+    assert "no open workspace" in tm.call({"verb": "move_tab", "tab": one["ref"], "workspace": "$999"},
+                                          ok=False)["error"]
+
+
+@needs_tmux
+def test_move_tab_never_moves_the_last_window_of_a_session(tm):
+    tm.raw("new-session", "-d", "-s", "Solo", "-n", "alone", "sh")
+    alone, work = tm.by_name("alone"), tm.by_name("one")
+    report = tm.call({"verb": "move_tab", "tab": alone["ref"], "workspace": work["ws_ref"]})["report"]
+    assert report[0].startswith("ERROR") and "last" in report[0]
+    assert tm.by_name("alone")["workspace"] == "Solo"
+
+
+@needs_tmux
+def test_tabs_carry_the_session_id_as_ws_ref(tm):
+    sid = tm.raw("display-message", "-p", "-t", "=Work:", "#{session_id}").strip()
+    tabs = tm.tabs()
+    assert sid.startswith("$") and {t["ws_ref"] for t in tabs} == {sid}
+
+
+@needs_tmux
+def test_rename_workspace_renames_the_session_with_the_sanitized_title(tm):
+    sid = tm.by_name("one")["ws_ref"]
+    report = tm.call({"verb": "rename_workspace", "workspace": sid, "title": "open.bridge: notes"})["report"]
+    assert report and not report[0].startswith("ERROR")
+    assert {t["workspace"] for t in tm.tabs()} == {"open_bridge_ notes"}
+    assert {t["ws_ref"] for t in tm.tabs()} == {sid}          # the id stays, only the name changes
+    # a name another session has (after the same sanitizer), a malformed or unknown ref: errors, nothing renamed
+    tm.raw("new-session", "-d", "-s", "Other_x", "sh")
+    assert "in use" in tm.call({"verb": "rename_workspace", "workspace": sid, "title": "other.x"}, ok=False)["error"]
+    assert "not a tmux session ref" in tm.call({"verb": "rename_workspace", "workspace": "Work", "title": "X"},
+                                               ok=False)["error"]
+    assert "no open workspace" in tm.call({"verb": "rename_workspace", "workspace": "$999", "title": "X"},
+                                          ok=False)["error"]
+    assert "open_bridge_ notes" in {t["workspace"] for t in tm.tabs()}
 
 
 @needs_tmux
@@ -375,3 +425,16 @@ def test_agent_state_and_session_from_a_live_pane(tm, screen, state):
         time.sleep(0.1)
     assert tab["state"] == state
     assert tm.call({"verb": "sessions"})["sessions"] == {"agent": "1b4e28ba-2fa1-11d2-883f-0016d3cca427"}
+
+
+@needs_tmux
+def test_a_title_that_starts_with_a_dash_names_a_tab_and_a_workspace(tm):
+    """tmux reads a leading '-' as its flags: the free text goes after `--`"""
+    one = tm.by_name("one")["ref"]
+    report = tm.call({"verb": "rename", "tab": one, "title": "-scratch"})["report"]
+    assert report and not report[0].startswith("ERROR")
+    assert tm.by_name("-scratch")["ref"] == one
+    sid = tm.by_name("-scratch")["ws_ref"]
+    report = tm.call({"verb": "rename_workspace", "workspace": sid, "title": "-notes"})["report"]
+    assert report and not report[0].startswith("ERROR")
+    assert {t["workspace"] for t in tm.tabs()} == {"-notes"}

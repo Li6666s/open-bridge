@@ -1104,7 +1104,8 @@ test('the day column: waiting tabs stand in the left column only where no tab co
 
 test('the chat decides per message: ask (read only) or solve it in a real Claude tab in cmux', () => {
   const foot = readComponents().match(/function ChatFoot\([\s\S]*?\n\}/)[0]
-  assert.match(foot, /c\.act\('chat_tab', \{ text: v \}\)/)                         // a new problem opens a tab at once
+  // a new problem opens a tab at once, saying how the route chip chose it (audit only)
+  assert.match(foot, /c\.act\('chat_tab', \{ text: v, routed \}\)/)
   // a chat goes on in a tab; an empty box adds no order (the server refused an empty text, the click came to nothing)
   assert.match(foot, /c\.act\('quick_handoff', \{ conv: conv\.id, to: 'tab', \.\.\.\(v \? \{ text: v \} : \{\}\) \}\)/)
   const box = readComponents().match(/function SendBox\([\s\S]*?\n\}/)[0]
@@ -3037,6 +3038,117 @@ test('roomsOf: the longest Bridge path wins, the real folder counts, workspaces 
   assert.deepEqual(r.bridges.map(b => b.id), ['outer'])
 })
 
+// ---------------------------------------------------------------- agent counts per tab and workspace (agentLoad)
+
+const sess = (ref, wsRef, workspace, over = {}) => ({ status: 'idle', agents: { running_count: 0 }, workflows: [],
+  tab: ref ? { ref, ws_ref: wsRef, workspace, name: ref } : null, ...over })
+
+test('agentLoad sums busy sessions, running subagents and workflows per tab ref', () => {
+  const load = logic.agentLoad([
+    sess('s:1', 'w:1', 'Bridge', { status: 'busy', agents: { running_count: 2 }, workflows: [{ status: 'running', agents: 3 }] }),
+    sess('s:1', 'w:1', 'Bridge', { status: 'busy', agents: { running_count: 1 } }),            // two sessions on one tab
+    sess('s:2', 'w:1', 'Bridge'),
+  ], [])
+  assert.deepEqual(load.byTab['s:1'], { sessions: 2, busy: 2, subagents: 3, workflows: 1 })
+  assert.deepEqual(load.byTab['s:2'], { sessions: 1, busy: 0, subagents: 0, workflows: 0 })
+  assert.deepEqual(load.byWorkspace['w:1'], { sessions: 3, busy: 2, subagents: 3, workflows: 1 })
+  assert.deepEqual(load.total, { busy: 2, subagents: 3, workflows: 1, workflowAgents: 3 })
+  assert.deepEqual(logic.agentLoad(undefined, undefined).total, { busy: 0, subagents: 0, workflows: 0, workflowAgents: 0 })
+})
+
+test('agentLoad joins workspaces by ws_ref, not by title', () => {
+  const load = logic.agentLoad([
+    sess('s:1', 'w:1', 'Same', { status: 'busy' }),
+    sess('s:2', null, 'Same', { agents: { running_count: 4 } }),                                // ws_ref from the tab list
+    { status: 'busy', agents: { running_count: 0 }, workflows: [], tab: { ref: 's:9', workspace: 'Lone', name: 'x' } },
+  ], [{ ref: 's:2', ws_ref: 'w:2', workspace: 'Same' }])
+  assert.deepEqual(load.byWorkspace['w:1'], { sessions: 1, busy: 1, subagents: 0, workflows: 0 })
+  assert.deepEqual(load.byWorkspace['w:2'], { sessions: 1, busy: 0, subagents: 4, workflows: 0 })
+  assert.equal(load.byWorkspace['title:Same'], undefined)                                     // never both by title
+  assert.deepEqual(load.byWorkspace['title:Lone'], { sessions: 1, busy: 1, subagents: 0, workflows: 0 })   // no ref at all: the title
+})
+
+test('agentLoad keeps sessions without a tab out of total and in elsewhere', () => {
+  const load = logic.agentLoad([
+    sess('s:1', 'w:1', 'Bridge', { status: 'busy' }),
+    sess(null, null, null, { status: 'busy', agents: { running_count: 2 }, workflows: [{ status: 'running', agents: 5 }] }),
+  ], [])
+  assert.equal(load.unmapped.length, 1)
+  assert.deepEqual(load.total, { busy: 1, subagents: 0, workflows: 0, workflowAgents: 0 })
+  assert.deepEqual(load.elsewhere, { busy: 1, subagents: 2, workflows: 1, workflowAgents: 5 })
+  assert.deepEqual(Object.keys(load.byTab), ['s:1'])
+})
+
+test('agentLoad leaves paused workflows out of the working count', () => {
+  const load = logic.agentLoad([sess('s:1', 'w:1', 'Bridge', { workflows: [
+    { status: 'running', agents: 4 }, { status: 'paused', agents: 2 }, { status: 'pending' }] })], [])
+  assert.equal(load.byTab['s:1'].workflows, 2)
+  assert.deepEqual(load.total, { busy: 0, subagents: 0, workflows: 2, workflowAgents: 4 })
+})
+
+test('roomsOf puts load on every tab and every workspace', () => {
+  const r = logic.roomsOf({
+    tabs: { workspaces: [{ ref: 'w:1', title: 'Same' }, { ref: 'w:2', title: 'Same' }, { ref: 'w:3', title: 'Quiet' }],
+      tabs: [{ ref: 's:1', ws_ref: 'w:1', workspace: 'Same', state: 'working', name: 'a' },
+        { ref: 's:2', ws_ref: 'w:1', workspace: 'Same', state: 'waiting', name: 'b' },
+        { ref: 's:3', ws_ref: 'w:2', workspace: 'Same', state: 'shell', name: 'c' }] },
+    sessions: { sessions: [sess('s:1', 'w:1', 'Same', { status: 'busy', agents: { running_count: 2 } }),
+      sess('s:2', 'w:1', 'Same', { workflows: [{ status: 'running' }] })] },
+  })
+  const [one, two, quiet] = r.workspaces
+  assert.deepEqual(one.tabs.map(t => [t.ref, t.load.busy, t.load.subagents, t.load.workflows]), [['s:2', 0, 0, 1], ['s:1', 1, 2, 0]])
+  assert.deepEqual(one.load, { sessions: 2, busy: 1, subagents: 2, workflows: 1 })
+  assert.deepEqual(two.load, { sessions: 0, busy: 0, subagents: 0, workflows: 0 })       // the same title shares nothing
+  assert.deepEqual(two.tabs[0].load, { sessions: 0, busy: 0, subagents: 0, workflows: 0 })
+  assert.deepEqual(quiet.load, { sessions: 0, busy: 0, subagents: 0, workflows: 0 })
+})
+
+test('roomsOf gives a room built from tabs the shared ws_ref of its tabs', () => {
+  const r = logic.roomsOf({ tabs: { workspaces: null, tabs: [
+    { ref: '%1', ws_ref: '$1', workspace: 'One', state: 'waiting', name: 'a' },
+    { ref: '%2', ws_ref: '$1', workspace: 'One', state: 'working', name: 'b' },
+    { ref: '%3', ws_ref: '$2', workspace: 'Mixed', state: 'working', name: 'c' },
+    { ref: '%4', ws_ref: '$3', workspace: 'Mixed', state: 'working', name: 'd' },
+    { ref: '%5', workspace: 'Bare', state: 'working', name: 'e' }] },
+    sessions: { sessions: [sess('%2', '$1', 'One', { status: 'busy' })] } })
+  assert.deepEqual(r.workspaces.map(w => [w.title, w.ref, w.known]), [['One', '$1', false], ['Mixed', null, false], ['Bare', null, false]])
+  assert.equal(r.workspaces[0].load.busy, 1)
+  assert.deepEqual(r.workspaces.map(w => w.key), ['title:One', 'title:Mixed', 'title:Bare'])   // the key stays what it was
+})
+
+test('roomsOf without ui keeps the terminal order', () => {
+  const s = { tabs: { workspaces: [{ ref: 'w:1', title: 'Calm' }, { ref: 'w:2', title: 'Loud' }],
+    tabs: [{ ref: 's:1', ws_ref: 'w:1', workspace: 'Calm', state: 'shell', name: 'a' },
+      { ref: 's:2', ws_ref: 'w:2', workspace: 'Loud', state: 'needs-you', name: 'b' }] } }
+  assert.deepEqual(logic.roomsOf(s).workspaces.map(w => w.title), ['Calm', 'Loud'])
+  assert.deepEqual(logic.roomsOf({ ...s, ui: { roomsSort: 'terminal' } }).workspaces.map(w => w.title), ['Calm', 'Loud'])
+  assert.deepEqual(logic.roomsOf({ ...s, ui: {} }).workspaces.map(w => w.title), ['Calm', 'Loud'])
+})
+
+test('roomsOf in urgency mode orders rooms needs-you, waiting, working, idle with pinned, terminal index and title as tie breaks', () => {
+  const tab = (ref, ws, title, state) => ({ ref, ws_ref: ws, workspace: title, state, name: ref })
+  const s = { ui: { roomsSort: 'urgency' }, tabs: {
+    workspaces: [{ ref: 'w:1', title: 'Empty' }, { ref: 'w:2', title: 'Shell' }, { ref: 'w:3', title: 'Busy B' },
+      { ref: 'w:4', title: 'Asks' }, { ref: 'w:5', title: 'Waits' }, { ref: 'w:6', title: 'Busy A', pinned: true },
+      { ref: 'w:7', title: 'Busy C' }],
+    tabs: [tab('s:1', 'w:2', 'Shell', 'shell'), tab('s:2', 'w:3', 'Busy B', 'working'), tab('s:3', 'w:4', 'Asks', 'needs-you'),
+      tab('s:4', 'w:4', 'Asks', 'shell'), tab('s:5', 'w:5', 'Waits', 'waiting'), tab('s:6', 'w:6', 'Busy A', 'working'),
+      tab('s:7', 'w:7', 'Busy C', 'working'),
+      // rooms built from tabs have no index: the title breaks the tie
+      tab('%1', null, 'Zeta', 'working'), tab('%2', null, 'Alpha', 'working')] } }
+  assert.deepEqual(logic.roomsOf(s).workspaces.map(w => w.title),
+    ['Asks', 'Waits', 'Busy A', 'Busy B', 'Busy C', 'Alpha', 'Zeta', 'Empty', 'Shell'])
+})
+
+test('header and rooms take counts only from sessionCounts or agentLoad', () => {
+  for (const file of ['views/header.js', 'views/rooms.js']) {
+    const src = read(file)
+    assert.doesNotMatch(src, /running_count|\.workflows\s*\?\?|\.workflows\?\.|workflows\.(length|filter|reduce)|workflowAgents\s*[+=]/, file)   // no count of their own
+  }
+  assert.match(read('views/header.js'), /agentLoad\(s\.sessions\?\.sessions, s\.tabs\?\.tabs\)/)
+  assert.match(read('logic.js'), /export function roomsOf[\s\S]*?agentLoad\(s\.sessions\?\.sessions, s\.tabs\?\.tabs\)/)
+})
+
 test('rooms: every quick chat in the sidebar can be removed, by a button beside the row, never inside it', () => {
   const rooms = read('views/rooms.js')
   assert.match(rooms, /class="room-chat-row"/)
@@ -3057,6 +3169,24 @@ test('listedChats: the picture of the day and chats past keep_hours stay out of 
     quick: { keep_hours: 24, convs } })
   assert.deepEqual(r.workspaces[0].chats.map(x => x.id), ['q1', 'q4', 'q5'])
   assert.match(read('views/chat.js'), /listedChats\(q\.convs, q\.keep_hours, s\.now\)/)       // the Chat tab lists the same
+})
+
+test('agents list hides conversations past keep_hours like chats', () => {
+  const now = Date.UTC(2026, 9, 18, 20)
+  const h = 3600000
+  const convs = [{ id: 'g1', peer: 'a', last_ms: now - h, turns: [{ q: 'x' }] },
+    { id: 'g2', peer: 'a', last_ms: now - 30 * h, turns: [{ q: 'old' }] },
+    { id: 'g3', peer: 'a', last_ms: now - 30 * h, running: true, turns: [{ q: 'sent' }] },
+    { id: 'g4', peer: 'a', last_ms: now - 30 * h, turns: [{ q: 'held', waiting: true }] }]
+  // the server keeps a running or a held conversation past the limit (agents.py expire), the page does too
+  assert.deepEqual(logic.listedChats(convs, 24, now).map(x => x.id), ['g1', 'g3', 'g4'])
+  assert.deepEqual(logic.listedChats(convs, 0, now).map(x => x.id), ['g1', 'g2', 'g3', 'g4'])
+  const agents = read('views/agents.js')
+  assert.match(agents, /listedChats\(a\.convs, a\.keep_hours, s\.now\)/)
+  // the agents state the page loads keeps keep_hours, like the pushed event
+  assert.match(read('logic.js'), /convs: res\.data\.convs \?\? \[\],\s*\.\.\.\(res\.data\.keep_hours != null \? \{ keep_hours: res\.data\.keep_hours \} : \{\}\)/)
+  // picking an agent opens its latest conversation the list shows, never one already past keep_hours
+  assert.match(read('app.js'), /pickAgent: peer => \{\s*const a = store\.get\(\)\.agents \?\? \{\}\s*const latest = listedChats\(a\.convs, a\.keep_hours, Date\.now\(\)\)\.filter\(x => x\.peer === peer\)/)
 })
 
 test('rooms: a quick chat shows a speech bubble, not a question mark; the core asks with place core', () => {
@@ -3609,4 +3739,361 @@ test('the demo answers the tab screen like the server: a hash, and unchanged wit
   } finally {
     fs.rmSync(dir, { recursive: true, force: true })
   }
+})
+
+// ---------------------------------------------------------------- what a tab waits for, answered from the page
+
+const ASK_HASH = '0123456789abcdef'
+const askTab = (over = {}) => ({ ref: 'surface:7', name: 'alpha', workspace: 'Ops', state: 'needs-you', waiting: true,
+  is_control: false, filed_by: null, last: '', ask: { text: 'Do you want to proceed?', hash: ASK_HASH, yes_no: true, draft: false,
+    options: [{ n: 1, label: 'Yes' }, { n: 2, label: 'Yes, and do not ask again' }, { n: 3, label: 'No, tell Claude what to do' }] }, ...over })
+const allCaps = { driver: { caps: ['tabs', 'send', 'key', 'focus', 'screen'] } }
+const verbsOf = r => r.buttons.map(b => b.verb)
+
+test('replyOptions gives one button per option for needs-you and no text box', () => {
+  const en = text.TABLES.en
+  const r = logic.replyOptions(askTab(), allCaps, en)
+  assert.equal(r.textBox, false)
+  assert.deepEqual(r.buttons.filter(b => b.verb === 'tab_option').map(b => [b.label, b.args.n]),
+    [['Yes', 1], ['Yes, and do not ask again', 2], ['No, tell Claude what to do', 3]])
+  // "Yes" is never "press 1" on a dialog: no tab_yes beside the options, the tab itself stays one click away
+  assert.deepEqual(verbsOf(r), ['tab_option', 'tab_option', 'tab_option', 'tab_jump'])
+  assert.equal(r.buttons.at(-1).label, en.reply.openTab)
+  assert.equal(new Set(r.buttons.map(b => b.id)).size, r.buttons.length)
+  // a dialog that could not be read: the tab, and today's yes and no
+  const unread = logic.replyOptions(askTab({ ask: null }), allCaps, en)
+  assert.deepEqual(verbsOf(unread), ['tab_jump', 'tab_yes', 'tab_no'])
+  assert.equal(unread.textBox, false)
+})
+
+test('replyOptions gives yes and no only for a yes or no question', () => {
+  const en = text.TABLES.en
+  const waiting = askTab({ ref: 'surface:12', name: 'research', state: 'waiting',
+    ask: { text: 'Should I summarise them?', hash: ASK_HASH, yes_no: true, draft: false, options: [] } })
+  const r = logic.replyOptions(waiting, allCaps, en)
+  assert.deepEqual(verbsOf(r), ['tab_send', 'tab_send', 'tab_go_on'])
+  assert.deepEqual(r.buttons.slice(0, 2).map(b => [b.label, b.args.text]), [[en.reply.yes, en.reply.yesText], [en.reply.no, en.reply.noText]])
+  assert.equal(r.textBox, true)
+  const de = logic.replyOptions(waiting, allCaps, text.TABLES.de)
+  assert.deepEqual(de.buttons.slice(0, 2).map(b => b.args.text), ['Ja', 'Nein'])
+})
+
+test('replyOptions gives go on and a text box for a summary, go on hidden when filed', () => {
+  const en = text.TABLES.en
+  const summary = askTab({ state: 'waiting', ask: { text: 'Done, the tests are green.', hash: ASK_HASH, yes_no: false, draft: false, options: [] } })
+  const r = logic.replyOptions(summary, allCaps, en)
+  assert.deepEqual(verbsOf(r), ['tab_go_on'])
+  assert.equal(r.buttons[0].label, en.reply.goOn)
+  assert.equal(r.textBox, true)
+  const filed = logic.replyOptions({ ...summary, filed_by: 'inbox:x', waiting: false }, allCaps, en)
+  assert.deepEqual(verbsOf(filed), [])
+  assert.equal(filed.textBox, true)
+  // without a question read (no screen right, nothing readable): the same as a summary
+  assert.deepEqual(verbsOf(logic.replyOptions({ ...summary, ask: null }, allCaps, en)), ['tab_go_on'])
+  // the control session answers through its own box, and a tab at work waits for nothing
+  assert.deepEqual(logic.replyOptions({ ...summary, is_control: true }, allCaps, en), { buttons: [], textBox: false })
+  assert.deepEqual(logic.replyOptions({ ...summary, state: 'working' }, allCaps, en), { buttons: [], textBox: false })
+})
+
+test('replyOptions hides key buttons without the key cap and text replies without send', () => {
+  const en = text.TABLES.en
+  const noKey = { driver: { caps: ['tabs', 'send', 'focus'] } }
+  assert.deepEqual(verbsOf(logic.replyOptions(askTab(), noKey, en)), ['tab_jump'])
+  assert.deepEqual(verbsOf(logic.replyOptions(askTab({ ask: null }), noKey, en)), ['tab_jump'])
+  const noSend = { driver: { caps: ['tabs', 'key'] } }
+  const waiting = askTab({ state: 'waiting', ask: { text: 'Go on?', hash: ASK_HASH, yes_no: true, draft: false, options: [] } })
+  assert.deepEqual(logic.replyOptions(waiting, noSend, en), { buttons: [], textBox: false })
+  assert.deepEqual(verbsOf(logic.replyOptions(askTab(), noSend, en)), ['tab_option', 'tab_option', 'tab_option'])
+  // before the driver answered every control shows, as canTab says
+  assert.deepEqual(verbsOf(logic.replyOptions(waiting, { driver: { caps: null } }, en)), ['tab_send', 'tab_send', 'tab_go_on'])
+})
+
+test('replies carry expect, the ask hash and the tab name', () => {
+  const en = text.TABLES.en
+  const options = logic.replyOptions(askTab(), allCaps, en).buttons
+  assert.deepEqual(options[1].args, { tab_ref: 'surface:7', n: 2, seen: ASK_HASH, name: 'alpha' })
+  assert.deepEqual(options.at(-1).args, { tab_ref: 'surface:7' })
+  const waiting = askTab({ state: 'waiting', ask: { text: 'Go on?', hash: ASK_HASH, yes_no: true, draft: false, options: [] } })
+  const [yes, , goOn] = logic.replyOptions(waiting, allCaps, en).buttons
+  assert.deepEqual(yes.args, { tab_ref: 'surface:7', text: en.reply.yesText, expect: 'waiting', seen: ASK_HASH, name: 'alpha' })
+  assert.deepEqual(goOn.args, { tab_ref: 'surface:7', seen: ASK_HASH, name: 'alpha' })
+  assert.deepEqual(logic.replySend(waiting, 'please go on'),
+    { verb: 'tab_send', args: { tab_ref: 'surface:7', text: 'please go on', expect: 'waiting', seen: ASK_HASH, name: 'alpha' } })
+  // no question read: no seen, the rest stays
+  assert.deepEqual(logic.replySend({ ...waiting, ask: null }, 'x').args, { tab_ref: 'surface:7', text: 'x', expect: 'waiting', name: 'alpha' })
+  assert.deepEqual(logic.replyOptions(askTab({ ask: null }), allCaps, en).buttons[1].args, { tab_ref: 'surface:7', name: 'alpha' })
+})
+
+test('a reply names the tab only by a name the server can take: 1 to 120 characters, no control characters', () => {
+  const en = text.TABLES.en
+  const waiting = askTab({ state: 'waiting', ask: { text: 'Go on?', hash: ASK_HASH, yes_no: true, draft: false, options: [] } })
+  // a title of only a status glyph reads as '', a long one is past the validator: neither may refuse every answer
+  for (const name of ['', 'x'.repeat(121), 'bell\u0007tab', null, undefined]) {
+    const args = logic.replySend({ ...waiting, name }, 'go').args
+    assert.ok(!('name' in args), JSON.stringify(name))
+    assert.equal(args.seen, ASK_HASH)
+    const [yes] = logic.replyOptions({ ...waiting, name }, allCaps, en).buttons
+    assert.ok(!('name' in yes.args))
+  }
+  assert.equal(logic.replySend({ ...waiting, name: 'x'.repeat(120) }, 'go').args.name, 'x'.repeat(120))
+})
+
+test('an answer marks only the occurrence of the question it went to', () => {
+  const tab = askTab({ state: 'waiting', since_ms: 5000, ask: { text: 'Run npm test?', hash: ASK_HASH, yes_no: true, draft: false, options: [] } })
+  const mark = logic.answerMark(tab, 'Yes', 9000)
+  assert.deepEqual(mark, { hash: ASK_HASH, q: 'Yes', ms: 9000, since: 5000, state: 'waiting' })
+  assert.equal(logic.isAnswered(mark, tab), true)
+  // the same words asked again later: the tab went to work and came back, its state started anew
+  assert.equal(logic.isAnswered(mark, { ...tab, since_ms: 12000 }), false)
+  assert.equal(logic.isAnswered(mark, { ...tab, state: 'needs-you' }), false)
+  assert.equal(logic.isAnswered(mark, { ...tab, ask: { ...tab.ask, hash: 'f'.repeat(16) } }), false)
+  assert.equal(logic.isAnswered(null, tab), false)
+  assert.equal(logic.isAnswered({ ...mark, hash: null }, { ...tab, ask: null }), false)
+})
+
+test('pruneAnswered forgets an answer after two minutes and keeps the object when nothing goes', () => {
+  const answered = { 'surface:7': { hash: ASK_HASH, q: 'Yes', ms: 1000 }, 'surface:9': { hash: null, q: 'x', ms: 100000 } }
+  assert.equal(logic.pruneAnswered(answered, 100000), answered)
+  assert.deepEqual(Object.keys(logic.pruneAnswered(answered, 1000 + logic.ANSWERED_KEEP_MS)), ['surface:9'])
+  assert.deepEqual(logic.pruneAnswered(undefined, 5), {})
+})
+
+test('text tables: the reply words of a tab in both languages, with the answer they name', () => {
+  for (const t of Object.values(text.TABLES)) {
+    for (const k of ['asks', 'yes', 'no', 'goOn', 'yesText', 'noText', 'placeholder', 'send', 'movedOn', 'unreadable', 'openTab', 'draft']) {
+      assert.equal(typeof t.reply[k], 'string', k)
+    }
+    assert.match(t.reply.answered('Yes'), /Yes/)
+    assert.equal(typeof t.errors.tab_moved, 'string')
+    assert.equal(typeof t.errors.tab_draft, 'string')
+  }
+  assert.equal(text.TABLES.en.reply.asks, 'Waiting for you')
+  assert.equal(text.TABLES.de.reply.asks, 'Wartet auf dich')
+})
+
+// ---------------------------------------------------------------- renaming a tab or a workspace
+
+test('canRename hides rename for task tabs, the control tab, glyph-state agent tabs and without the cap', () => {
+  const s = { driver: { caps: ['tabs', 'rename'] } }
+  const own = { ref: 's:1', name: 'scratch', state: 'waiting', slug: null, item: null, team: null, is_control: false }
+  assert.equal(logic.canRename(s, own), true)
+  assert.equal(logic.canRename(s, { ...own, state_source: 'hook' }), true)
+  assert.equal(logic.canRename(s, { ...own, slug: 'demo-task' }), false)
+  assert.equal(logic.canRename(s, { ...own, item: '20261009-0910-tidy-labels-c3d4' }), false)
+  assert.equal(logic.canRename(s, { ...own, team: 'build' }), false)
+  assert.equal(logic.canRename(s, { ...own, is_control: true }), false)
+  // a state read off the title glyph goes with a name of its own; a shell has none to lose
+  assert.equal(logic.canRename(s, { ...own, state_source: 'glyph' }), false)
+  assert.equal(logic.canRename(s, { ...own, state_source: 'glyph', state: 'shell' }), true)
+  assert.equal(logic.canRename({ driver: { caps: ['tabs'] } }, own), false)
+  assert.equal(logic.canRename({ driver: { caps: null } }, own), true)       // not known yet: offered
+  assert.equal(logic.canRename(s, null), false)
+})
+
+test('canRenameWorkspace needs a ref and the cap and works for a tmux room built from tabs', () => {
+  const caps = { driver: { caps: ['tabs', 'rename', 'rename_workspace'] } }
+  const listed = { ...caps, rooms: { control: 'Control' }, tabs: { workspaces: [
+    { ref: 'workspace:1', title: 'Control' }, { ref: 'workspace:2', title: 'Demo' }], tabs: [] } }
+  const [control, demo] = logic.roomsOf(listed).workspaces
+  assert.equal(logic.canRenameWorkspace(listed, demo), true)
+  assert.equal(logic.canRenameWorkspace(listed, control), false)            // the control workspace keeps its name
+  assert.equal(logic.canRenameWorkspace({ ...listed, driver: { caps: ['tabs', 'rename'] } }, demo), false)
+  assert.equal(logic.canRenameWorkspace(listed, { ...demo, ref: null }), false)
+  // tmux lists no workspaces: the room takes the session id its tabs share
+  const tmux = { ...caps, rooms: {}, tabs: { workspaces: null, tabs: [
+    { ref: '%1', ws_ref: '$2', workspace: 'Work', name: 'one', state: 'shell' },
+    { ref: '%2', ws_ref: '$2', workspace: 'Work', name: 'two', state: 'shell' }] } }
+  const [work] = logic.roomsOf(tmux).workspaces
+  assert.equal(work.ref, '$2')
+  assert.equal(logic.canRenameWorkspace(tmux, work), true)
+  // a room whose tabs do not share one ref cannot be addressed
+  const mixed = { ...tmux, tabs: { ...tmux.tabs, tabs: [tmux.tabs.tabs[0], { ...tmux.tabs.tabs[1], ws_ref: null }] } }
+  assert.equal(logic.canRenameWorkspace(mixed, logic.roomsOf(mixed).workspaces[0]), false)
+  // the room of the control tab keeps its name too, whatever it is called
+  const ctl = { ...tmux, tabs: { ...tmux.tabs, tabs: [{ ...tmux.tabs.tabs[0], is_control: true }] } }
+  assert.equal(logic.canRenameWorkspace(ctl, logic.roomsOf(ctl).workspaces[0]), false)
+})
+
+// ---------------------------------------------------------------- organize with AI (views/organize.js)
+
+const ORG_STATE = {
+  rooms: { control: 'Control' },
+  tabs: {
+    workspaces: [{ ref: 'workspace:1', title: 'Control' }, { ref: 'workspace:2', title: 'Demo', color_name: 'Blue' },
+      { ref: 'workspace:6', title: 'misc' }],
+    tabs: [{ ref: 'surface:11', ws_ref: 'workspace:2', workspace: 'Demo', name: 'free tab', state: 'working' },
+      { ref: 'surface:14', ws_ref: 'workspace:2', workspace: 'Demo', name: 'Notes', state: 'shell' },
+      { ref: 'surface:16', ws_ref: 'workspace:6', workspace: 'misc', name: 'lonely', state: 'shell' }],
+  },
+}
+const ORG_PROPOSAL = { id: 'o0123456789', at_ms: 1, scope: 2, items: [
+  { id: 'ws_color:workspace:2', kind: 'ws_color', ref: 'workspace:2', from: 'Blue', to: 'Teal', why: 'c', cap: 'set_color' },
+  { id: 'tab_title:surface:11', kind: 'tab_title', ref: 'surface:11', from: 'free tab', to: 'Docs build', why: 'n', cap: 'rename' },
+  { id: 'tab_move:surface:14', kind: 'tab_move', ref: 'surface:14', from: 'workspace:2', to: 'workspace:6', why: 'm', cap: 'move_tab' },
+  { id: 'ws_title:workspace:6', kind: 'ws_title', ref: 'workspace:6', from: 'misc', to: 'App', why: 't', cap: 'rename_workspace' },
+  { id: 'ws_description:workspace:6', kind: 'ws_description', ref: 'workspace:6', from: null, to: 'The app', why: 'd', cap: 'set_description' },
+] }
+
+test('organizeGroups groups by workspace and ticks nothing by default', () => {
+  const groups = logic.organizeGroups(ORG_PROPOSAL, logic.roomsOf(ORG_STATE))
+  assert.deepEqual(groups.map(g => [g.ref, g.title, g.items.map(i => i.id)]), [
+    ['workspace:2', 'Demo', ['ws_color:workspace:2', 'tab_title:surface:11', 'tab_move:surface:14']],
+    ['workspace:6', 'misc', ['ws_title:workspace:6', 'ws_description:workspace:6']],
+  ])
+  const move = groups[0].items.find(i => i.kind === 'tab_move')
+  assert.deepEqual([move.fromText, move.toText, move.subject], ['Demo', 'misc', 'Notes'])
+  const color = groups[0].items[0]
+  assert.deepEqual([color.fromText, color.toText, color.subject], ['Blue', 'Teal', 'Demo'])
+  assert.equal(groups[1].items[1].fromText, '')
+  // a workspace the rooms no longer show still gets its group, by its ref
+  const lost = logic.organizeGroups({ ...ORG_PROPOSAL, items: [{ ...ORG_PROPOSAL.items[3], ref: 'workspace:77' }] }, logic.roomsOf(ORG_STATE))
+  assert.deepEqual(lost.map(g => [g.ref, g.title]), [['workspace:77', 'workspace:77']])
+  // nothing ticked until a person ticks it
+  assert.deepEqual(logic.organizeTicks.ids({}, ORG_PROPOSAL), [])
+  assert.deepEqual(logic.organizeTicks.ids(logic.organizeTicks.all(ORG_PROPOSAL), ORG_PROPOSAL), ORG_PROPOSAL.items.map(i => i.id))
+  assert.equal(logic.organizeGroups(null, logic.roomsOf(ORG_STATE)).length, 0)
+})
+
+test('a group tick ticks only that workspace', () => {
+  const [demo, misc] = logic.organizeGroups(ORG_PROPOSAL, logic.roomsOf(ORG_STATE))
+  const t = logic.organizeTicks
+  let ticks = t.group({}, misc, true)
+  assert.deepEqual(t.ids(ticks, ORG_PROPOSAL), ['ws_title:workspace:6', 'ws_description:workspace:6'])
+  assert.equal(t.groupState(ticks, misc), 'all')
+  assert.equal(t.groupState(ticks, demo), 'none')
+  ticks = t.toggle(ticks, 'tab_move:surface:14')
+  assert.equal(t.groupState(ticks, demo), 'some')
+  ticks = t.group(ticks, misc, false)
+  assert.deepEqual(t.ids(ticks, ORG_PROPOSAL), ['tab_move:surface:14'])
+  // a tick of an id the proposal does not hold is never sent
+  assert.deepEqual(t.ids({ ...ticks, 'tab_title:surface:99': true }, ORG_PROPOSAL), ['tab_move:surface:14'])
+})
+
+test('apply is disabled until one item is ticked', () => {
+  const t = logic.organizeTicks
+  assert.equal(t.canApply({}, ORG_PROPOSAL), false)
+  assert.equal(t.canApply({ 'ws_color:workspace:2': false }, ORG_PROPOSAL), false)
+  assert.equal(t.canApply({ 'ws_color:workspace:2': true }, ORG_PROPOSAL), true)
+  assert.equal(t.canApply({ 'ws_color:workspace:2': true }, null), false)
+})
+
+
+// ---------------------------------------------------------------- the chat: route chip, situation, handoff status (package 5)
+
+const routeTo = t => logic.routeOf(t).to
+
+test('routeOf sends a trailing question mark and question words to the quick chat', () => {
+  for (const q of ['Is the build green?', 'what waits for me', 'Wie viele Agenten laufen gerade', 'Gibt es offene Reviews',
+    'Warum hängt der Test', 'Fix the build?', 'which tabs wait']) {
+    assert.deepEqual([q, routeTo(q)], [q, 'quick'])
+  }
+  assert.equal(logic.routeOf('what waits for me').by, 'words')
+  assert.equal(logic.routeOf('Fix the build?').by, 'words')
+})
+
+test('routeOf sends German and English imperatives to an agent tab', () => {
+  for (const q of ['Fix the flaky test in the demo repo', 'Create a task for the release', 'Set up the new board',
+    'Mach den Release fertig', 'Bitte erstelle eine Aufgabe für das Review', 'Leg eine Aufgabe für den Bericht an',
+    'Räum die alten Tabs auf', 'Ändere den Titel', 'Benenn den Tab um', 'Richte das Board ein', 'please refactor the parser']) {
+    assert.deepEqual([q, routeTo(q)], [q, 'tab'])
+    assert.equal(logic.routeOf(q).by, 'words')
+  }
+})
+
+test('routeOf sends unclear text to the quick chat', () => {
+  for (const q of ['the release notes', 'Bericht von gestern', 'hello', '   ']) {
+    assert.deepEqual([q, logic.routeOf(q).to, logic.routeOf(q).by], [q, 'quick', 'default'])
+  }
+})
+
+test('routeOf honours ? and ! prefixes and strips them', () => {
+  assert.deepEqual(logic.routeOf('? fix the build'), { to: 'quick', by: 'prefix', text: 'fix the build' })
+  assert.deepEqual(logic.routeOf('!what is open'), { to: 'tab', by: 'prefix', text: 'what is open' })
+  assert.deepEqual(logic.routeOf('  Mach den Release  '), { to: 'tab', by: 'words', text: 'Mach den Release' })
+  // the word lists are language data, the same keys in both languages
+  for (const lang of ['en', 'de']) {
+    const r = text.TABLES[lang].route
+    assert.ok(Array.isArray(r.orderWords) && r.orderWords.length >= 10, lang)
+    assert.ok(Array.isArray(r.questionWords) && r.questionWords.length >= 10, lang)
+  }
+})
+
+const H = (over = {}) => ({ to: 'control', at_ms: 1000, status: 'queued', relay_id: 'r1', ...over })
+
+test('handoffStatus maps queued, submitted, answered, offline, expired and stuck', () => {
+  const st = (handed, records = [], tabs = []) => logic.handoffStatus(handed, records, tabs)
+  assert.equal(st(null), null)
+  assert.deepEqual(st(H({ status: 'starting' })), { word: 'starting', tone: 'info', action: null })
+  assert.equal(st(H()).word, 'waiting')
+  assert.equal(st(H(), [{ id: 'r1', status: 'submitted' }]).word, 'arrived')
+  assert.equal(st(H(), [{ id: 'r1', status: 'answered' }]).word, 'answered')
+  assert.equal(st(H(), [{ id: 'r1', status: 'expired' }]).word, 'expired')
+  assert.equal(st(H(), [{ id: 'r1', status: 'stuck' }]).word, 'stuck')
+  assert.equal(st(H(), [{ id: 'other', status: 'answered' }]).word, 'waiting', 'another record says nothing of this one')
+  // offline: typed into the control tab when it waits, else tried again
+  const off = H({ status: 'offline' })
+  const control = { ref: 'surface:3', is_control: true, state: 'waiting' }
+  assert.deepEqual(st(off, [{ id: 'r1', status: 'offline' }], [control]), { word: 'offline', tone: 'warning', action: 'ask_via_tab' })
+  assert.equal(st(off, [], [{ ...control, state: 'working' }]).action, 'retry')
+  assert.equal(st(H({ status: 'failed' })).action, 'retry')
+  // the words exist in both languages
+  for (const lang of ['en', 'de']) {
+    const t = text.TABLES[lang].handoff
+    for (const k of ['starting', 'started', 'waiting', 'arrived', 'answered', 'offline', 'sentToTab', 'running', 'failed',
+      'manual', 'nothing', 'retry', 'expired', 'stuck', 'askViaTab', 'jump']) assert.ok(t[k], `${lang} ${k}`)
+    assert.match(t.inTab('Docs'), /Docs/)
+  }
+})
+
+test('handoffStatus maps every launch outcome', () => {
+  const st = status => logic.handoffStatus({ to: 'tab', at_ms: 1, status, inbox_id: 'i1' }, [], [])
+  assert.deepEqual(st('started'), { word: 'started', tone: 'info', action: null })
+  assert.equal(st('running').word, 'running')
+  assert.equal(st('busy').word, 'running')
+  assert.deepEqual(st('failed'), { word: 'failed', tone: 'danger', action: 'retry' })
+  assert.deepEqual(st('partly'), { word: 'failed', tone: 'danger', action: 'retry' })
+  assert.deepEqual(st('manual'), { word: 'manual', tone: 'warning', action: null })
+  assert.deepEqual(st('nothing'), { word: 'nothing', tone: 'warning', action: 'retry' })
+})
+
+test('handoffStatus finds the started tab by its inbox item', () => {
+  const tabs = [{ ref: 'surface:20', name: 'Other', item: 'i0' }, { ref: 'surface:21', name: 'Fix the printer', item: 'i1' }]
+  for (const status of ['started', 'running', 'busy']) {
+    assert.deepEqual(logic.handoffStatus({ to: 'tab', at_ms: 1, status, inbox_id: 'i1' }, [], tabs),
+      { word: 'inTab', tone: 'success', action: 'jump', ref: 'surface:21', tab: 'Fix the printer' })
+  }
+  // a handoff still starting shows that, whatever tab carries the item
+  assert.equal(logic.handoffStatus({ to: 'tab', at_ms: 1, status: 'starting', inbox_id: 'i1' }, [], tabs).word, 'starting')
+})
+
+test('ChatFoot never offers a one click control handoff', () => {
+  const foot = readComponents().match(/function ChatFoot\([\s\S]*?\n\}/)[0]
+  assert.doesNotMatch(foot, /to: 'control'/)
+  assert.doesNotMatch(foot, /quickToControl|askControl/)
+})
+
+test('app.ask sends the situation for free questions only, not for the core', () => {
+  const app = read('app.js')
+  const ask = app.match(/async function ask\(kind[\s\S]*?\n\}/)[0]
+  assert.match(ask, /kind === 'free' \? askContext\(/)
+  const core = app.match(/askQuiet: [\s\S]*?\n {2}\}\),\n/)[0]
+  assert.match(core, /place: 'core'/)
+  assert.doesNotMatch(core, /context/)
+  // the context: the page's own picture plus the working counts, never more than the server takes
+  const ctx = logic.askContext({ model: null, tabs: { tabs: [{ ref: 'surface:5', state: 'working', name: 'Build', ws_ref: 'workspace:2' }] },
+    sessions: { sessions: [{ status: 'busy', tab: { ref: 'surface:5', ws_ref: 'workspace:2' }, agents: { running_count: 2 }, workflows: [] }] },
+    now: 0 }, 'en')
+  assert.match(ctx, /Build/)
+  assert.match(ctx, /1 session busy, 2 subagents, 0 workflows/)
+  assert.equal(logic.askContext({ model: null, tabs: { tabs: [] }, sessions: { sessions: [] }, now: 0 }, 'en').includes('0 sessions busy'), true)
+})
+
+// The workspaces heading row (label, the order toggle, Organize with AI) needs about 374 px; the sidebar
+// gives it 268 to 326, so without wrapping the last button was cut to two letters at every width.
+test('the workspaces heading row wraps its buttons instead of cutting them off', () => {
+  const css = read('style.css')
+  const rule = css.match(/\.room-group-head \{([^}]*)\}/)
+  assert.ok(rule, 'no .room-group-head rule')
+  assert.match(rule[1], /flex-wrap: wrap/)
+  assert.doesNotMatch(rule[1], /justify-content: space-between/)
 })

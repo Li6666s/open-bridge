@@ -206,7 +206,8 @@ export function createLoaders({ api, set, fail, withBusy }) {
     loadAgents: async () => {
       const res = await api.get('/api/agents')
       if (!res.ok) return fail(res)
-      set(s => ({ ...s, agents: { peers: res.data.peers ?? [], convs: res.data.convs ?? [] } }))
+      set(s => ({ ...s, agents: { peers: res.data.peers ?? [], convs: res.data.convs ?? [],
+        ...(res.data.keep_hours != null ? { keep_hours: res.data.keep_hours } : {}) } }))
     },
     loadHistory: async () => {
       const res = await api.get('/api/history')
@@ -407,11 +408,13 @@ const SIDEBAR_STATE = { waiting: 'waiting', 'needs input': 'needs-you', running:
  *  another Bridge's clone, and the quick chats in the control workspace; then the other Bridges on this
  *  machine that have no workspace, and the A2A agents. A workspace the list does not name (or no list
  *  at all) still shows from its tabs, marked known: false */
-/** The chats a list shows: not the start page's core (its panel shows it, a new one replaces it) and none
- *  untouched past keep_hours (the server archives it with its next look); one still answering always */
+/** The chats a list shows, quick chats and A2A conversations alike: not the start page's core (its panel
+ *  shows it, a new one replaces it) and none untouched past keep_hours (the server archives it with its
+ *  next look); one still answering, or an A2A task its owner still holds, always */
 export function listedChats(convs, keepHours, nowMs) {
   const cutoff = keepHours > 0 && Number.isFinite(nowMs) ? nowMs - keepHours * 3600000 : null
-  return (convs ?? []).filter(x => x.place !== 'core' && (x.running || cutoff == null || (x.last_ms ?? x.started_ms) >= cutoff))
+  return (convs ?? []).filter(x => x.place !== 'core' && (x.running || x.turns?.at(-1)?.waiting || cutoff == null
+    || (x.last_ms ?? x.started_ms) >= cutoff))
 }
 
 export function roomsOf(s) {
@@ -428,15 +431,31 @@ export function roomsOf(s) {
   }
   const mine = (t, w) => (t.ws_ref && w.ref ? t.ws_ref === w.ref : t.workspace === w.title)
   const rank = t => STATE_ORDER[t.state] ?? 4
+  const load = agentLoad(s.sessions?.sessions, s.tabs?.tabs)
+  const index = new Map()   // room -> its place in the terminal's list; rooms built from tabs have none
   const room = (w, known) => {
     const own = tabs.filter(t => mine(t, w)).sort((a, b) => rank(a) - rank(b) || String(a.name).localeCompare(String(b.name)))
+      .map(t => ({ ...t, load: load.byTab[t.ref] ?? noLoad() }))
     const side = (w.statuses ?? []).find(x => x.name === 'claude_code')
     const state = own.length && rank(own[0]) < 2 ? own[0].state : SIDEBAR_STATE[String(side?.text ?? '').toLowerCase()] ?? (own.length ? own[0].state : null)
-    return { ...w, key: w.ref ?? `title:${w.title}`, known, tabs: own, state, unread: w.unread ?? 0, bridge: bridgeOf(w), chats: r.control && w.title === r.control ? chats : [] }
+    // a room built from tabs (no workspace list, e.g. tmux) takes the workspace ref its tabs all share
+    const ref = w.ref ?? (own.length && own.every(t => t.ws_ref && t.ws_ref === own[0].ws_ref) ? own[0].ws_ref : null)
+    const sum = ref ? load.byWorkspace[ref] ?? noLoad() : own.reduce((n, t) => addLoad(n, t.load), noLoad())
+    return { ...w, ref, key: w.ref ?? `title:${w.title}`, known, tabs: own, state, load: sum, unread: w.unread ?? 0, bridge: bridgeOf(w), chats: r.control && w.title === r.control ? chats : [] }
   }
-  const out = listed.map((w, i) => ({ w, i })).sort((a, b) => (b.w.pinned ? 1 : 0) - (a.w.pinned ? 1 : 0) || a.i - b.i).map(x => room(x.w, true))
+  const out = listed.map((w, i) => ({ w, i })).sort((a, b) => (b.w.pinned ? 1 : 0) - (a.w.pinned ? 1 : 0) || a.i - b.i)
+    .map(x => { const w = room(x.w, true); index.set(w, x.i); return w })
   for (const t of tabs) {
     if (t.workspace && !out.some(w => mine(t, w))) out.push(room({ ref: null, title: t.workspace }, false))
+  }
+  // on request (a per-viewer toggle) the rooms stand by their most urgent tab; a room of shells or of no
+  // tabs comes last, and the control tab, which never waits for you, does not count. Without the toggle
+  // the terminal's order stays
+  if (s.ui?.roomsSort === 'urgency') {
+    const urgency = w => Math.min(3, ...w.tabs.filter(t => !t.is_control).map(rank))
+    const at = w => index.get(w) ?? Infinity
+    out.sort((a, b) => urgency(a) - urgency(b) || (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || at(a) - at(b)
+      || String(a.title).localeCompare(String(b.title)))
   }
   const placed = out.some(w => w.chats.length || (r.control && w.title === r.control))
   return {
@@ -459,6 +478,39 @@ export function attentionTabs(tabs) {
 export function sessionCounts(sessions) {
   const list = sessions ?? []
   return { sessions: list.length, agents: list.reduce((n, x) => n + (x.agents?.running_count ?? 0) + (x.workflows?.length ?? 0), 0) }
+}
+
+const noLoad = () => ({ sessions: 0, busy: 0, subagents: 0, workflows: 0 })
+const addLoad = (a, b) => ({ sessions: a.sessions + b.sessions, busy: a.busy + b.busy, subagents: a.subagents + b.subagents,
+  workflows: a.workflows + b.workflows })
+
+/** What works where, for the sidebar and the header: per tab ref and per workspace ref the sessions, the
+ *  busy ones, the subagents active in the last 2 minutes and the workflows that are not paused. A session
+ *  without a tab of this Bridge (another folder, another Bridge on this machine) counts in `elsewhere`
+ *  only, never in `total`. A workspace is joined by its ref (two workspaces may share a title); the title
+ *  only when no ref is known at all */
+export function agentLoad(sessions, tabs) {
+  const out = { byTab: {}, byWorkspace: {}, unmapped: [], total: null, elsewhere: null }
+  const refOf = new Map((tabs ?? []).filter(t => t?.ref).map(t => [t.ref, t.ws_ref]))
+  const sums = () => ({ busy: 0, subagents: 0, workflows: 0, workflowAgents: 0 })
+  const total = sums()
+  const elsewhere = sums()
+  for (const x of sessions ?? []) {
+    const running = (x.workflows ?? []).filter(w => String(w?.status ?? '').toLowerCase() !== 'paused')
+    const one = { sessions: 1, busy: x.status === 'busy' ? 1 : 0, subagents: x.agents?.running_count ?? 0, workflows: running.length }
+    const into = x.tab ? total : elsewhere
+    into.busy += one.busy
+    into.subagents += one.subagents
+    into.workflows += one.workflows
+    into.workflowAgents += running.reduce((n, w) => n + (w.agents ?? 0), 0)
+    if (!x.tab) { out.unmapped.push(x); continue }
+    out.byTab[x.tab.ref] = addLoad(out.byTab[x.tab.ref] ?? noLoad(), one)
+    const ws = x.tab.ws_ref || refOf.get(x.tab.ref) || `title:${x.tab.workspace}`
+    out.byWorkspace[ws] = addLoad(out.byWorkspace[ws] ?? noLoad(), one)
+  }
+  out.total = total
+  out.elsewhere = elsewhere
+  return out
 }
 
 /** Seconds left of a running pass, from its remembered duration; null when unknown */
@@ -1539,6 +1591,147 @@ export function canTab(s, verb) {
   return !Array.isArray(caps) || caps.includes(verb)
 }
 
+/** Whether a tab may get a name of its own (actions.py v_tab_rename): the driver renames tabs, it is not the
+ *  control session, the workplace does not know it by its name (a task, inbox item or team role), and its
+ *  state is not read off its title glyph, which goes with a title of its own (a shell has none to lose) */
+export function canRename(s, tab) {
+  if (!tab || !canTab(s, 'rename') || tab.is_control) return false
+  if (tab.slug || tab.item || tab.team) return false
+  return !(tab.state_source === 'glyph' && tab.state !== 'shell')
+}
+
+/** Whether a workspace (a room of roomsOf) may get a name of its own: the driver renames workspaces, the
+ *  room has a ref (a tmux room built from tabs takes the session id they share), and it is not the control
+ *  workspace. Configured workspace names the server refuses (it knows the config) */
+export function canRenameWorkspace(s, room) {
+  if (!room?.ref || !canTab(s, 'rename_workspace')) return false
+  const control = s?.rooms?.control ?? s?.tabs?.control?.name
+  if (control && String(room.title ?? '').toLowerCase() === String(control).toLowerCase()) return false
+  return !(room.tabs ?? []).some(t => t.is_control)
+}
+
+// ---------------------------------------------------------------- organize with AI (views/organize.js)
+
+/** The items of an organize proposal grouped by the workspace they touch (a tab item by the workspace the tab
+ *  is in), in the order of the rooms; each item with readable from and to (workspace titles for a move, colour
+ *  names, '' for nothing) and its subject (the tab's or the workspace's name). A workspace the rooms no longer
+ *  show keeps its group under its ref */
+export function organizeGroups(proposal, rooms) {
+  const spaces = rooms?.workspaces ?? []
+  const byRef = new Map(spaces.filter(w => w.ref).map(w => [w.ref, w]))
+  const tabOf = new Map(spaces.flatMap(w => (w.tabs ?? []).map(t => [t.ref, { tab: t, ws: w.ref }])))
+  const titleOf = ref => byRef.get(ref)?.title ?? ref
+  const groups = new Map()
+  for (const it of proposal?.items ?? []) {
+    const isTab = it.kind === 'tab_title' || it.kind === 'tab_move'
+    const found = isTab ? tabOf.get(it.ref) : null
+    const ref = isTab ? (it.kind === 'tab_move' ? it.from : found?.ws ?? it.ref) : it.ref
+    const text = v => (v == null ? '' : String(v))
+    const item = { ...it, subject: isTab ? found?.tab.name ?? it.ref : titleOf(it.ref),
+      fromText: it.kind === 'tab_move' ? titleOf(it.from) : text(it.from), toText: it.kind === 'tab_move' ? titleOf(it.to) : text(it.to) }
+    if (!groups.has(ref)) groups.set(ref, { ref, title: titleOf(ref), items: [] })
+    groups.get(ref).items.push(item)
+  }
+  const at = ref => { const i = spaces.findIndex(w => w.ref === ref); return i < 0 ? Infinity : i }
+  return [...groups.values()].sort((a, b) => at(a.ref) - at(b.ref))
+}
+
+/** The ticks of an organize proposal, { id: true }: nothing is ticked until a person ticks it */
+export const organizeTicks = {
+  all: proposal => Object.fromEntries((proposal?.items ?? []).map(i => [i.id, true])),
+  group: (ticks, group, on) => ({ ...ticks, ...Object.fromEntries(group.items.map(i => [i.id, !!on])) }),
+  toggle: (ticks, id) => ({ ...ticks, [id]: !ticks?.[id] }),
+  /** the ticked ids the proposal holds, in its order: never one it does not hold */
+  ids: (ticks, proposal) => (proposal?.items ?? []).filter(i => ticks?.[i.id]).map(i => i.id),
+  groupState: (ticks, group) => {
+    const n = group.items.filter(i => ticks?.[i.id]).length
+    return n === 0 ? 'none' : n === group.items.length ? 'all' : 'some'
+  },
+  canApply: (ticks, proposal) => organizeTicks.ids(ticks, proposal).length > 0,
+}
+
+// ---------------------------------------------------------------- answering a waiting tab (views/reply.js)
+
+/** The tab states a reply may name as `expect` (actions.py TAB_STATES) */
+const REPLY_STATES = new Set(['needs-you', 'waiting', 'working'])
+
+/** A tab name the server's check takes (actions.py `tab_name`): 1 to 120 characters, no control
+ *  characters. A title of only a status glyph reads as '', a long one is past it: such a reply goes
+ *  without the name rather than being refused every time */
+// eslint-disable-next-line no-control-regex
+const CONTROL_CHARS = /[\u0000-\u001f\u007f]/
+const nameOk = name => typeof name === 'string' && name.length >= 1 && name.length <= 120 && !CONTROL_CHARS.test(name)
+
+/** What every reply to `tab` carries beyond its own args: the question it answers (seen, when one was
+ *  read) and the tab's name, so the server sends nothing once the tab moved on (actions.py guard_fresh) */
+function replyGuard(tab) {
+  return { ...(tab.ask?.hash ? { seen: tab.ask.hash } : {}), ...(nameOk(tab.name) ? { name: tab.name } : {}) }
+}
+
+/** What ui.answered keeps of an answer sent to `tab`: the question (hash) and the occurrence of it (the
+ *  tab's state and since when it is in that state), so the same words asked again later are a new question */
+export function answerMark(tab, q, now) {
+  return { hash: tab?.ask?.hash ?? null, q, ms: now, since: tab?.since_ms ?? null, state: tab?.state ?? null }
+}
+
+/** Whether `mark` (answerMark) answered the question `tab` shows now: the same hash, the same state, the
+ *  same since. A tab that worked and asks again has a new since and gets its buttons back */
+export function isAnswered(mark, tab) {
+  return !!(mark?.hash && tab?.ask?.hash === mark.hash && mark.state === tab.state && mark.since === (tab.since_ms ?? null))
+}
+
+/** A typed answer to `tab`: tab_send with the state the tab is in now, the question and the name */
+export function replySend(tab, text) {
+  return { verb: 'tab_send', args: { tab_ref: tab.ref, text, ...(REPLY_STATES.has(tab.state) ? { expect: tab.state } : {}), ...replyGuard(tab) } }
+}
+
+/** The answers the page offers a tab, the server enforcing each (actions.py): { buttons: [{id, verb, args,
+ *  label}], textBox }. A dialog (needs-you) gets one button per option it shows, never free text and never
+ *  a bare yes for a choice; one that could not be read gets the tab and today's yes and no. A waiting tab
+ *  gets yes and no as words only when it asks a yes or no question, go on unless its result is filed, and
+ *  the text box. The control session answers through its own box. Each control needs its driver right */
+export function replyOptions(tab, s, t = TABLES.en) {
+  const none = { buttons: [], textBox: false }
+  if (!tab) return none
+  const r = t.reply
+  const key = canTab(s, 'key')
+  const send = canTab(s, 'send')
+  const buttons = []
+  const ask = tab.ask ?? null
+  if (tab.state === 'needs-you') {
+    const options = ask?.options ?? []
+    if (options.length) {
+      if (key) for (const o of options) buttons.push({ id: `option-${o.n}`, verb: 'tab_option', label: o.label, args: { tab_ref: tab.ref, n: o.n, ...replyGuard(tab) } })
+      if (canTab(s, 'focus')) buttons.push({ id: 'open', verb: 'tab_jump', label: r.openTab, args: { tab_ref: tab.ref } })
+    } else {
+      if (canTab(s, 'focus')) buttons.push({ id: 'open', verb: 'tab_jump', label: r.openTab, args: { tab_ref: tab.ref } })
+      if (key) {
+        buttons.push({ id: 'yes', verb: 'tab_yes', label: r.yes, args: { tab_ref: tab.ref, ...replyGuard(tab) } })
+        buttons.push({ id: 'no', verb: 'tab_no', label: r.no, args: { tab_ref: tab.ref, ...replyGuard(tab) } })
+      }
+    }
+    return { buttons, textBox: false }
+  }
+  if (tab.state !== 'waiting' || tab.is_control || !send) return none
+  if (ask?.yes_no) {
+    buttons.push({ id: 'yes', ...replySend(tab, r.yesText), label: r.yes })
+    buttons.push({ id: 'no', ...replySend(tab, r.noText), label: r.no })
+  }
+  if (!tab.filed_by) buttons.push({ id: 'goOn', verb: 'tab_go_on', label: r.goOn, args: { tab_ref: tab.ref, ...replyGuard(tab) } })
+  return { buttons, textBox: true }
+}
+
+/** How long the page remembers an answer it sent to a tab (ui.answered), long enough for the tab poll
+ *  to show that the tab moved on */
+export const ANSWERED_KEEP_MS = 120000
+
+/** ui.answered without the answers older than ANSWERED_KEEP_MS; the same object when nothing went */
+export function pruneAnswered(answered, now) {
+  const all = Object.entries(answered ?? {})
+  const kept = all.filter(([, v]) => now - (v?.ms ?? 0) < ANSWERED_KEEP_MS)
+  return kept.length === all.length ? (answered ?? {}) : Object.fromEntries(kept)
+}
+
 /** No terminal driver lists the tabs (neither cmux nor a driver serving `tabs`, such as tmux); before the
  *  driver answered, one counts as there */
 export function noTabDriver(s) {
@@ -2078,6 +2271,76 @@ export function situationText(sit, nowMs, lang = 'de') {
   if (sit.alarms.length) out.push(`${L.alarms}: ${names(sit.alarms, a => `${a.section_title} (${a.count})`)}`)
   if (sit.later.length) out.push(`${L.later}: ${sit.later.length}`)
   return out.join('\n')
+}
+
+/** The most the server takes as the situation of a free question (actions.py CONTEXT_MAX): longer is refused there */
+export const CONTEXT_MAX = 6000
+
+/** What a free question in the chat carries along (actions.py ask `context`): the page's picture of the day
+ *  plus what works in this Bridge's tabs right now, so "how many agents run" has an answer. '' when it
+ *  would not fit: the question goes without it rather than being refused */
+export function askContext(s, lang = 'de') {
+  const picture = situationText(situation(s?.model, s?.tabs?.tabs, s?.now), s?.now, lang)
+  const { total } = agentLoad(s?.sessions?.sessions, s?.tabs?.tabs)
+  const out = [picture, tableOf(lang).situation.load(total.busy, total.subagents, total.workflows)].filter(Boolean).join('\n')
+  return out.length <= CONTEXT_MAX ? out : ''
+}
+
+// ---------------------------------------------------------------- the chat's one input: where Enter goes
+
+/** Where a text typed into the chat goes: `quick` (a read-only answer here) or `tab` (an agent tab that may
+ *  act), and why: a leading ? or ! (`prefix`, stripped), the first words (`words`: a trailing ? or a
+ *  question word asks, an order word starts a tab, in English and German), or `default` (unclear asks).
+ *  The word lists are language data in text.js (route) */
+export function routeOf(raw) {
+  const text = String(raw ?? '').trim()
+  if (text.startsWith('?')) return { to: 'quick', by: 'prefix', text: text.slice(1).trim() }
+  if (text.startsWith('!')) return { to: 'tab', by: 'prefix', text: text.slice(1).trim() }
+  const lists = key => Object.values(TABLES).flatMap(t => t.route?.[key] ?? []).map(w => w.toLowerCase())
+  const filler = new Set(lists('fillerWords'))
+  let words = text.toLowerCase().replace(/[.,:;!?]+/g, ' ').split(/\s+/).filter(Boolean)
+  while (words.length > 1 && filler.has(words[0])) words = words.slice(1)
+  // a list entry of two words matches the first two, or its first word alone (German puts the particle last:
+  // "leg eine Aufgabe an")
+  const hit = list => list.some(w => w === words[0] || w === words.slice(0, 2).join(' ') || (w.includes(' ') && w.split(' ')[0] === words[0]))
+  if (text.endsWith('?') || hit(lists('questionWords'))) return { to: 'quick', by: 'words', text }
+  if (hit(lists('orderWords'))) return { to: 'tab', by: 'words', text }
+  return { to: 'quick', by: 'default', text }
+}
+
+const HANDOFF_FAILED = new Set(['failed', 'partly', 'aborted', 'error', 'rejected'])
+
+/** The status line of a chat that was handed on (quick.py `handed`, or the page's own record of a chat_tab
+ *  reply): `word` is a key of text.js handoff, `tone` a state token, `action` what a button beside it does
+ *  (retry, jump to the tab, ask_via_tab). The control route reads its relay record; the tab route finds the
+ *  tab that carries the inbox item. null without a record */
+export function handoffStatus(handed, relayRecords, tabs) {
+  if (!handed?.status) return null
+  const out = (word, tone, action = null, extra = {}) => ({ word, tone, action, ...extra })
+  if (handed.status === 'starting') return out('starting', 'info')
+  if (handed.to === 'control') {
+    const rec = (relayRecords ?? []).find(r => r?.id && r.id === handed.relay_id)
+    const status = rec?.status ?? handed.status
+    if (status === 'queued') return out('waiting', 'info')
+    if (status === 'submitted') return out('arrived', 'success')
+    if (status === 'answered') return out('answered', 'success')
+    if (status === 'sent_to_tab') return out('sentToTab', 'success')
+    if (status === 'expired') return out('expired', 'warning', 'retry')
+    if (status === 'stuck') return out('stuck', 'warning')
+    if (status === 'offline') {
+      const waiting = (tabs ?? []).some(t => t?.is_control && t.state === 'waiting')
+      return out('offline', 'warning', waiting && handed.relay_id ? 'ask_via_tab' : 'retry')
+    }
+    return out('failed', 'danger', 'retry')
+  }
+  const tab = handed.inbox_id ? (tabs ?? []).find(t => t?.item === handed.inbox_id) : null
+  if (tab && ['started', 'running', 'busy'].includes(handed.status)) return out('inTab', 'success', 'jump', { ref: tab.ref, tab: tab.name })
+  if (handed.status === 'started') return out('started', 'info')
+  if (handed.status === 'running' || handed.status === 'busy') return out('running', 'info')
+  if (handed.status === 'manual') return out('manual', 'warning')
+  if (handed.status === 'nothing') return out('nothing', 'warning', 'retry')
+  if (HANDOFF_FAILED.has(handed.status)) return out('failed', 'danger', 'retry')
+  return out('failed', 'danger', 'retry')
 }
 
 const VERDICT_KEYS = { first: ['zuerst', 'first'], then: ['dann', 'then'], later: ['kann warten', 'can wait'] }

@@ -534,6 +534,8 @@ SCRIPTS_CORE_ALLOWLIST = frozenset({
     "scripts/lib/bridge_cockpit/net.py",                  # the one outbound fetcher: feeds and agent cards
     "scripts/lib/bridge_cockpit/collector.py",
     "scripts/lib/bridge_cockpit/tabs.py",
+    "scripts/lib/bridge_cockpit/asks.py",                 # what a waiting tab asks, read off its screen
+    "scripts/tests/test_bridge_cockpit_asks.py",
     "scripts/lib/bridge_cockpit/actions.py",
     "scripts/lib/bridge_cockpit/actions_base.py",
     "scripts/lib/bridge_cockpit/actions_launch.py",
@@ -560,6 +562,7 @@ SCRIPTS_CORE_ALLOWLIST = frozenset({
     "scripts/lib/bridge_cockpit/quick.py",
     "scripts/lib/bridge_cockpit/agents.py",
     "scripts/lib/bridge_cockpit/bridges.py",
+    "scripts/lib/bridge_cockpit/organize.py",             # organize with AI: one proposal, ticked items applied
     "scripts/lib/bridge_cockpit/triage.py",
     "scripts/triage.py",
     "scripts/tests/test_triage.py",
@@ -604,6 +607,7 @@ SCRIPTS_CORE_ALLOWLIST = frozenset({
     "scripts/web/views/home.js",
     "scripts/web/views/launch.js",
     "scripts/web/views/nav.js",
+    "scripts/web/views/organize.js",
     "scripts/web/views/overlays.js",
     "scripts/web/views/pages.js",
     "scripts/web/views/parts.js",
@@ -613,6 +617,7 @@ SCRIPTS_CORE_ALLOWLIST = frozenset({
     "scripts/web/views/stage.js",
     "scripts/web/views/ticker.js",
     "scripts/web/views/prose.js",
+    "scripts/web/views/reply.js",
     "scripts/web/views/tabs.js",
     "scripts/web/inner.js",                   # the inner room behind the core: the knowledge graph in 3D
     "scripts/web/logic.js",
