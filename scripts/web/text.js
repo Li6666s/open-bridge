@@ -4,10 +4,11 @@
 // the language comes from the server at run time (/api/bootstrap), never from editing
 // this file. Keys and comments are English; only the values of `de` are German.
 //
-// Values that exist in mods/briefing-ui/hooks/text.ts are copied from there so the mod
-// and the web page say the same words. Where the mod puts a terminal glyph in front of
-// a word (reload arrow, dot, check, cross), the web value keeps the word only: the page
-// draws its own icons and status dots.
+// Many values were originally ported from the retired briefing-ui mod. The page draws its
+// own icons and status dots, so a value carries the word only, never a terminal glyph.
+
+/** The CLI an error names ("the claude CLI is not available"), or null */
+const cliName = e => /\bthe (\S+) CLI\b/.exec(String(e?.message ?? ''))?.[1] ?? null
 
 const en = {
   appName: 'Bridge',
@@ -477,6 +478,8 @@ const en = {
     title: 'Settings',
     lead: 'What you change here applies at once.',
     sectionsLabel: 'Areas of the settings',
+    configWarnings: 'The config has keys the cockpit does not use as written',
+    configWarningsExplain: 'The cockpit runs with the fallback each line names. Fix the key under cockpit: in bridge-config.yaml and restart the cockpit.',
     section: {
       start: { title: 'Start page', sub: 'View, stations, sections' },
       look: { title: 'Appearance', sub: 'Colours and details' },
@@ -1003,6 +1006,7 @@ const en = {
     not_applicable: 'This action does not apply to this row.',
     relay_offline: 'Claude is not reachable right now.',
     cmux_unavailable: 'cmux is not available.',
+    cli_unavailable: e => `The ${cliName(e) ?? 'AI'} CLI is not installed or not on the PATH.`,
     driver_cannot: 'The terminal cannot do that for a tab.',
     internal: 'Something went wrong on the server. See server.log.',
     network: 'The server does not answer.',
@@ -1599,6 +1603,8 @@ const de = {
     title: 'Einstellungen',
     lead: 'Was du hier änderst, gilt sofort.',
     sectionsLabel: 'Bereiche der Einstellungen',
+    configWarnings: 'Die Config hat Schlüssel, die das Cockpit so nicht verwendet',
+    configWarningsExplain: 'Das Cockpit läuft mit dem Ersatzwert, den jede Zeile nennt. Korrigiere den Schlüssel unter cockpit: in bridge-config.yaml und starte das Cockpit neu.',
     section: {
       start: { title: 'Startseite', sub: 'Ansicht, Stationen, Bereiche' },
       look: { title: 'Darstellung', sub: 'Farben und Details' },
@@ -2120,6 +2126,7 @@ const de = {
     not_applicable: 'Diese Aktion passt nicht zu dieser Zeile.',
     relay_offline: 'Claude ist gerade nicht erreichbar.',
     cmux_unavailable: 'cmux ist nicht verfügbar.',
+    cli_unavailable: e => `Die ${cliName(e) ?? 'KI'}-CLI ist nicht installiert oder nicht im PATH.`,
     driver_cannot: 'Das Terminal kann das bei einem Tab nicht.',
     internal: 'Auf dem Server ging etwas schief. Siehe server.log.',
     network: 'Der Server antwortet nicht.',

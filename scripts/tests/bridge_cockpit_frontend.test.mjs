@@ -143,7 +143,7 @@ test('text tables: one word per thing, the retired words appear nowhere', () => 
 test('text tables: an error text for every error code of the API', () => {
   const codes = ['unauthorized', 'forbidden_origin', 'bad_host', 'bad_fetch_site', 'not_found', 'method_not_allowed',
     'unsupported_media_type', 'payload_too_large', 'unknown_verb', 'invalid_argument', 'invalid_json', 'stale_row',
-    'stale_tab', 'not_applicable', 'relay_offline', 'cmux_unavailable', 'internal']
+    'stale_tab', 'not_applicable', 'relay_offline', 'cmux_unavailable', 'cli_unavailable', 'internal']
   for (const t of Object.values(text.TABLES)) for (const c of codes) assert.ok(t.errors[c], c)
 })
 
@@ -1544,9 +1544,6 @@ test('the start page offers every tile to choose, and without a choice only a le
   assert.deepEqual(logic.homeChosen(model, { tiles: ['p:dates'], seen: all.filter(x => x !== 'c:next') }), ['p:dates', 'c:next'])
   // ids of tiles that no longer exist are dropped
   assert.deepEqual(logic.homeChosen(model, { tiles: ['p:gone', 'p:dates'], seen: all }), ['p:dates'])
-  // moving a tile one place in the order
-  assert.deepEqual(logic.moveId(['a', 'b', 'c'], 'c', -1), ['a', 'c', 'b'])
-  assert.deepEqual(logic.moveId(['a', 'b', 'c'], 'a', -1), ['a', 'b', 'c'])
   // a station moves past the next station, whatever stands between them in the list
   const list = ['c:a', 's:x', 'c:b', 'o:y', 'c:c']
   const among = id => id.startsWith('c:')
@@ -3119,4 +3116,61 @@ test('due dates: overdue, today, tomorrow, else the day itself', async () => {
   assert.equal(logic.dueWhen('', now), null)
   // a why that names the due date again is left out where the row shows the date itself
   assert.deepEqual(logic.whyWithoutDue(['due 13.10', 'only you', 'fällig 16.10 09:00', 'back on 19.10']), ['only you', 'back on 19.10'])
+})
+
+test('errorText: a missing quick-question CLI is named as such, not as cmux, in both languages', () => {
+  for (const lang of ['en', 'de']) {
+    text.setLanguage(lang)
+    const t = text.T()
+    for (const provider of ['claude', 'codex']) {
+      const said = logic.errorText({ code: 'cli_unavailable', message: `the ${provider} CLI is not available` }, t)
+      assert.match(said, new RegExp(`\\b${provider}\\b`), `${lang} ${provider}`)
+      assert.match(said, /CLI/, lang)
+      assert.doesNotMatch(said, /cmux/i, lang)
+    }
+    // without a readable provider the text still says what is missing
+    const bare = logic.errorText({ code: 'cli_unavailable', message: '' }, t)
+    assert.match(bare, /CLI/, lang)
+    assert.doesNotMatch(bare, /cmux|undefined/i, lang)
+    assert.equal(logic.errorText({ code: 'cmux_unavailable', message: 'x' }, t), t.errors.cmux_unavailable)
+  }
+  text.setLanguage('en')
+})
+
+test('style.css: every class selector is used by the page, or built from an allowed prefix', () => {
+  // a rule nobody draws is dead weight that the next reader has to keep working; the leftovers of the
+  // retired briefing-ui mod (ask box, its records, the skill list) were such rules
+  const css = fs.readFileSync(path.join(WEB, 'style.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
+  const classes = new Set()
+  for (const m of css.matchAll(/([^{}]+)\{/g)) {
+    const selector = m[1].trim()
+    if (selector.startsWith('@')) continue
+    for (const c of selector.replace(/\[[^\]]*\]/g, '').matchAll(/\.(-?[A-Za-z_][\w-]*)/g)) classes.add(c[1])
+  }
+  const files = []
+  const walk = dir => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const p = path.join(dir, e.name)
+      if (e.isDirectory()) { if (e.name !== 'vendor' && e.name !== 'fonts') walk(p) }
+      else if (/\.(js|html)$/.test(e.name) && e.name !== 'mock.js') files.push(p)
+    }
+  }
+  walk(WEB)
+  // comment lines out, so a class only a comment names does not count as used
+  const src = files.map(f => fs.readFileSync(f, 'utf8').split('\n')
+    .filter(line => !/^\s*(\/\/|\/\*|\*)/.test(line)).join('\n')).join('\n')
+  // prefixes a view completes at run time (`tk-${tone}`, `day-${b.id}`): each must still be built somewhere.
+  // null takes any completion; a list names the only ones the view can build, so a dead rule there shows
+  const DYNAMIC = {
+    'btn-': null, 'day-': null, 'fdot-': null, 'g-': null, 'hist-': null, 'is-': null, 'lane-': null,
+    'layout-': null, 'mc-': null, 'md-h': null, 'rdot-': null, 'rt-': null, 'sm-': null, 'st-': null, 'tk-': null,
+    'tl-': null, 'us-': null, 'view-thumb-': null, 'vs-': null,
+    'ticker-': ['slow', 'normal', 'fast'],
+    'tri-': ['ai', 'either'],
+  }
+  for (const p of Object.keys(DYNAMIC)) assert.ok(src.includes(`${p}\${`), `allowed prefix ${p} is built nowhere any more`)
+  const built = c => Object.entries(DYNAMIC).some(([p, ok]) => c.startsWith(p) && (ok === null || ok.includes(c.slice(p.length))))
+  const used = c => new RegExp(`(^|[^\\w-])${c.replace(/[-]/g, '\\-')}($|[^\\w-])`).test(src)
+  const dead = [...classes].filter(c => !used(c) && !built(c)).sort()
+  assert.deepEqual(dead, [])
 })

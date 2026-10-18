@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: MIT
 """Contract for the cockpit server (scripts/bridge-cockpit.py, scripts/lib/bridge_cockpit/).
 
-The server shows the briefing of the briefing-ui mod as a local web page. It must:
-- compute the same card as the mod (model.py is a port of mods/briefing-ui/hooks/logic.ts and
-  the decisions of register.tsx), so the cases of mods/briefing-ui/tests/pure.test.mjs hold here too;
+The server shows the briefing as a local web page. It must:
+- compute the briefing card (model.py, originally ported from the retired briefing-ui mod, whose
+  test cases live on here);
 - collect with `--no-save` only, one pass at a time, coalescing requests (full > quick > delta);
 - run only a fixed set of verbs with exact argv, ids checked again before they reach an argv,
   free text after `--`, one audit line per write without texts;
@@ -698,9 +698,8 @@ def test_only_the_cockpit_block_counts(tmp_path):
 
 
 def test_config_resolution(tmp_path):
-    cfg = load_web_config(tmp_path, {"cockpit": {"enabled": True, "tabs_seconds": 2, "launch": {"target": "x"}},
-                                     "briefing": {"claude_code_ui": {"language": "de", "full_minutes": 0, "voice": True,
-                                                                     "launch": {"target": "tab"}}},
+    cfg = load_web_config(tmp_path, {"cockpit": {"enabled": True, "tabs_seconds": 2, "launch": {"target": "x"},
+                                                 "language": "de", "full_minutes": 0, "voice": True},
                                      "workplace": {"control": {"name": "Control"}}})
     assert (cfg.enabled, cfg.port, cfg.open_in, cfg.relay, cfg.profile) == (True, 8797, "auto", False, None)   # relay only when asked
     assert (cfg.tabs_seconds, cfg.language, cfg.full_minutes, cfg.voice, cfg.target, cfg.control) == \
@@ -709,7 +708,7 @@ def test_config_resolution(tmp_path):
     # the daily triage is a model call: never without asking for it
     assert cfg.triage_daily is False and load_web_config(tmp_path, {"cockpit": {"triage_daily": True}}).triage_daily
     assert load_web_config(tmp_path, {"language": "en", "cockpit": {"enabled": "yes"}}).enabled is False
-    assert load_web_config(tmp_path, {"briefing": {"claude_code_ui": {"launch": {"target": "tab"}}}}).target == "tab"
+    assert load_web_config(tmp_path, {"cockpit": {"launch": {"target": "tab"}}}).target == "tab"
     with pytest.raises(WebConfigError):
         load_web_config(tmp_path, {"cockpit": {"port": 80}})
     with pytest.raises(WebConfigError):
@@ -2861,7 +2860,12 @@ def test_cli_disabled_config_and_occupied_port(cli_world, tmp_path):
     try:
         port = sock.getsockname()[1]
         assert cli("serve", "--port", str(port), "--ignore-disabled").returncode == 3
-        assert cli("start", "--port", str(port), "--ignore-disabled").returncode == 3
+        res = cli("start", "--port", str(port), "--ignore-disabled")
+        assert res.returncode == 3 and f"port {port} is in use" in res.stderr and "cockpit.port" in res.stderr
+        (root / "bridge-config.yaml").write_text(f"cockpit:\n  enabled: true\n  port: {port}\n")
+        res = cli("open", "--via", "none")
+        assert res.returncode == 3 and f"port {port} is in use" in res.stderr and "cockpit.port" in res.stderr
+        (root / "bridge-config.yaml").write_text("cockpit:\n  enabled: false\n")
     finally:
         sock.close()
     started = cli("start", "--port", "0", "--ignore-disabled", "--json", check=0)
@@ -3905,7 +3909,7 @@ def test_the_relay_finds_the_control_session_in_a_tmux_tab_too(world):
 def test_the_cmux_layout_is_saved_on_a_timer_as_the_mod_did(world, tmp_path):
     # the briefing-ui mod saved the cmux layout every snapshot_minutes (only on change) while a session was
     # open; the cockpit keeps that going so retiring the mod loses no backup
-    assert load_web_config(tmp_path, {"briefing": {"claude_code_ui": {"snapshot_minutes": 30}}}).snapshot_minutes == 30
+    assert load_web_config(tmp_path, {"cockpit": {"snapshot_minutes": 30}}).snapshot_minutes == 30
     assert load_web_config(tmp_path, {"cockpit": {"snapshot_minutes": 0}}).snapshot_minutes == 0
     assert load_web_config(tmp_path, {}).snapshot_minutes == 60
     world.runner.handlers["cmux_layout.snapshot"] = lambda argv: ok("unchanged")
@@ -4899,3 +4903,176 @@ def test_reopen_as_review_says_so_and_a_new_task_still_never_starts_in_review(wo
     assert res["ok"] and "review" in res["note"]
     with pytest.raises(ActionError):
         world.act("to_task", key=f"inbox:{YES_ID}", status="review")
+
+
+def test_a_quick_question_without_its_cli_says_cli_unavailable_not_cmux(world, tmp_path):
+    world.app.quick.available = lambda model=None: False
+    with pytest.raises(ActionError) as err:
+        world.app.actions.ask("free", {"text": "what waits?"}, via="quick")
+    assert (err.value.status, err.value.code) == (503, "cli_unavailable")
+    assert "claude" in err.value.message
+    status, _, body = world.post("/api/ask", {"kind": "free", "args": {"text": "what waits?"}, "via": "quick"})
+    assert status == 503 and json.loads(body)["error"]["code"] == "cli_unavailable"
+    # the genuine cmux checks keep their own code
+    w2 = World(tmp_path / "nocmux", cmux=None, serve=False)
+    try:
+        with pytest.raises(ActionError) as err:
+            w2.act("snapshot")
+        assert (err.value.status, err.value.code) == (503, "cmux_unavailable")
+    finally:
+        w2.close()
+
+
+def test_the_retired_briefing_block_no_longer_changes_the_config(tmp_path):
+    # the briefing-ui mod is gone, and with it the fallback to its block: only `cockpit:` (and
+    # language.conversation for the language) counts
+    legacy = {"briefing": {"claude_code_ui": {"language": "de", "full_minutes": 3, "snapshot_minutes": 30,
+                                              "voice": True, "launch": {"target": "tab"}}}}
+    plain = load_web_config(tmp_path, {})
+    cfg = load_web_config(tmp_path, legacy)
+    assert (cfg.language, cfg.full_minutes, cfg.snapshot_minutes, cfg.voice, cfg.target) == \
+        (plain.language, plain.full_minutes, plain.snapshot_minutes, plain.voice, plain.target)
+    assert (cfg.full_minutes, cfg.snapshot_minutes, cfg.voice, cfg.target) == (10, 60, False, "area")
+    # the same values under cockpit: still apply
+    moved = load_web_config(tmp_path, {"cockpit": legacy["briefing"]["claude_code_ui"]})
+    assert (moved.language, moved.full_minutes, moved.snapshot_minutes, moved.voice, moved.target) == \
+        ("de", 3, 30, True, "tab")
+
+
+def test_start_names_the_reason_when_the_child_refuses_its_config(cli_world, monkeypatch, capsys):
+    import importlib.util
+    root, state, _ = cli_world
+    spec = importlib.util.spec_from_file_location("cockpit_cli_refused", CLI)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    class Refused:
+        pid = 1
+
+        def poll(self):
+            return 2
+
+    import argparse
+    import types
+    monkeypatch.setattr(mod, "subprocess", types.SimpleNamespace(Popen=lambda *a, **k: Refused(), DEVNULL=None))
+    args = argparse.Namespace(port=0, ignore_disabled=False, json=False)
+    assert mod.cmd_start(args, root, state) == 2
+    err = capsys.readouterr().err
+    assert "cockpit.enabled" in err and "server.log" in err
+
+
+# ------------------------------------------------------------------ the docs name every state file and verb
+
+STATE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*\.(?:json|jsonl|log)$")
+# string constants that look like a state file but are not one the cockpit writes or keeps
+NOT_STATE = {
+    ".meta.json",       # sessions.py reads the subagent meta files Claude Code writes beside its transcripts
+}
+
+
+def _files_table(doc: str) -> tuple[list[str], list[list[str]]]:
+    """Section 6 of the user doc: the header and the rows of its tables, cells stripped"""
+    section = doc.split("\n## 6. Files", 1)[1].split("\n## ", 1)[0]
+    rows = [[c.strip() for c in line.strip().strip("|").split("|")]
+            for line in section.splitlines() if line.startswith("|")]
+    header = rows[0]
+    return header, [r for r in rows if r != header and not set("".join(r)) <= set("-: ")]
+
+
+def _state_names_in_code() -> set[str]:
+    """Every file name the cockpit code names as a constant, plus the key file `token`"""
+    import ast
+    names = set()
+    files = sorted((ROOT / "scripts" / "lib" / "bridge_cockpit").glob("*.py")) + [ROOT / "scripts" / "bridge-cockpit.py"]
+    for path in files:
+        text = path.read_text(encoding="utf-8")
+        for node in ast.walk(ast.parse(text)):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str) and STATE_NAME_RE.match(node.value):
+                names.add(node.value)
+        if re.search(r"/\s*[\"']token[\"']", text):
+            names.add("token")
+    return names - NOT_STATE
+
+
+def test_the_files_table_lists_every_state_file_the_code_names():
+    header, rows = _files_table((ROOT / "docs" / "bridge-cockpit.md").read_text(encoding="utf-8"))
+    listed = {re.sub(r"^.*/", "", m) for r in rows for m in re.findall(r"`([^`]+)`", r[0])}
+    missing = sorted(_state_names_in_code() - listed)
+    assert not missing, f"docs/bridge-cockpit.md section 6 has no row for {missing}"
+
+
+def test_the_files_table_marks_which_files_hold_inbox_or_chat_text():
+    header, rows = _files_table((ROOT / "docs" / "bridge-cockpit.md").read_text(encoding="utf-8"))
+    col = next((i for i, h in enumerate(header) if "inbox or chat text" in h.lower()), None)
+    assert col is not None, header
+    for r in rows:
+        assert r[col].split(":")[0].strip() in ("yes", "no"), r
+
+
+def test_the_dev_doc_names_every_cli_subcommand():
+    src = (ROOT / "scripts" / "bridge-cockpit.py").read_text(encoding="utf-8")
+    verbs = re.findall(r"sub\.add_parser\(\s*[\"']([a-z-]+)[\"']", src)
+    assert "autostart" in verbs and "new-token" in verbs
+    line = next(x for x in (ROOT / "docs" / "bridge-cockpit-dev.md").read_text(encoding="utf-8").splitlines()
+                if x.startswith("| `scripts/bridge-cockpit.py` |"))
+    named = set(re.findall(r"[a-z][a-z-]*", line.split("|")[2]))
+    assert not [v for v in verbs if v not in named], line
+
+
+# ---------------------------------------------------------------- the exit table of the cockpit skill (#398)
+
+SKILL = ROOT / "skills" / "cockpit" / "SKILL.md"
+
+
+def _cockpit_cli():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("cockpit_cli_exits", CLI)
+    cli = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cli)
+    return cli
+
+
+def _skill_exit_rows() -> dict[int, list[str]]:
+    rows = {}
+    for line in SKILL.read_text(encoding="utf-8").splitlines():
+        hit = re.match(r"\|\s*(\d+)\s*\|(.*)\|\s*$", line)
+        if hit:
+            rows.setdefault(int(hit.group(1)), []).append(hit.group(2))
+    return rows
+
+
+def test_the_skill_exit_table_and_the_module_docstring_name_the_same_codes():
+    doc = _cockpit_cli().__doc__
+    codes = re.search(r"Exit codes:(.*?)\. User doc", doc, re.S).group(1)
+    documented = {int(n) for n in re.findall(r"\b(\d+) [a-z]", codes) if int(n) != 0}
+    assert documented == set(_skill_exit_rows()) and 1 in documented
+
+
+def test_exit_1_is_not_running_and_exit_2_tells_a_wrong_call_from_a_disabled_config():
+    rows = _skill_exit_rows()
+    assert len(rows[1]) == 1 and "not running" in rows[1][0] and "start" in rows[1][0]
+    wrong_call, disabled = rows[2]
+    assert "with a usage text on stderr" in wrong_call and "cockpit.enabled" not in wrong_call
+    assert "without a usage text" in disabled and "cockpit.enabled" in disabled
+
+
+def test_the_skill_names_exactly_the_subcommands_that_take_json(capsys):
+    cli = _cockpit_cli()
+    commands = ["serve", "start", "open", "url", "status", "stop", "new-token"]
+    takes_json = set()
+    for command in commands:
+        with pytest.raises(SystemExit):
+            cli.main([command, "--help"])
+        if "--json" in capsys.readouterr().out:
+            takes_json.add(command)
+    line = next(ln for ln in SKILL.read_text(encoding="utf-8").splitlines() if "`--json` applies only to" in ln)
+    assert set(re.findall(r"`([a-z-]+)`", line.split("applies only to", 1)[1].split(";")[0])) == takes_json
+    for command in sorted(takes_json):                                  # the docstring usage lines agree
+        usage = next(ln for ln in cli.__doc__.splitlines() if f"bridge-cockpit.py {command} " in ln)
+        assert "--json" in usage
+
+
+def test_json_on_a_subcommand_without_it_is_a_usage_error_with_exit_2(capsys):
+    with pytest.raises(SystemExit) as exc:
+        _cockpit_cli().main(["stop", "--json"])
+    assert exc.value.code == 2 and "usage:" in capsys.readouterr().err

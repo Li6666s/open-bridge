@@ -5,7 +5,7 @@ tabs and sessions, workers, machines, tokens).
 
     python3 scripts/bridge-cockpit.py serve [--port N] [--ignore-disabled]   # foreground
     python3 scripts/bridge-cockpit.py start [--port N] [--json]              # in the background, reused
-    python3 scripts/bridge-cockpit.py open [--via auto|cmux|system|none]     # start, then open the page
+    python3 scripts/bridge-cockpit.py open [--via auto|cmux|system|none] [--json]   # start, then open the page
     python3 scripts/bridge-cockpit.py url                                    # a login link, good once for a minute
     python3 scripts/bridge-cockpit.py status [--json]
     python3 scripts/bridge-cockpit.py stop
@@ -18,8 +18,8 @@ so a cockpit from a branch can be pointed at the live Bridge with --root. The se
 key per Bridge (R/.bridge/cockpit/token, 0600) that no command prints (links carry a one-time
 login code made from it) and refuses to start until cockpit.enabled is true in
 bridge-config.yaml. It runs the Bridge scripts (inbox.py, task.py, workplace.py) and collects with
---no-save. Exit codes: 0 ok, 1 not running, 2 disabled or invalid config, 3 port in use,
-4 did not come up, 5 open failed. User doc: docs/bridge-cockpit.md.
+--no-save. Exit codes: 0 ok, 1 not running, 2 disabled or invalid config (or a wrong call: argparse
+prints a usage text on stderr), 3 port in use, 4 did not come up, 5 open failed. User doc: docs/bridge-cockpit.md.
 """
 from __future__ import annotations
 
@@ -128,15 +128,20 @@ def plain(port: int) -> str:
     return f"http://127.0.0.1:{port}/"
 
 
+ENABLE_HINT = "Set cockpit.enabled: true in bridge-config.yaml (docs/bridge-cockpit.md)."
+
+
 def check_config(root: Path, ignore_disabled: bool) -> tuple[object | None, int]:
     try:
         cfg = load_web_config(root)
     except WebConfigError as error:
         print(f"bridge-cockpit: {error}", file=sys.stderr)
         return None, 2
+    for line in cfg.config_warnings:
+        # never a reason to refuse: the loader fell back, this says where (status prints them too)
+        print(f"bridge-cockpit: warning: {line}", file=sys.stderr)
     if not cfg.enabled and not ignore_disabled:
-        print("bridge-cockpit: off. Set cockpit.enabled: true in bridge-config.yaml (docs/bridge-cockpit.md).",
-              file=sys.stderr)
+        print(f"bridge-cockpit: off. {ENABLE_HINT}", file=sys.stderr)
         return None, 2
     return cfg, 0
 
@@ -208,6 +213,14 @@ def start(args, root: Path, state_dir: Path) -> tuple[int, dict | None]:
     while time.monotonic() < deadline:
         exit_code = child.poll()
         if exit_code is not None:
+            # the child's own words went to server.log; say here what a terminal user has to change
+            if exit_code == 3:
+                port = cfg.port if getattr(args, "port", None) is None else args.port
+                print(f"bridge-cockpit: port {port} is in use, set cockpit.port in bridge-config.yaml",
+                      file=sys.stderr)
+            elif exit_code == 2:
+                print(f"bridge-cockpit: the server refused its config, see .bridge/cockpit/server.log. {ENABLE_HINT}",
+                      file=sys.stderr)
             return (exit_code if exit_code in (2, 3) else 4), None
         info = read_json(server_file(state_dir))
         if isinstance(info, dict) and info.get("pid") == child.pid and isinstance(info.get("port"), int) \
@@ -285,6 +298,12 @@ def cmd_status(args, root: Path, state_dir: Path) -> int:
     out = {"running": bool(info), "pid": info.get("pid") if info else None, "port": info.get("port") if info else None,
            "started_ms": info.get("started_ms") if info else None, "version": info.get("version") if info else None,
            "clients": info.get("clients", 0) if info else 0, "relay_online": bool(info.get("relay_online")) if info else False}
+    # what the check of the cockpit: block found, read from the file now (the running server may be older)
+    try:
+        warnings = list(load_web_config(root).config_warnings)
+    except WebConfigError as error:
+        warnings = [str(error)]
+    out["config_warnings"] = warnings
     if args.json:
         print(json.dumps(out))
     elif info:
@@ -292,6 +311,9 @@ def cmd_status(args, root: Path, state_dir: Path) -> int:
               f"relay {'online' if out['relay_online'] else 'offline'}")
     else:
         print("not running")
+    if not args.json:
+        for line in warnings:
+            print(f"warning: {line}")
     return 0 if info else 1
 
 

@@ -55,8 +55,8 @@ layout now").
 
 | File | Job |
 |---|---|
-| `scripts/bridge-cockpit.py` | CLI: serve, start, open, url, status, stop |
-| `scripts/lib/bridge_cockpit/config.py` | reads `cockpit` (formerly `briefing.web`) from `bridge-config.yaml`; a key it leaves out (language, full_minutes, voice, launch.target, snapshot_minutes) falls back to `briefing.claude_code_ui` |
+| `scripts/bridge-cockpit.py` | CLI: serve, start, open, url, status, stop, autostart (macOS login item), new-token |
+| `scripts/lib/bridge_cockpit/config.py` | reads `cockpit` (formerly `briefing.web`) from `bridge-config.yaml`; a key it leaves out takes its default |
 | `scripts/lib/bridge_cockpit/runner.py` | the one place that starts a subprocess: program allowlist, timeouts, clean env |
 | `scripts/lib/bridge_cockpit/collector.py` | collect pipeline (quick, full, delta), and `build_model`: the JSON the page gets |
 | `scripts/lib/bridge_cockpit/model.py` | pure domain functions, first ported from the retired briefing card's `logic.ts` (buckets, layout, tab matching) |
