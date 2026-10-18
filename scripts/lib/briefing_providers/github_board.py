@@ -11,6 +11,12 @@ query keys (all optional):
                   integrations.github.assignee_me, else your gh login)
   states          [normalized state, ...]  only these
   include_done    true: keep done/removed cards
+  filter          the board's own filter syntax, applied by GitHub before the limit
+                  (default `is:open`; "" asks for every card). Without it a board with
+                  more cards than the limit lost its newest ones: gh lists the oldest
+                  first, so 393 cards behind a limit of 200 showed none of the 10 open
+                  (live 2026-10-17). With include_done or a done/removed state no
+                  filter is applied.
   limit           per board, default 200
 """
 from __future__ import annotations
@@ -30,6 +36,60 @@ _LOADING = threading.Lock()
 # section's 30 s, the two largest 16 s each; side by side the section takes the slowest one.
 # Four, not all eight: eight in one burst tripped GitHub's secondary rate limit.
 BOARD_WORKERS = 4
+DEFAULT_FILTER = "is:open"
+# One board through `gh project item-list` cost about 100 GraphQL points whatever its size (it asks every field
+# of every card); this query asks only what a row needs and cost 2 (live 2026-10-18: 721 points a pass for eight
+# boards, against an hourly budget of 5000 that every program of the account shares).
+LEAN_QUERY = """query($login: String!, $number: Int!, $q: String!, $after: String) {
+  repositoryOwner(login: $login) { ... on ProjectV2Owner { projectV2(number: $number) {
+    items(first: 100, after: $after, query: $q) { pageInfo { hasNextPage endCursor } nodes {
+      id
+      fieldValueByName(name: "Status") { ... on ProjectV2ItemFieldSingleSelectValue { name } }
+      content { __typename
+        ... on Issue { number title url updatedAt repository { nameWithOwner }
+                       assignees(first: 5) { nodes { login } } labels(first: 5) { nodes { name } } }
+        ... on PullRequest { number title url updatedAt repository { nameWithOwner }
+                             assignees(first: 5) { nodes { login } } labels(first: 5) { nodes { name } } }
+        ... on DraftIssue { title updatedAt assignees(first: 5) { nodes { login } } } }
+    } } } } } }"""
+
+
+class _Unexpected(Exception):
+    """The lean query answered, but not in the shape asked for: the board is listed the old way."""
+
+
+def _lean_cards(board: dict, wanted: str, limit: int, ctx) -> dict:
+    """A board's cards in the shape of `gh project item-list --format json`, page by page up to `limit`."""
+    items, after = [], None
+    while len(items) < limit:
+        argv = ["gh", "api", "graphql", "-f", f"query={LEAN_QUERY}", "-f", f"login={board['org']}",
+                "-F", f"number={board['number']}", "-f", f"q={wanted}"]
+        if after:
+            argv += ["-f", f"after={after}"]
+        data = load_json(ctx.run(argv, timeout=ctx.timeout), f"board {board['slug']}")
+        try:
+            page = data["data"]["repositoryOwner"]["projectV2"]["items"]
+            nodes, info = page["nodes"], page["pageInfo"]
+        except (KeyError, TypeError):
+            raise _Unexpected() from None
+        for node in nodes or []:
+            if not isinstance(node, dict):
+                continue
+            content = node.get("content") or {}
+            people = [a.get("login") for a in ((content.get("assignees") or {}).get("nodes") or []) if isinstance(a, dict)]
+            labels = [x.get("name") for x in ((content.get("labels") or {}).get("nodes") or []) if isinstance(x, dict)]
+            card = {"id": node.get("id"), "status": (node.get("fieldValueByName") or {}).get("name") or "",
+                    "title": content.get("title"), "assignees": people, "labels": labels,
+                    "content": {"type": content.get("__typename"), "title": content.get("title"),
+                                "updatedAt": content.get("updatedAt")}}
+            if content.get("number") is not None:
+                card["content"].update(number=content["number"], url=content.get("url"),
+                                       repository=(content.get("repository") or {}).get("nameWithOwner"))
+            items.append(card)
+        if not info.get("hasNextPage"):
+            break
+        after = info.get("endCursor")
+    return {"items": items[:limit]}
 
 
 def _tracker_sync(ctx):
@@ -55,6 +115,15 @@ def _tracker_sync(ctx):
             sys.modules.pop(name, None)
             raise
         return module
+
+
+def engine_limited(exc: Exception) -> bool:
+    """A rate limit or a block of the engine: the old way would only ask a spent budget again."""
+    import sys
+    engine = sys.modules.get("briefing")
+    pattern = getattr(engine, "GH_RATE_LIMIT", None)
+    text = str(exc)
+    return "not asked until" in text or bool(pattern and pattern.search(text))
 
 
 def collect(section: dict, ctx) -> list:
@@ -92,14 +161,28 @@ def collect(section: dict, ctx) -> list:
         return default_keys.get(re.sub(r"^[^0-9A-Za-z]+", "", raw_state).strip().lower())
 
     deadline = getattr(ctx, "deadline", None)
+    wanted = "" if keep_done else query.get("filter", DEFAULT_FILTER)
+    wanted = wanted.strip() if isinstance(wanted, str) else DEFAULT_FILTER
 
     def fetch(board: dict):
         """One board's cards, on a helper thread. The section's deadline lives per thread,
-        so it is carried over: the board ends with its section, not with a limit of its own."""
+        so it is carried over: the board ends with its section, not with a limit of its own.
+        A gh that does not know --query (before 2.70) lists without it."""
         if deadline is not None:
             ctx.deadline = deadline
+        try:
+            return _lean_cards(board, wanted, int(query.get("limit", 200)), ctx)
+        except Exception as exc:  # noqa: BLE001 - a spent budget fails here; anything else lists the old way
+            if engine_limited(exc):
+                raise
         argv = ["gh", "project", "item-list", str(board["number"]), "--owner", str(board["org"]),
                 "--format", "json", "--limit", str(query.get("limit", 200))]
+        if wanted:
+            try:
+                return load_json(ctx.run([*argv, "--query", wanted], timeout=ctx.timeout), f"board {board['slug']}")
+            except Exception as exc:  # noqa: BLE001 - only an unknown flag falls back, anything else fails
+                if "unknown flag" not in str(exc):
+                    raise
         return load_json(ctx.run(argv, timeout=ctx.timeout), f"board {board['slug']}")
 
     # Asked side by side, read back in the registry's order; the first board that fails
@@ -126,6 +209,10 @@ def collect(section: dict, ctx) -> list:
                         "id": f"{item.get('repo') or board['org']}#{item['number']}",
                         "type": str(item.get("type") or "issue").lower(),
                         "project": board["name"], "tracker": "github-board", "priority": None,
+                        "board": {"slug": board["slug"], "name": board["name"], "number": board["number"],
+                                  "org": board["org"],
+                                  **({"config": board["registry"]["_file"]}
+                                     if (board.get("registry") or {}).get("_file") else {})},
                         "_category_from_state": True})
         limit = int(query.get("limit", 200))
         summary.append({"name": board["name"], "number": board["number"], "org": board["org"],

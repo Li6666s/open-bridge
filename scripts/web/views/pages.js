@@ -17,6 +17,7 @@ import { Lines } from './detail.js'
 import { ReturnChip } from './home.js'
 import { rowClickOpens, useFocusOnOpen } from './overlays.js'
 import { Btn, Chip, Dot, Empty, Icon, MarkChip, PrioChip, StateLine, VerdictChip, useTween } from './parts.js'
+import { GitHubBoard, GitHubList, ghShows } from './github.js'
 
 // ---------------------------------------------------------------- pages
 
@@ -475,16 +476,19 @@ function GroupsView({ items, page, section, c }) {
 export function PageSection({ page, section, s, c }) {
   const byKey = indexRows(s.model)
   const t = T()
+  // a GitHub section's figures and boards filter its rows: kept in the section, gone with a new page
+  const [ghFilter, setGhFilter] = useState(null)
+  const gh = !!(section.metrics?.length || section.boards?.length)
   const stamp = sectionStamp(section.as_of, s.model?.collected_at)
   const more = section.whole ? null : s.more[`${page.id}/${section.id}`]   // whole: the caller already took every row
   // a task or inbox section follows the triage filter on top of its page
   const all = more ? more.items : (section.items ?? [])
   const items = section.kind === 'tasks' || section.kind === 'inbox'
-    ? all.filter(it => triageShows(it, s.triage?.items, s.ui.triageFilter)) : all
+    ? all.filter(it => triageShows(it, s.triage?.items, s.ui.triageFilter)) : gh ? all.filter(it => ghShows(it, ghFilter)) : all
   const left = more ? 0 : section.more ?? 0
   const scale = meterScale(items)
   // nothing found: a section that says so in one quiet line, or none at all when the profile asks
-  const quiet = !items.length && section.status !== 'error' && section.status !== 'skipped'
+  const quiet = !items.length && section.status !== 'error' && section.status !== 'skipped' && !(gh && ghFilter)
   if (quiet && section.hide_empty) return null
   if (quiet) {
     return html`<section class="panel psec psec-quiet" aria-labelledby=${`ps-${page.id}-${section.id}`}>
@@ -498,18 +502,22 @@ export function PageSection({ page, section, s, c }) {
   else if (section.status === 'error') body = html`<p><${StateLine} token="danger" strong word=${t.unreadable(section.reason || '')} /></p>`
   else if (section.view === 'tiles') body = html`<${TilesView} items=${items} page=${page.id} section=${section.id} sections=${page.sections} c=${c} />`
   else if (section.view === 'groups') body = html`<${GroupsView} items=${items} page=${page.id} section=${section.id} c=${c} />`
+  // a github-work section on its board view: the GitHub list (views/github.js), not the general table
+  else if (section.view === 'board' && gh) body = html`<${GitHubList} items=${items} page=${page.id} section=${section} s=${s} c=${c} byKey=${byKey} />`
   else if (section.view === 'mosaic') body = html`<${MosaicView} items=${items} page=${page.id} section=${section.id} c=${c} />`
   else if (gaugeSection(items)) {
     body = html`<ul class="gtiles">${items.map(it => html`<${GaugeTile} key=${it.index} it=${it} page=${page.id} section=${section.id} c=${c} />`)}</ul>`
   } else {
     const row = it => html`<${InfoRow} key=${it.index} it=${it} page=${page.id} section=${section.id} s=${s} c=${c} byKey=${byKey} scale=${scale} />`
     // a task list in lanes: being worked on, runs on (quiet until a day), waits for your yes; one lane, no heads
-    const lanes = section.kind === 'tasks' ? TASK_LANES.map(id => [id, items.filter(it => taskLane(it) === id)]).filter(([, l]) => l.length) : []
+    // board: the rows under their group (a GitHub row's board), the groups in the order the rows first name them
+    const lanes = section.kind === 'tasks' ? TASK_LANES.map(id => [id, items.filter(it => taskLane(it) === id)]).filter(([, l]) => l.length)
+      : section.view === 'board' ? [...new Set(items.map(it => it.group ?? ''))].map(g => [g, items.filter(it => (it.group ?? '') === g)]) : []
     body = html`<div class="table-wrap" tabindex="0" role="region" aria-label=${section.title}>
       <table class="tbl">
         <thead><tr><th scope="col" class="c-when">${t.col.when}</th><th scope="col">${t.col.item}</th><th scope="col" class="c-acts">${t.col.actions}</th></tr></thead>
-        ${lanes.length > 1 ? lanes.map(([id, list]) => html`<tbody key=${id} class=${`lane-${id}`}>
-          <tr class="lane-head"><th scope="rowgroup" colspan="3"><span class="label-caps">${t.lane[id]}</span> <span class="sec-count mono">${list.length}</span></th></tr>
+        ${lanes.length > 1 ? lanes.map(([id, list]) => html`<tbody key=${id} class=${section.view === 'board' ? 'lane-group' : `lane-${id}`}>
+          <tr class="lane-head"><th scope="rowgroup" colspan="3"><span class="label-caps">${section.view === 'board' ? (id || t.groupOther) : t.lane[id]}</span> <span class="sec-count mono">${list.length}</span></th></tr>
           ${list.map(row)}</tbody>`)
           : html`<tbody>${items.map(row)}</tbody>`}
       </table>
@@ -522,7 +530,9 @@ export function PageSection({ page, section, s, c }) {
       ${section.bad ? html`<${StateLine} token="danger" strong word=${t.badgeFindings(section.bad)} />` : null}
       ${stamp ? html`<span class="muted small" title=${t.measuredTitle}>${t.measuredAt(stamp)}</span>` : null}
     </header>
-    ${body}
+    ${section.stale ? html`<p class="muted small"><${StateLine} token="warning" word=${section.stale} /></p>` : null}
+    ${gh ? html`<${GitHubBoard} section=${section} filter=${ghFilter} setFilter=${setGhFilter} s=${s} c=${c} />` : null}
+    ${gh && ghFilter && !items.length ? html`<${Empty}>${t.filterNone}<//>` : body}
     ${left > 0 ? html`<${Btn} size="xs" variant="ghost" icon="chevronDown" onClick=${() => c.loadMore(page.id, section.id)}>${t.btnMore(left)}<//>` : null}
   </section>`
 }

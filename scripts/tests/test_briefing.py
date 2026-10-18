@@ -273,6 +273,85 @@ def test_github_board_provider_reuses_tracker_sync_and_the_registry(tmp_path):
     assert states == {"in_progress", "done", "blocked"}
 
 
+def test_github_board_asks_github_for_open_cards_before_the_limit(tmp_path):
+    """gh lists a board's oldest cards first: 393 cards behind a limit of 200 showed none of the
+    10 open ones (live 2026-10-17). The filter goes to GitHub, so the limit counts open cards."""
+    root = bridge(tmp_path, config={"integrations": {"github": {"assignee_me": "octo"}}})
+    (root / "ecosystem.yaml").write_text(yaml.safe_dump({"github_projects": [
+        {"org": "example-org", "number": 3, "name": "Tool board"}]}), encoding="utf-8")
+    run = FakeRun({("gh", "project", "item-list"): (FIX / "github-board" / "item-list.json").read_text()})
+    section = {"kind": "tracker", "provider": "github-board", "query": {}}
+    def listed(calls):
+        return [c for c in calls if c[:3] == ["gh", "project", "item-list"]][0]
+
+    def lean(calls):
+        return [c for c in calls if c[:3] == ["gh", "api", "graphql"] and "projectV2(number" in c[4]][0]
+
+    bf.collect(root, {"id": "p", "sections": [section]}, ctx(root, run))
+    assert "q=is:open" in lean(run.calls) and listed(run.calls)[-2:] == ["--query", "is:open"]   # lean, then the old way
+    run.calls.clear()
+    own = dict(section, query={"filter": "assignee:@me -status:Parked"})
+    bf.collect(root, {"id": "p", "sections": [own]}, ctx(root, run))
+    assert "q=assignee:@me -status:Parked" in lean(run.calls)
+    for query in ({"include_done": True}, {"filter": ""}, {"states": ["done"]}):
+        run.calls.clear()
+        bf.collect(root, {"id": "p", "sections": [dict(section, query=query)]}, ctx(root, run))
+        assert "q=" in lean(run.calls) and "--query" not in listed(run.calls), query
+
+
+def lean_page(cards, more=None):
+    return json.dumps({"data": {"repositoryOwner": {"projectV2": {"items": {
+        "pageInfo": {"hasNextPage": more is not None, "endCursor": more}, "nodes": cards}}}}})
+
+
+def lean_card(n, status, people=("octo",), kind="Issue", repo="example-org/tool"):
+    return {"id": f"PVTI_{n}", "fieldValueByName": {"name": status} if status else None,
+            "content": {"__typename": kind, "number": n, "title": f"Card {n}", "updatedAt": "2026-10-03T08:00:00Z",
+                        "url": f"https://github.com/{repo}/issues/{n}", "repository": {"nameWithOwner": repo},
+                        "assignees": {"nodes": [{"login": p} for p in people]}, "labels": {"nodes": [{"name": "bug"}]}}}
+
+
+def test_github_board_asks_only_what_a_row_needs_page_by_page(tmp_path):
+    """gh project item-list cost about 100 GraphQL points a board whatever its size; the lean query cost 2
+    (live 2026-10-18, eight boards 721 points a pass against an hourly budget of 5000)."""
+    root = bridge(tmp_path, config={"integrations": {"github": {"assignee_me": "octo"}}})
+    (root / "ecosystem.yaml").write_text(yaml.safe_dump({"github_projects": [
+        {"org": "example-org", "number": 3, "name": "Tool board"}]}), encoding="utf-8")
+    pages = {None: lean_page([lean_card(1, "In Progress"), lean_card(2, "Todo", people=("hubot",))], more="c1"),
+             "c1": lean_page([lean_card(3, "In Review"), {"id": "PVTI_d", "fieldValueByName": None,
+                                                          "content": {"__typename": "DraftIssue", "title": "Idea"}}])}
+
+    def graphql(argv):
+        after = next((a.split("=", 1)[1] for a in argv if a.startswith("after=")), None)
+        return pages[after]
+    run = FakeRun({("gh", "api", "graphql"): graphql})
+    section = {"kind": "tracker", "provider": "github-board", "summary": True, "query": {"assigned_to_me": True}}
+    sec = bf.collect(root, {"id": "p", "sections": [section]}, ctx(root, run))["sections"][0]
+    assert sec["status"] == "ok", sec.get("reason")
+    assert [i["id"] for i in sec["items"]] == ["example-org/tool#1", "example-org/tool#3"]
+    assert sec["items"][0]["labels"] == ["bug"] and sec["items"][0]["changed_at"] == "2026-10-03T08:00:00Z"
+    assert sec["summary"][0]["open"] == 4                       # the draft counts as open work
+    assert not [c for c in run.calls if c[:3] == ["gh", "project", "item-list"]]
+    assert len([c for c in run.calls if c[:3] == ["gh", "api", "graphql"]]) == 2    # two pages, no date call
+
+
+def test_github_board_lists_without_a_filter_when_gh_does_not_know_it(tmp_path):
+    root = bridge(tmp_path, config={"integrations": {"github": {"assignee_me": "octo"}}})
+    (root / "ecosystem.yaml").write_text(yaml.safe_dump({"github_projects": [
+        {"org": "example-org", "number": 3, "name": "Tool board"}]}), encoding="utf-8")
+    listing = (FIX / "github-board" / "item-list.json").read_text()
+
+    def answer(argv):
+        if "--query" in argv:
+            raise bf.SourceError("unknown flag: --query")
+        return listing
+    run = FakeRun({("gh", "project", "item-list"): answer})
+    section = {"kind": "tracker", "provider": "github-board", "query": {"assigned_to_me": True}}
+    sec = bf.collect(root, {"id": "p", "sections": [section]}, ctx(root, run))["sections"][0]
+    assert sec["status"] == "ok", sec.get("reason")
+    assert sec["items"][0]["board"] == {"slug": "tool-board", "name": "Tool board", "number": 3, "org": "example-org"}
+
+
 def _three_boards(root):
     (root / "ecosystem.yaml").write_text(yaml.safe_dump({"github_projects": [
         {"org": "example-org", "number": n, "name": f"Board {n}"} for n in (3, 4, 5)]}), encoding="utf-8")
@@ -378,7 +457,7 @@ def test_github_board_rows_get_the_date_their_issue_last_changed(tmp_path):
     section = {"kind": "tracker", "provider": "github-board", "query": {"assigned_to_me": True}}
     item = bf.collect(root, {"id": "p", "sections": [section]}, ctx(root, run))["sections"][0]["items"][0]
     assert item["changed_at"] == "2026-10-03T14:00:00Z"
-    query = next(c for c in run.calls if c[:3] == ["gh", "api", "graphql"])[-1]
+    query = next(c for c in run.calls if c[:3] == ["gh", "api", "graphql"] and "issueOrPullRequest" in c[-1])[-1]
     assert 'repository(owner: "example-org", name: "tool")' in query and "issueOrPullRequest(number: 5)" in query
 
 
@@ -1170,7 +1249,8 @@ def test_render_file_writes_the_overview_and_names_it(tmp_path, capsys):
 # not an empty quota. A short wait and one more try is the right answer to a burst.
 
 class Flaky:
-    def __init__(self, failures, message="gh: GraphQL: API rate limit already exceeded for user ID 1."):
+    # a burst: GitHub's secondary limit, which passes in seconds (the hour's spent budget does not, below)
+    def __init__(self, failures, message="gh: You have exceeded a secondary rate limit. Please wait a few minutes."):
         self.failures, self.message, self.calls = failures, message, 0
 
     def __call__(self, argv, timeout=30, cwd=None):
@@ -1205,6 +1285,23 @@ def test_gh_unknown_owner_type_is_retried_like_a_rate_limit(tmp_path):
     ctx = bf.Context(tmp_path, now=NOW, run=flaky, cfg={}, sleep=waits.append, rand=lambda: 0.0)
     assert ctx.run(["gh", "project", "item-list", "3", "--owner", "example-org"]) == "ok"
     assert waits == [bf.GH_RETRY_WAITS[0]] and flaky.calls == 2
+
+
+def test_a_spent_hourly_budget_is_not_retried_and_stops_github_until_the_reset(tmp_path):
+    """Waiting seconds does not refill an hour's budget: on 2026-10-18 every section retried twice into
+    a spent GraphQL budget, pass after pass. The first such answer blocks GitHub for every section."""
+    waits = []
+    flaky = Flaky(9, message="gh: GraphQL: API rate limit already exceeded for user ID 1.")
+    ctx = bf.Context(tmp_path, now=dt.datetime.now(), run=flaky, cfg={}, sleep=waits.append)
+    with pytest.raises(bf.SourceError, match="rate limit"):
+        ctx.run(["gh", "search", "issues"])
+    assert waits == [] and bf.github_blocked(tmp_path, dt.datetime.now()) is not None
+    calls = flaky.calls
+    with pytest.raises(bf.SourceError, match="not asked until"):
+        ctx.run(["gh", "project", "item-list", "3"])
+    assert flaky.calls == calls                    # blocked before it reached GitHub
+    other = bf.Context(tmp_path, now=dt.datetime.now(), run=Flaky(0), cfg={})
+    assert other.run(["glab", "issue", "list"]) == "ok"   # other tools are not GitHub
 
 
 def test_gh_rate_limit_gives_up_after_the_retries(tmp_path):

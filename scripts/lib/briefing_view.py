@@ -97,6 +97,51 @@ LABELS = {
     "prepare_tail": ("Look through this Bridge for what bears on it: tasks, inbox, the work log, earlier meeting "
                      "notes, mails and issues that name the title or the people. Then give me a short brief: what "
                      "it is about, what is open, what I should bring or decide. Read only, send nothing."),
+    # a GitHub row's steps (briefing.py tracker_steps): each starts an agent tab, none acts on GitHub by itself
+    "stale": "the source did not answer, last rows shown",
+    "stale_until": "GitHub limit reached, not asked until {until}, last rows shown",
+    "stale_refreshing": "last rows, being refreshed",
+    "gh_draft": "draft",
+    "gh_task": "task {slug}",
+    "gh_step_analyze": "Analyse",
+    "gh_step_implement": "Implement",
+    "gh_step_review": "Review the PR",
+    "gh_step_adopt": "Make it a task",
+    "gh_step_sync": "Sync status",
+    "gh_step_remind": "Remind",
+    "gh_head": "GitHub {type} {id}: {title}",
+    "gh_type_issue": "issue",
+    "gh_type_pr": "pull request",
+    "gh_fact_link": "Link",
+    "gh_fact_status": "Status",
+    "gh_fact_board": "Board",
+    "gh_fact_config": "Board config",
+    "gh_fact_task": "Task of this Bridge",
+    "gh_fact_prs": "Pull requests that close it",
+    "gh_fact_note": "Note",
+    "gh_fact_assignee": "Assigned to",
+    "gh_do_analyze": ("Read it with its comments (gh issue view or gh pr view with --comments), the board config and the "
+                      "code it touches. Answer here: what is asked, what is unclear, and a plan in a few steps. Change "
+                      "nothing on GitHub; offer a comment as a draft and post it only after a yes."),
+    "gh_do_implement": ("Implement it. First read the repository's AGENTS.md or CLAUDE.md and its branch model, and check "
+                        "whether a task of this Bridge already covers it. Work on a feature branch, tests first. Board "
+                        "fields only through the github-projects-manager skill with the values of the board config: In "
+                        "Progress when you start, In Review once a draft pull request that closes the issue is open. Never "
+                        "merge and never push to the default branch: that stays with the person."),
+    "gh_do_review": ("Review the pull request (a code review skill if you have one, else gh pr diff): correctness first, "
+                     "then tests and fit. Prepare the findings as a pending review with inline comments and submit it "
+                     "only after a yes."),
+    "gh_do_adopt": ("Make this a task of this Bridge. First look in work/tasks/ and work/streams/ for one that already "
+                    "fits; else create it from the template (rules/task-management-workflow.md) with sync.github naming "
+                    "the repository, the issue number and the board. Change nothing on GitHub."),
+    "gh_do_sync": ("Compare the board status, the state of the issue or pull request and the task of this Bridge "
+                   "(python3 scripts/tracker-sync.py diff, the tracker-sync skill). List what differs and propose the "
+                   "change on each side; apply a board change only through the github-projects-manager skill and only "
+                   "after a yes."),
+    "gh_do_remind": ("Draft a short, friendly reminder to the person it is assigned to: what is open, what is needed from "
+                     "them, by when if a date is known, in the language the issue is written in. Offer it as a GitHub "
+                     "comment that mentions them and, if the person prefers, as a mail or chat draft through this Bridge's "
+                     "drafting skill. Post or send nothing: show the text and wait for a yes."),
     "all_clear": "{title}: all clear",
     "owed": "Not in this profile, still yours to run: {streams} (briefing.py owed)",
     "overview_file": "Boards and activity: {path}",
@@ -187,6 +232,51 @@ LABELS_DE = {
     "prepare_tail": ("Such in dieser Bridge, was dazu gehört: Aufgaben, Posteingang, Arbeitslog, frühere Protokolle, "
                      "Mails und Issues, die den Titel oder die Personen nennen. Gib mir dann eine kurze Vorbereitung: "
                      "worum es geht, was offen ist, was ich mitbringen oder entscheiden sollte. Nur lesen, nichts senden."),
+    "stale": "Quelle antwortet nicht, letzter Stand",
+    "stale_until": "GitHub-Kontingent erschöpft, Abfrage erst ab {until}, letzter Stand",
+    "stale_refreshing": "letzter Stand, wird gerade aktualisiert",
+    "gh_draft": "Entwurf",
+    "gh_task": "Aufgabe {slug}",
+    "gh_step_analyze": "Analysieren",
+    "gh_step_implement": "Umsetzen",
+    "gh_step_review": "PR prüfen",
+    "gh_step_adopt": "Als Aufgabe",
+    "gh_step_sync": "Status abgleichen",
+    "gh_step_remind": "Erinnern",
+    "gh_head": "GitHub-{type} {id}: {title}",
+    "gh_type_issue": "Issue",
+    "gh_type_pr": "Pull Request",
+    "gh_fact_link": "Link",
+    "gh_fact_status": "Status",
+    "gh_fact_board": "Board",
+    "gh_fact_config": "Board-Konfiguration",
+    "gh_fact_task": "Aufgabe dieser Bridge",
+    "gh_fact_prs": "Pull Requests, die es schließen",
+    "gh_fact_note": "Hinweis",
+    "gh_fact_assignee": "Zugewiesen an",
+    "gh_do_analyze": ("Lies es samt Kommentaren (gh issue view oder gh pr view mit --comments), die Board-Konfiguration "
+                      "und den Code, den es berührt. Antworte hier: was verlangt ist, was unklar ist, und ein Plan in "
+                      "wenigen Schritten. Ändere nichts auf GitHub; einen Kommentar bietest du als Entwurf an und "
+                      "postest ihn erst nach einem Ja."),
+    "gh_do_implement": ("Setze es um. Lies zuerst AGENTS.md oder CLAUDE.md des Repos und sein Branch-Modell und prüfe, ob "
+                        "eine Aufgabe dieser Bridge es schon abdeckt. Arbeite auf einem Feature-Branch, Tests zuerst. "
+                        "Board-Felder nur über den Skill github-projects-manager mit den Werten der Board-Konfiguration: "
+                        "In Progress beim Start, In Review, sobald ein Draft-PR offen ist, der das Issue schließt. Nie "
+                        "mergen und nie auf den Default-Branch pushen: das bleibt beim Menschen."),
+    "gh_do_review": ("Prüfe den Pull Request (ein Code-Review-Skill, wenn du einen hast, sonst gh pr diff): zuerst "
+                     "Korrektheit, dann Tests und Passung. Bereite die Befunde als ausstehendes Review mit "
+                     "Inline-Kommentaren vor und reiche es erst nach einem Ja ein."),
+    "gh_do_adopt": ("Mach daraus eine Aufgabe dieser Bridge. Sieh zuerst in work/tasks/ und work/streams/ nach, ob eine "
+                    "schon passt; sonst leg sie nach der Vorlage an (rules/task-management-workflow.md), mit sync.github "
+                    "auf Repo, Issue-Nummer und Board. Ändere nichts auf GitHub."),
+    "gh_do_sync": ("Vergleiche den Board-Status, den Stand des Issues oder PRs und die Aufgabe dieser Bridge "
+                   "(python3 scripts/tracker-sync.py diff, der Skill tracker-sync). Nenne, was abweicht, und schlage die "
+                   "Änderung je Seite vor; eine Board-Änderung nur über den Skill github-projects-manager und erst nach "
+                   "einem Ja."),
+    "gh_do_remind": ("Entwirf eine kurze, freundliche Erinnerung an die Person, der es zugewiesen ist: was offen ist, was von "
+                     "ihr gebraucht wird, bis wann, falls ein Datum bekannt ist, in der Sprache des Issues. Biete sie als "
+                     "GitHub-Kommentar mit Erwähnung an und, wenn gewünscht, als Mail- oder Chat-Entwurf über den "
+                     "Entwurfs-Skill dieser Bridge. Poste und sende nichts: zeig den Text und warte auf ein Ja."),
     "all_clear": "{title}: alles in Ordnung",
     "owed": "Nicht im Profil, noch von Hand: {streams} (briefing.py owed)",
     "overview_file": "Boards und Aktivität: {path}",
@@ -237,7 +327,7 @@ PAGE_GROUPS = ("main", "more", "work", "day")   # day: no tab, its sections stan
 # work: no tab, it is the "by source" view of the work tab (the briefing), beside "what is due" and "by Jev"
 PAGE_SECTION_KEYS = {"id", "when", "detail", "link", "empty", "alarm", "badge", "view", "hide_empty", "actionable"}
 # how a dashboard draws a section: rows in a table (default), cards, or a mosaic of every row
-PAGE_VIEWS = ("table", "tiles", "mosaic", "groups")
+PAGE_VIEWS = ("table", "tiles", "mosaic", "groups", "board")   # board: the table, its rows under their group
 BOARD_STATES = ("new", "ready", "in_progress", "review", "blocked")
 HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 # An id that names its repository is the same thing wherever it comes from; any
@@ -1539,8 +1629,14 @@ def _page_row(kind: str, item: dict, entry: dict, now: dt.datetime, labels: dict
                  _text(item.get("calendar")), labels["info_tag"] if item.get("info") is True else ""]
     elif kind == "tracker":
         project = _text(item.get("project"))
+        linked = item.get("linked_task") if isinstance(item.get("linked_task"), dict) else {}
+        prs = [p for p in item.get("prs") or [] if isinstance(p, dict) and _text(p.get("id"))]
         parts = ["PR" if item.get("type") == "pr" else "", state,
-                 "" if project and iid.startswith(project) else project, _text(item.get("priority"))]
+                 "" if project and iid.startswith(project) or entry.get("view") == "board" else project,
+                 _text(item.get("priority")), _text(item.get("note")),
+                 " ".join(f"PR #{_text(p['id']).rsplit('#', 1)[-1]}" + (f" ({labels['gh_draft']})" if p.get("draft") else "")
+                          for p in prs),
+                 labels["gh_task"].format(slug=_text(linked.get("slug"))) if _text(linked.get("slug")) else ""]
     elif kind == "commits":
         parts = [f"{_text(item.get('spark'))} {_text(item.get('branch'))}".strip()]
     elif kind in ("activity", "workplace"):
@@ -1609,6 +1705,8 @@ def _page_row(kind: str, item: dict, entry: dict, now: dt.datetime, labels: dict
         row["group"] = _text(item.get("project"))[:80]
     if kind == "inbox" and iid:      # the item's id: a dashboard joins its triage and its close by it
         row["inbox"] = iid[:160]
+    elif kind == "tracker" and not task and _text(item.get("inbox")):
+        row["inbox"] = _text(item["inbox"])[:160]      # an agent was started on the row: its inbox item stands for it
     # whether a person can hand this row on (Do it, Advise, Later, Settle): a finding or a tracker row by
     # default, whatever the page entry says otherwise; a row with an inbox item or a task has its own path
     row["actionable"] = not (row.get("inbox") or row["task"]) and (
@@ -1619,8 +1717,14 @@ def _page_row(kind: str, item: dict, entry: dict, now: dt.datetime, labels: dict
     steps = [{"id": a["id"], "label": a["label"].strip()[:40]} for a in item.get("actions") or []
              if isinstance(item.get("actions"), list) and isinstance(a, dict) and isinstance(a.get("id"), str)
              and ACTION_ID_RE.match(a["id"]) and isinstance(a.get("label"), str) and a["label"].strip()][:8]
-    if kind in ("command", "calendar") and steps and isinstance(item.get("id"), str):
+    if kind in ("command", "calendar", "tracker") and steps and isinstance(item.get("id"), str):
         row["actions"], row["row_id"] = steps, item["id"][:200]
+    if kind == "tracker" and isinstance(item.get("id"), str) and re.match(r"^[\w.-]+/[\w.-]+#\d+\Z", item["id"]):
+        row["row_id"] = item["id"]           # a GitHub row: the dashboard asks for its detail by it
+        row["flags"] = github_flags(item, now)
+        if _text(item.get("assignee")):
+            row["who"] = _text(item["assignee"])[:60]     # the person filter
+        row["gh"] = github_facts(item, now)
     # an event's calendar: a fact when it is opened, a filter on the dates page
     tags = tags_of({labels["tag_calendar"]: _text(item["calendar"])}) if kind == "calendar" and _text(item.get("calendar")) \
         else tags_of(item.get("tags"))
@@ -1635,6 +1739,89 @@ def _page_row(kind: str, item: dict, entry: dict, now: dt.datetime, labels: dict
 
 
 ACTION_ID_RE = re.compile(r"^[a-z][a-z0-9_-]{0,39}\Z")      # the same rule as briefing.py ACTION_RE
+BOARD_STATES = ("new", "ready", "in_progress", "review", "blocked")
+BOARD_MODES = ("off", "mine", "all")
+QUIET_DAYS = 14
+PR_AGE_RE = re.compile(r"(\d+) day")
+
+
+def boards_of(summary: list) -> list:
+    """The board summary as a dashboard draws it: name, slug, open cards per state, the switch."""
+    out = []
+    for b in summary[:40]:
+        if not isinstance(b, dict) or not _text(b.get("name")):
+            continue
+        counts = b.get("counts") if isinstance(b.get("counts"), dict) else {}
+        out.append({"name": _text(b["name"])[:80], "slug": _text(b.get("slug"))[:64] or None,
+                    "number": b.get("number") if isinstance(b.get("number"), int) else None,
+                    "org": _text(b.get("org"))[:80] or None,
+                    "open": b.get("open") if isinstance(b.get("open"), int) else None,
+                    "counts": {k: int(counts[k]) for k in BOARD_STATES if isinstance(counts.get(k), int)},
+                    "capped": b.get("capped") if isinstance(b.get("capped"), int) else None,
+                    **({"mode": b["mode"]} if b.get("mode") in BOARD_MODES else {})})
+    return out
+
+
+def github_flags(item: dict, now: dt.datetime) -> list:
+    """What a GitHub row is, as the words a dashboard's figures filter by."""
+    flags = []
+    if item.get("assigned_to_me"):
+        flags.append("mine")
+    if item.get("category") == "qa" and item.get("type") == "pr":
+        flags.append("ask_review")
+    # your own pull request: the search says so in raw_state, or in note once a board card took the row over
+    if item.get("type") == "pr" and (_text(item.get("note")) or _text(item.get("raw_state"))).startswith("your PR"):
+        flags.append("my_pr")
+    if item.get("state") in ("in_progress", "review", "blocked"):
+        flags.append(item["state"])
+    changed = _when(item.get("changed_at"))
+    if changed is not None and (now - changed).days >= QUIET_DAYS:      # _when gives local, naive times
+        flags.append("quiet")
+    return flags
+
+
+GH_ID_RE = re.compile(r"^([\w.-]+/[\w.-]+)#(\d+)\Z")
+
+
+def github_facts(item: dict, now: dt.datetime) -> dict:
+    """A GitHub row's facts as a dashboard draws them, one field each instead of a detail line: the plain
+    title, repository and number, the normalized state and the board's own word for it, labels, people, the
+    pull requests that close it, the task that syncs it, when it last changed and how long it has been quiet."""
+    m = GH_ID_RE.match(_text(item.get("id")))
+    people = [p for p in (item.get("assignees") or [item.get("assignee")]) if isinstance(p, str) and p][:3]
+    linked = item.get("linked_task") if isinstance(item.get("linked_task"), dict) else {}
+    changed = _when(item.get("changed_at"))
+    quiet = (now - changed).days if changed is not None else None
+    status = re.sub(r"^[^0-9A-Za-zÄÖÜäöü]+", "", _text(item.get("raw_state"))).strip()   # without its emoji
+    return {"title": _text(item.get("title"))[:300], "repo": m.group(1) if m else None,
+            "number": int(m.group(2)) if m else None, "type": "pr" if item.get("type") == "pr" else "issue",
+            "state": _text(item.get("state")) or None, "status": status[:40] or None,
+            "labels": [_text(x)[:40] for x in item.get("labels") or [] if _text(x)][:4], "people": people,
+            "prs": [{"n": int(str(p["id"]).rsplit("#", 1)[-1]), "draft": bool(p.get("draft"))}
+                    for p in item.get("prs") or [] if isinstance(p, dict) and str(p.get("id", "")).rsplit("#", 1)[-1].isdigit()][:3],
+            "task": _text(linked.get("slug")) or None, "stream": bool(linked.get("stream")),
+            "changed": changed.isoformat(timespec="minutes") if changed else None,
+            "quiet": quiet if quiet is not None and quiet >= QUIET_DAYS else None,
+            "note": _text(item.get("note")) or None}
+
+
+def github_metrics(items: list, done: object, now: dt.datetime) -> list:
+    """The figures above a github-work section: each {id, n} (and `days` for the oldest of your pull
+    requests or the window of what you finished), in the order a dashboard shows them."""
+    flags = [github_flags(i, now) for i in items]
+    count = lambda flag: sum(1 for f in flags if flag in f)   # noqa: E731
+    ages = [int(m.group(1)) for i in items if i.get("type") == "pr"
+            for m in [PR_AGE_RE.search(_text(i.get("note")) or _text(i.get("raw_state")))] if m]
+    out = [{"id": "open", "n": len(items)}, {"id": "mine", "n": count("mine")},
+           {"id": "ask_review", "n": count("ask_review")},
+           {"id": "my_pr", "n": count("my_pr"), **({"days": max(ages)} if ages else {})},
+           {"id": "in_progress", "n": count("in_progress")}, {"id": "review", "n": count("review")},
+           {"id": "blocked", "n": count("blocked")}, {"id": "quiet", "n": count("quiet"), "days": QUIET_DAYS}]
+    done = done if isinstance(done, dict) else {}
+    for key in ("closed", "landed"):           # landed: your pull requests merged in the window
+        if isinstance(done.get(key), int):
+            out.append({"id": key, "n": done[key], "days": done.get("days") if isinstance(done.get("days"), int) else None})
+    return out
 ACCOUNT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,79}\Z")
 
 
@@ -1694,6 +1881,16 @@ def _page_section(section: dict, entry: dict, now: dt.datetime, labels: dict, ro
             "bad": sum(1 for r in rows if r["tone"] == "bad"),
             # From the section's cache (`cache_minutes`): the time its source last answered.
             "as_of": _page_when(section["cached_at"], now, labels) if section.get("cached_at") else None,
+            # a source that could not answer: its last kept rows, and why they are old
+            **({"stale": (labels["stale_refreshing"] if section["stale"].get("refreshing")
+                          else labels["stale_until"].format(until=section["stale"]["until"]) if section["stale"].get("until")
+                          else labels["stale"])} if isinstance(section.get("stale"), dict) else {}),
+            # a board summary (github-board, github-work): one entry per board, its open cards per state and,
+            # for github-work, the person's switch (off, mine, all)
+            **({"boards": boards_of(section["summary"])} if kind == "tracker" and isinstance(section.get("summary"), list)
+               else {}),
+            **({"metrics": github_metrics(items, section.get("metrics"), now)}
+               if section.get("provider") == "github-work" else {}),
             **({"view": entry["view"]} if entry.get("view") in PAGE_VIEWS[1:] else {}),
             # nothing to say when it is empty: a dashboard leaves the section out instead of "nothing"
             **({"hide_empty": True} if entry.get("hide_empty") is True else {})}

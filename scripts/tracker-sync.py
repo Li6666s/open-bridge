@@ -239,6 +239,7 @@ def load_registries(root: Path) -> dict:
             continue
         key = (proj.get("org"), proj.get("number"))
         data["_slug"] = (data.get("identity") or {}).get("slug", yf.stem)
+        data["_file"] = f"workflow/projects/{yf.name}"
         reg[key] = data
     return reg
 
@@ -602,6 +603,7 @@ def normalize_gh_item(raw: dict, board: dict, assignee_me: str | None) -> dict |
         "state": state,
         "type": content.get("type", "issue"),
         "assignee": assignees[0] if assignees else None,
+        "assignees": assignees,
         "assigned_to_me": bool(assignee_me) and assignee_me in assignees,
         "url": content.get("url"),
         "changed_at": raw.get("updatedAt") or content.get("updatedAt"),

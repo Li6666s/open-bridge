@@ -63,13 +63,15 @@ def make_link(url: str | None, root: Path) -> dict | None:
 
 def info_out(it: dict, index: int, root: Path, tabs: list[dict], view: dict | None, starting: set,
              page_id: str = "", section_id: str = "") -> dict:
-    tab = m.tab_for({"task": it.get("task"), "inbox_id": None}, tabs) if it.get("task") else None
+    # a task row, or a row an agent was started on (its inbox item): either way the tab shows on the row
+    tab = m.tab_for({"task": it.get("task"), "inbox_id": None if it.get("task") else it.get("inbox")}, tabs) \
+        if it.get("task") or it.get("inbox") else None
     return {"index": index, "key": m.item_key(page_id, section_id, it), "actionable": it.get("actionable") is True, "title": it["title"], "detail": it["detail"], "when": it["when"], "tone": it["tone"],
             "link": make_link(it.get("url"), root), "task": it.get("task"), "ask": it["ask"], "mark": it["mark"],
             "priority": it.get("priority"), "state": it.get("state"), "lines": it.get("lines", []),
             "meter": it.get("meter"), "group": it.get("group"), "icon": it.get("icon"),
             "tags": it.get("tags"), "account": it.get("account"), "inbox": it.get("inbox"),
-            "actions": it.get("actions"), "row_id": it.get("row_id"), "at": it.get("at"),
+            "actions": it.get("actions"), "row_id": it.get("row_id"), "at": it.get("at"), "flags": it.get("flags"), "who": it.get("who"), "gh": it.get("gh"),
             "starting": bool(it.get("task") and it["task"] in starting), "tab": tab_summary(tab, view)}
 
 
@@ -191,6 +193,9 @@ def build_model(view: dict, *, root: Path, tabs: list[dict], seen: dict, control
             gone = [i for i in shown if i not in items]
             bad = max(0, s["bad"] - sum(1 for i in gone if i.get("tone") == "bad"))
             sec = {k: s[k] for k in ("id", "kind", "title", "status", "reason", "alarm", "empty", "weight", "as_of")}
+            for extra in ("stale", "boards", "metrics"):
+                if s.get(extra):
+                    sec[extra] = s[extra]
             secs.append(sec | {"count": max(0, s["count"] - len(gone)), "total": max(0, s["total"] - len(gone)), "bad": bad,
                                "items": items, "view": s.get("view"), "hide_empty": s.get("hide_empty") is True,
                                "more": max(0, len(s["items"]) - cap)})
@@ -439,7 +444,7 @@ class Collector:
         for pg in view.get("pages", []):
             for sec in pg.get("sections", []):
                 items = sec.get("items", [])
-                if sec.get("status") != "ok" or sec.get("total", len(items)) > len(items):
+                if sec.get("status") != "ok" or sec.get("stale") or sec.get("total", len(items)) > len(items):
                     continue
                 looked.add(sec["id"])
                 present |= {f"{prefix}{sec['id']}:{it['id']}" for it in items if it.get("id")}
