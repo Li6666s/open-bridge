@@ -76,6 +76,27 @@ export function parseShortcut(text) {
   return t.split(/\s+/).map(code => ({ n: Number(code.slice(0, -1)), letter: code.slice(-1) }))
 }
 
+/** What a row is, the second axis beside its section (which says what it needs from you): 'task' finite work
+ * under work/tasks/, 'stream' long-running work under work/streams/, 'inbox' a report in the inbox (`task` the task
+ * it is about, if any), 'issue' an issue on a board (owner/repo#n), 'other' an item of another briefing source
+ * (an application, a deadline, a check), with that source's name. Shown first on every row (views/day.js KindTag) */
+export function rowKind(row) {
+  if (row?.inbox_id) return { kind: 'inbox', task: row.task ?? null }
+  if (row?.task) return { kind: row.stream ? 'stream' : 'task', task: row.task }
+  if (typeof row?.ref === 'string' && /^[\w.-]+\/[\w.-]+#\d+$/.test(row.ref)) return { kind: 'issue', ref: row.ref }
+  return { kind: 'other', source: row?.sources?.[0] ?? null }
+}
+
+/** Which start button a row shows, the same on every view (views/day.js StartMenu):
+ * 'tab' its agent tab runs (go there), 'restart' the tab died, 'approved' the yes is given (take it back),
+ * 'note' waiting or yours alone (a start needs a sentence of yours), 'do' everything else. */
+export function startMode(row) {
+  if (row?.tab) return row.tab.live ? 'tab' : 'restart'
+  if (row?.inbox_state === 'approved') return 'approved'
+  if (row?.bucket === 'waiting' || (row?.inbox_id && row?.gate === 'only-you')) return 'note'
+  return 'do'
+}
+
 /** Why a/w (start) is refused on a row, as in the mod's shortcut hook and card buttons:
  * 'approved', 'waiting', 'only_you', or null when starting is fine. */
 export function startRefusal(row) {

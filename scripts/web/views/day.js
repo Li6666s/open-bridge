@@ -2,10 +2,10 @@
 // The cockpit, the day column: the four blocks of the work tab.
 // The rules every component keeps stand at the head of components.js.
 
-import { html, useEffect, useRef, useState } from '../vendor/htm-preact-3.1.1.module.js'
+import { html, useEffect, useLayoutEffect, useRef, useState } from '../vendor/htm-preact-3.1.1.module.js'
 import {
   attentionTabs, duration, formatDay, indexRows, pageWarnings, sectionRows, short, stateToken, canTab, actionRow,
-  pageItemActs, workPageOf, workViews,
+  pageItemActs, workPageOf, workViews, startMode, parseDate, isoDate, launchChoice, rowKind,
   SECTION_ORDER, dueWhen, rowBudgets, whyWithoutDue,
 } from '../logic.js'
 import { T, language } from '../text.js'
@@ -19,9 +19,27 @@ import { Btn, Chip, Dot, Empty, MarkChip, PrioChip, StateLine, VerdictChip, useR
 
 // ---------------------------------------------------------------- left column: the day
 
+const KIND_MARK = { task: '▣', stream: '↻', inbox: '◆', issue: '#', other: '•' }
+
+/** What a row is (rowKind), first on every row and in every head, in one shape that stands apart from the state
+ *  chips: the state changes, the kind does not. A report about a task names it; `link` makes that name open the
+ *  task (not inside a row's own button, where a second button cannot stand) */
+export function KindTag({ row, s, c, link = false }) {
+  const t = T()
+  const k = rowKind(row)
+  const title = k.task ? (indexRows(s?.model).get(`task:${k.task}`)?.title ?? k.task) : null
+  const about = k.kind === 'inbox' && k.task
+    ? html`<span class="kind-about"> · ${t.kindAbout} ${link && c
+      ? html`<button type="button" class="btn-link" onClick=${() => c.select(`task:${k.task}`)}>${short(title, 48)}</button>`
+      : short(title, 48)}</span>` : null
+  const detail = k.kind === 'issue' ? html` <span class="mono">${k.ref}</span>` : k.kind === 'other' && k.source ? html` · ${k.source}` : null
+  return html`<span class=${`kind kind-${k.kind}`} title=${t.kindTitle[k.kind]}>
+    <span class="kind-mark" aria-hidden="true">${KIND_MARK[k.kind]}</span><span>${t.kind[k.kind]}${detail}</span></span>${about}`
+}
+
 export function RowMeta({ row, s }) {
   const t = T()
-  const parts = []
+  const parts = [html`<${KindTag} row=${row} s=${s} />`]
   if (row.tab) parts.push(html`<${Chip} token=${stateToken(row.tab.state)}>${t.state[row.tab.state] ?? row.tab.state}<//>`)
   if (row.starting) parts.push(html`<${Chip} token="info">${t.startingTab}<//>`)
   const liveSessions = row.task && !row.inbox_id ? (s?.sessions?.sessions ?? []).filter(x => x.task === row.task).length : 0
@@ -57,57 +75,189 @@ export function RowActions({ row, s, c, all = false }) {
         onClick=${() => c.rowAction(row, a.id)}>${t.action[a.id] ?? a.id}<//>`)
 }
 
-/** Close in two clicks: "Close" opens the two outcomes, Done or Discard, a click on one settles the row.
- *  Discard is the only way to discard: on a single inbox row it asks why (the reason can mute a source),
- *  a task closes as declined. A task also offers the longer dialog with every reason. Escape or a click
- *  outside closes the menu */
+/** What one can do with a row, in one panel that is the same on every view and behind both buttons of the bar:
+ *  one sentence field on top, then four groups in a fixed order, hand on, close, not now, keep. Every button takes
+ *  the sentence along in its own meaning: the note for the agent, the reason for Done or Discard, what Runs on
+ *  waits on, the note itself. Without a sentence each button does what it always did. Several rows (a selection,
+ *  the triage strip) get the groups that work on many: close and not now. `focus` is only where the cursor
+ *  starts: the sentence for the start button, Done for the close button */
+function RowPanel({ rows, s, c, focus, close, anchor }) {
+  const t = T()
+  const [text, setText] = useState('')
+  const [asking, setAsking] = useState(null)       // the outcome a stream's end waits on
+  const field = useRef(null)
+  const first = useRef(null)
+  const me = useRef(null)
+  // fixed in the window under its door, kept inside the window: a column, a card or a table that clips its
+  // content (the detail column does) can no longer cut it off. Above the door when there is more room there
+  const [at, setAt] = useState(null)
+  const place = () => {
+    const a = anchor.current?.getBoundingClientRect()
+    const el = me.current
+    if (!a || !el) return
+    const w = el.offsetWidth
+    const h = el.scrollHeight
+    const left = Math.max(8, Math.min(a.left, window.innerWidth - w - 8))
+    const below = window.innerHeight - a.bottom - 12
+    const above = a.top - 12
+    setAt(h <= below || below >= above
+      ? { left, top: a.bottom + 4, max: below }
+      : { left, top: Math.max(8, a.top - 4 - Math.min(h, above)), max: above })
+  }
+  useLayoutEffect(() => {
+    place()
+    window.addEventListener('resize', place)
+    window.addEventListener('scroll', place, true)
+    return () => { window.removeEventListener('resize', place); window.removeEventListener('scroll', place, true) }
+  }, [])
+  const style = at ? { left: `${at.left}px`, top: `${at.top}px`, maxHeight: `${at.max}px` } : { visibility: 'hidden' }
+  // the door's own popover moves the focus to the first item after this effect ran (a child's effects run
+  // first), so the move waits one turn: the start door types, the close door picks
+  useEffect(() => { const id = setTimeout(() => (focus === 'start' ? field : first).current?.focus(), 0); return () => clearTimeout(id) }, [])
+  const keys = rows.map(r => r.key)
+  const one = rows.length === 1 ? rows[0] : null
+  const mode = one ? startMode(one) : null
+  const x = text.trim()
+  const streams = rows.some(r => r.stream)
+  const launchable = !!(one && (one.inbox_id || one.task))
+  const done = fn => { close(); setText(''); return fn() }
+  const settle = outcome => {
+    if (streams && asking !== outcome) { setAsking(outcome); return }
+    done(() => c.act('settle', { keys, outcome, ...(x ? { text: x } : {}), ...(streams ? { stream: true } : {}) }))
+  }
+  // Discard on one inbox item without a reason asks why: the reason there can mute a noisy source
+  const discard = () => (one?.inbox_id && !x ? done(() => c.askDrop(one)) : settle('not_doing'))
+  const [day, setDay] = useState('')
+  const [dayErr, setDayErr] = useState('')
+  const untilDay = () => {
+    const iso = parseDate(day, s.now)
+    if (!iso) return setDayErr(t.noDate(day || ' '))
+    if (iso <= isoDate(s.now)) return setDayErr(t.pastDate)
+    later(r => c.act('later', { key: r.key, until: iso }))
+  }
+  const later = fn => done(async () => {
+    if (x) for (const r of rows) if (r.inbox_id || r.task) await c.act('note', { key: r.key, text: x })
+    rows.forEach(fn)
+  })
+  const item = (word, onClick, { token = null, off = false, ref = null } = {}) => html`<button type="button" role="menuitem"
+    class="settle-item" disabled=${off} ref=${ref} onClick=${onClick}>${token ? html`<${Dot} token=${token} />` : null}<span>${word}</span></button>`
+  const group = (title, body, extra = null) => html`<div class="panel-group" role="group" aria-label=${title}>
+    <span class="panel-group-head"><span class="label-caps">${title}</span>${extra}</span><div class="panel-group-body">${body}</div></div>`
+  if (asking) {
+    return html`<span class="settle-menu row-panel" role="menu" ref=${me} style=${style}>
+      <span class="settle-hint small">${t.streamEndAsk}</span>
+      ${item(t.streamEndYes, () => settle(asking), { token: asking === 'done' ? 'success' : 'on-surface-muted', ref: first })}
+      ${item(t.streamEndNo, () => setAsking(null))}
+    </span>`
+  }
+  const needsWords = mode === 'note'
+  return html`<span class="settle-menu row-panel" role="menu" ref=${me} style=${style}>
+    ${rows.length > 1 ? html`<ul class="settle-list">${rows.map(r => html`<li key=${r.key}>${r.title}</li>`)}</ul>` : null}
+    <label class="start-note">
+      <span class="label-caps">${t.panelText}</span>
+      <textarea rows="2" ref=${field} value=${text} placeholder=${needsWords ? t.startNeedsHint : t.panelTextHint}
+        onInput=${e => setText(e.currentTarget.value)}></textarea>
+    </label>
+    ${one ? group(t.grp.start, mode === 'approved'
+      ? item(t.approvedBack, () => done(() => c.act('inbox_reopen', { id: one.inbox_id })))
+      : mode === 'tab'
+        ? html`${item(t.sendHint, () => done(() => c.act('do_it', { keys, ...(x ? { note: x } : {}) })), { off: !x, token: 'info' })}
+            ${item(t.btnTabView, () => done(() => c.openTabView(one.tab.ref)))}`
+        : html`${item(t.action.do, () => done(() => c.act('do_it', { keys, ...(x ? { note: x } : {}) })), { off: needsWords && !x, token: 'info' })}
+            ${item(t.action.advise, () => done(() => c.act('advise', { keys, ...(x ? { note: x } : {}) })))}
+            ${launchable ? item(t.btnCollect, () => done(() => c.act('collect_context', { key: one.key, ...(x ? { note: x } : {}) }))) : null}
+            ${item(t.btnDoOwnWs, () => done(() => c.act('do_it', { keys, target: 'workspace', ...(x ? { note: x } : {}) })), { off: needsWords && !x })}`,
+      mode === 'do' || mode === 'note' || mode === 'restart' ? html`<details class="panel-model">
+          <summary class="muted small">${modelWord(s, t)}</summary>
+          <${LaunchPick} s=${s} c=${c} items=${[{ key: one.key, title: one.title }]} />
+        </details>` : null) : null}
+    ${group(t.grp.close, html`${item(t.settleDone, () => settle('done'), { token: 'success', ref: first })}
+      ${item(t.settleNot, discard, { token: 'on-surface-muted' })}
+      ${streams ? html`<span class="settle-hint muted small">${t.streamHint}</span>` : null}`)}
+    ${group(t.grp.later, html`${item(t.laterTomorrow, () => later(r => c.laterDays(r, 1)))}
+      ${item(t.laterMonday, () => later(r => c.laterMonday(r)))}
+      ${item(t.laterWeek, () => later(r => c.laterDays(r, 7)))}
+      ${item(t.settleRuns, () => done(() => c.askRunsOn(rows, x)))}
+      ${one && one.task && one.bucket === 'waiting' && !one.inbox_id
+        ? item(t.settleAgain, () => done(() => c.act('task_running', { slug: one.task }))) : null}
+      ${one && one.inbox_id && one.runs ? item(t.settleReopen, () => done(() => c.act('inbox_reopen', { id: one.inbox_id }))) : null}
+      <span class="field-row panel-day">
+        <input class="input input-date mono" type="text" inputmode="numeric" aria-label=${t.dateLabel} placeholder=${t.datePlaceholder}
+          value=${day} aria-invalid=${dayErr ? 'true' : undefined} onInput=${e => { setDay(e.currentTarget.value); setDayErr('') }}
+          onKeyDown=${e => { if (e.key === 'Enter') untilDay() }} />
+        <${Btn} size="xs" variant="ghost" disabled=${!day.trim()} onClick=${untilDay}>${t.btnUntilDay}<//>
+      </span>
+      ${dayErr ? html`<span class="field-err small" role="alert">${dayErr}</span>` : null}`)}
+    ${one ? group(t.grp.keep, html`${launchable ? item(t.btnSaveNote, () => done(() => c.act('note', { key: one.key, text: x })), { off: !x }) : null}
+      ${one.inbox_id ? item(t.settleToTask, () => done(() => c.act('to_task', { key: one.key }))) : null}
+      ${one.bucket === 'waiting' ? item(t.action.follow_up, () => done(() => c.ask('follow_up', { key: one.key }))) : null}
+      ${item(t.askChat, () => done(() => c.ask('row', { key: one.key })))}`) : null}
+    ${rows.some(r => !r.task && !r.inbox_id) ? html`<span class="settle-hint muted small">${t.settleHint}</span>` : null}
+  </span>`
+}
+
+/** The model a start here takes, folded to one line: "Model: Auto · Effort: Auto"; a click unfolds the picker */
+function modelWord(s, t) {
+  const w = t.launch
+  const choice = launchChoice(s.launch, s.ui)
+  return `${w.label}: ${w.model[choice.model] ?? choice.model} · ${w.effortLabel}: ${w.effort[choice.effort] ?? choice.effort}`
+}
+
+/** The start door of the panel: the row's one start button, its word by the row (startMode), and the ▾ beside it.
+ *  Waiting and yours-alone rows open the panel at the sentence, since an agent there needs to be told what to do */
+export function StartMenu({ row, s, c, size = 'xs' }) {
+  const t = T()
+  const mode = startMode(row)
+  const [open, setOpen] = useState(false)
+  const box = usePopover(open, setOpen)
+  const busy = !!s.ui.busy[row.key]
+  const main = mode === 'tab'
+    ? html`<${Btn} size=${size} variant="primary" busy=${busy}
+        onClick=${() => (canTab(s, 'focus') ? c.act('tab_jump', { tab_ref: row.tab.ref }) : c.openTabView(row.tab.ref))}>${t.action.to_tab}<//>`
+    : mode === 'restart'
+      ? html`<${Btn} size=${size} variant="primary" busy=${busy} onClick=${() => c.act('do_it', { keys: [row.key] })}>${t.action.restart}<//>`
+      : mode === 'approved'
+        ? html`<${Btn} size=${size} variant="ghost" busy=${busy} onClick=${() => setOpen(!open)}>${t.action.approved}<//>`
+        : html`<${Btn} size=${size} variant="primary" busy=${busy} title=${mode === 'note' ? t.startNeedsHint : undefined}
+            onClick=${() => (mode === 'note' ? setOpen(true) : c.rowAction(row, 'do'))}>${t.action.do}<//>`
+  return html`<span class="settle start" ref=${box}>
+    ${main}
+    <${Btn} size=${size} variant="ghost" pressed=${open} label=${t.startMore} onClick=${() => setOpen(!open)}>▾<//>
+    ${open ? html`<${RowPanel} rows=${[row]} s=${s} c=${c} focus="start" close=${() => setOpen(false)} anchor=${box} />` : null}
+  </span>`
+}
+
+/** The close door of the same panel: "Close ▾" on one row, "Close n ▾" on a selection */
 export function SettleMenu({ rows, s, c, size = 'xs' }) {
   const t = T()
   const [open, setOpen] = useState(false)
   const box = usePopover(open, setOpen)
   const ok = rows.filter(r => (r.settle ?? []).length)
   if (!ok.length) return null
-  const keys = ok.map(r => r.key)
-  const busy = !!s.ui.busy[keys.join(',')] || ok.some(r => s.ui.busy[r.key])
-  const pick = outcome => { setOpen(false); c.act('settle', { keys, outcome }) }
-  const discard = () => ok.length === 1 && ok[0].inbox_id ? (setOpen(false), c.askDrop(ok[0])) : pick('not_doing')
-  const tasks = ok.filter(r => r.closable)
+  const busy = !!s.ui.busy[ok.map(r => r.key).join(',')] || ok.some(r => s.ui.busy[r.key])
+  const word = ok.length > 1 ? t.settleMany(ok.length) : t.settle
   return html`<span class="settle" ref=${box}>
-    <${Btn} size=${size} variant="ghost" busy=${busy} pressed=${open} onClick=${() => setOpen(!open)}
-      label=${ok.length > 1 ? t.settleMany(ok.length) : t.settle}>${ok.length > 1 ? t.settleMany(ok.length) : t.settle} ▾<//>
-    ${open ? html`<span class="settle-menu" role="menu">
-      <button type="button" role="menuitem" class="settle-item" onClick=${() => pick('done')}>
-        <${Dot} token="success" /><span>${t.settleDone}</span></button>
-      <button type="button" role="menuitem" class="settle-item" onClick=${discard}>
-        <${Dot} token="on-surface-muted" /><span>${t.settleNot}</span></button>
-      <button type="button" role="menuitem" class="settle-item" onClick=${() => { setOpen(false); c.askRunsOn(ok) }}>
-        <${Dot} token="info" /><span>${t.settleRuns}</span></button>
-      ${ok.length === 1 && ok[0].task && ok[0].bucket === 'waiting' && !ok[0].inbox_id ? html`<button type="button" role="menuitem" class="settle-item"
-        onClick=${() => { setOpen(false); c.act('task_running', { slug: ok[0].task }) }}><${Dot} token="success" /><span>${t.settleAgain}</span></button>` : null}
-      ${ok.length === 1 && ok[0].inbox_id && ok[0].runs ? html`<button type="button" role="menuitem" class="settle-item"
-        onClick=${() => { setOpen(false); c.act('inbox_reopen', { id: ok[0].inbox_id }) }}><${Dot} token="success" /><span>${t.settleAgain}</span></button>` : null}
-      ${ok.length === 1 && ok[0].inbox_id ? html`<button type="button" role="menuitem" class="settle-item"
-        onClick=${() => { setOpen(false); c.act('to_task', { key: ok[0].key }) }}><${Dot} token="info" /><span>${t.settleToTask}</span></button>` : null}
-      ${tasks.length === ok.length ? html`<button type="button" role="menuitem" class="settle-item settle-more"
-        onClick=${() => { setOpen(false); c.askClose(tasks) }}><span>${t.settleMore}</span></button>` : null}
-      ${ok.some(r => !r.task && !r.inbox_id) ? html`<span class="settle-hint muted small">${t.settleHint}</span>` : null}
-    </span>` : null}
+    <${Btn} size=${size} variant="ghost" busy=${busy} pressed=${open} onClick=${() => setOpen(!open)} label=${word}>${word} ▾<//>
+    ${open ? html`<${RowPanel} rows=${ok} s=${s} c=${c} focus="close" close=${() => setOpen(false)} anchor=${box} />` : null}
   </span>`
 }
 
-/** The buttons of a page row that is no inbox item or task but a person can hand on: the same Do it, Advise
- *  and Settle as a work row. The server files it to the inbox first and starts on that */
+/** The buttons of a row, one order on every view: start, close, pin. `tab` is an agent tab a view found for the
+ *  row's task in the tab list, when the row itself names none */
+export function RowBar({ row, s, c, pin = true, size = 'xs', tab = null }) {
+  const r = tab && !row.tab ? { ...row, tab: { ref: tab.ref, state: tab.state, live: tab.live ?? tab.state !== 'shell' } } : row
+  return html`<${StartMenu} row=${r} s=${s} c=${c} size=${size} /><${SettleMenu} rows=${[r]} s=${s} c=${c} size=${size} />${pin
+    ? html`<${PinStar} rowKey=${r.key} s=${s} c=${c} />` : null}`
+}
+
+/** The buttons of a page row that is no inbox item or task but a person can hand on: the same bar as a work row.
+ *  The server files it to the inbox first and starts on that */
 export function PageItemActions({ it, s, c, after }) {
-  const t = T()
   if (!pageItemActs(it)) return null
   const row = actionRow(it, new Map())
-  const busy = !!s.ui.busy[it.key]
   // `after` runs once a step went through (the detail drawer closes with it)
-  const run = verb => Promise.resolve(c.rowAction(row, verb)).then(r => { if (r?.ok) after?.() })
   const cc = after ? { ...c, act: async (verb, args) => { const r = await c.act(verb, args); if (r?.ok) after(); return r } } : c
-  return html`<${Btn} size="xs" variant="primary" busy=${busy} onClick=${() => run('do')}>${t.action.do}<//>
-    <${Btn} size="xs" variant="secondary" busy=${busy} onClick=${() => run('advise')}>${t.action.advise}<//>
-    <${SettleMenu} rows=${[row]} s=${s} c=${cc} />`
+  return html`<${RowBar} row=${row} s=${s} c=${cc} pin=${false} />`
 }
 
 /** What the small model says a row is about (triage.py gist), when it says more than the title */
@@ -137,7 +287,7 @@ function RowItem({ row, s, c }) {
       <${RowMeta} row=${row} s=${s} />
       <${ReturnChip} s=${s} rowKey=${[row.key, row.task ? `task:${row.task}` : null]} />
     </button>
-    <span class="row-acts"><${RowActions} row=${row} s=${s} c=${c} /><${SettleMenu} rows=${[row]} s=${s} c=${c} /><${PinStar} rowKey=${row.key} s=${s} c=${c} /></span>
+    <span class="row-acts"><${RowBar} row=${row} s=${s} c=${c} /></span>
   </li>`
 }
 

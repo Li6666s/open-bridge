@@ -365,24 +365,6 @@ test('planShortcut: c is the negative close: an inbox row asks why, a task or ot
   assert.doesNotMatch(app, /plan\.drop\b/)
 })
 
-test('close menu: one way to close, Done or Discard; Discard on one inbox row asks why, no separate Discard button', () => {
-  const day = read('views/day.js')
-  const menu = day.slice(day.indexOf('export function SettleMenu'), day.indexOf('/** The buttons of a page row'))
-  assert.match(menu, /t\.settleDone/)
-  assert.match(menu, /t\.settleNot/)
-  assert.match(menu, /const discard = \(\) => ok\.length === 1 && ok\[0\]\.inbox_id \? \(setOpen\(false\), c\.askDrop\(ok\[0\]\)\) : pick\('not_doing'\)/)
-  assert.match(menu, /onClick=\$\{discard\}>\s*<\$\{Dot\} token="on-surface-muted" \/><span>\$\{t\.settleNot\}/)
-  // the detail card has the close menu and no Discard of its own: for a task that one only hid it for a week
-  const detail = read('views/detail.js')
-  const block = detail.slice(detail.indexOf('function ActionsBlock'), detail.indexOf('function ActionsBlock') + 2500)
-  assert.doesNotMatch(block, /t\.action\.drop/)
-  for (const lang of [text.TABLES.en, text.TABLES.de]) {
-    assert.ok(lang.settleNot && lang.settleDone && lang.scStream, 'close menu words and the stream refusal in both languages')
-  }
-  assert.equal(text.TABLES.de.settleNot, 'Verwerfen')
-  assert.equal(text.TABLES.de.settleDone, 'Erledigt')
-})
-
 test('markToken: profile color names map to design tokens, unknown to muted', () => {
   assert.equal(logic.markToken('red'), 'danger')
   assert.equal(logic.markToken('Yellow'), 'warning')
@@ -2176,8 +2158,8 @@ test('launch: the picker stands in every start block and only there through one 
   assert.match(app, /launchEffort: load\('bridge-cockpit\.launchEffort', null\)/)
   assert.match(app, /setLaunchModel: m => \{ save\('bridge-cockpit\.launchModel', m\); setUi\(\{ launchModel: m \}\) \}/)
   assert.match(app, /launch: payload\.launch \?\? s\.launch/)
-  // the detail's start block, the item drawer, the chat foot, both bulk bars
-  for (const name of ['ActionsBlock', 'ItemDrawer', 'ChatFoot', 'SelectionBar']) {
+  // the row panel (every row, every view), the chat foot, both bulk bars
+  for (const name of ['RowPanel', 'ChatFoot', 'SelectionBar']) {
     const body = comp.match(new RegExp(`function ${name}\\([\\s\\S]*?\\n\\}`))[0]
     assert.match(body, /<\$\{LaunchPick\}/, name)
   }
@@ -2974,7 +2956,7 @@ test('drop: an inbox row asks why, from the close menu and from the c key', () =
   assert.match(app, /case 'drop':\s*\n\s*return row\.inbox_id \? ctl\.askDrop\(row\) : act\('drop', \{ key: row\.key \}\)/)
   assert.match(app, /c\?\.kind === 'drop'/)
   assert.match(overlays, /conf\.kind === 'drop'\) return html`<\$\{DropDialog\}/)
-  assert.match(read('views/day.js'), /c\.askDrop\(ok\[0\]\)/)
+  assert.match(read('views/day.js'), /c\.askDrop\(one\)/)
   for (const lang of ['en', 'de']) {
     const t = text.TABLES[lang]
     for (const r of ['once', 'duplicate', 'family', 'source']) assert.ok(t.dropReason[r], `${lang} dropReason.${r}`)
@@ -3329,6 +3311,7 @@ test('style.css: every class selector is used by the page, or built from an allo
     'tl-': null, 'sr-': ['0', '1', '2', '3'], 'view-thumb-': null, 'vs-': null,
     'ticker-': ['slow', 'normal', 'fast'],
     'tri-': ['ai', 'either'],
+    'kind-': ['task', 'stream', 'inbox', 'issue', 'other'],
   }
   for (const p of Object.keys(DYNAMIC)) assert.ok(src.includes(`${p}\${`), `allowed prefix ${p} is built nowhere any more`)
   const built = c => Object.entries(DYNAMIC).some(([p, ok]) => c.startsWith(p) && (ok === null || ok.includes(c.slice(p.length))))
@@ -4123,4 +4106,137 @@ test('the workspaces heading row wraps its buttons instead of cutting them off',
   assert.ok(rule, 'no .room-group-head rule')
   assert.match(rule[1], /flex-wrap: wrap/)
   assert.doesNotMatch(rule[1], /justify-content: space-between/)
+})
+
+// ---------------------------------------------------------------- every row the same
+
+test('startMode: one start button per row, its word follows the row state', () => {
+  const r = extra => ({ key: 'task:a', task: 'a', inbox_id: null, bucket: 'do', tab: null, ...extra })
+  assert.equal(logic.startMode(r()), 'do')
+  assert.equal(logic.startMode(r({ tab: { ref: 'surface:1', live: true } })), 'tab')
+  assert.equal(logic.startMode(r({ tab: { ref: 'surface:1', live: false } })), 'restart')
+  assert.equal(logic.startMode(r({ inbox_id: 'x', inbox_state: 'approved' })), 'approved')
+  assert.equal(logic.startMode(r({ bucket: 'waiting' })), 'note')
+  assert.equal(logic.startMode(r({ inbox_id: 'x', gate: 'only-you' })), 'note')
+  assert.equal(logic.startMode({ key: 'ref:o/r#1', bucket: 'do' }), 'do')          // a foreign row is filed, then started
+  assert.equal(logic.startMode(r({ task: 's', stream: true })), 'do')              // a stream starts like any task
+})
+
+test('one row bar everywhere: every view shows RowBar, none builds its own start and close pair', () => {
+  for (const f of ['views/day.js', 'views/home.js', 'views/stage.js', 'views/overlays.js', 'views/pages.js', 'views/detail.js']) {
+    const src = read(f)
+    assert.match(src, /<\$\{RowBar\}/, `${f} renders RowBar`)
+    assert.doesNotMatch(src, /act\('start_agent'/, `${f}: one start verb, do_it`)
+    assert.doesNotMatch(src, /<\$\{RowActions\}/, `${f}: no buttons beside the bar`)
+  }
+  assert.doesNotMatch(read('views/pages.js'), /<\$\{SettleMenu\} rows=\$\{\[actionRow/, 'the page row closes through its bar')
+  // the triage strip closes through the same menu, not a second one with fewer ways
+  assert.doesNotMatch(read('triage.js'), /function CloseAll/)
+  assert.match(read('triage.js'), /<\$\{SettleMenu\} rows=\$\{closable\}/)
+})
+
+
+test('row panel: one sentence field, four groups, the same panel behind both buttons', () => {
+  const day = read('views/day.js')
+  const panel = day.slice(day.indexOf('function RowPanel'), day.indexOf('export function StartMenu'))
+  // the order of the groups is fixed: hand on, close, not now, keep
+  const at = k => panel.indexOf(`t.grp.${k}`)
+  assert.ok(at('start') > 0 && at('start') < at('close') && at('close') < at('later') && at('later') < at('keep'), 'group order')
+  // every verb takes the one sentence along, in its own meaning
+  assert.match(panel, /c\.act\('do_it', \{ keys, \.\.\.\(x \? \{ note: x \} : \{\}\) \}\)/)
+  assert.match(panel, /c\.act\('advise', \{ keys, \.\.\.\(x \? \{ note: x \} : \{\}\) \}\)/)
+  assert.match(panel, /c\.act\('collect_context'/)
+  assert.match(panel, /target: 'workspace'/)
+  assert.match(panel, /c\.act\('settle', \{ keys, outcome, \.\.\.\(x \? \{ text: x \} : \{\}\)/)   // a reason of your own, any row
+  assert.match(panel, /c\.askRunsOn\(rows, x\)/)                                                    // what it waits on
+  assert.match(panel, /c\.act\('note', \{ key: one\.key, text: x \}\)/)                              // keep it, nothing else
+  assert.match(panel, /c\.laterDays\(r, 1\)/)
+  assert.match(panel, /c\.laterMonday\(r\)/)
+  assert.match(panel, /c\.laterDays\(r, 7\)/)
+  assert.match(panel, /c\.act\('later', \{ key: r\.key, until: iso \}\)/)                          // a day of your own
+  assert.doesNotMatch(read('views/detail.js'), /function DateBlock/, 'not now lives in the panel')
+  assert.match(panel, /<\$\{LaunchPick\}/)                                                          // the model, on every row
+  assert.match(panel, /stream: true/)
+  assert.match(panel, /t\.streamEndAsk/)
+  assert.match(panel, /c\.askDrop\(one\)/)                                                           // an inbox item without a reason asks why
+  assert.match(panel, /inbox_reopen/)
+  assert.match(panel, /'follow_up'/)
+  assert.match(panel, /c\.ask\('row', \{ key: one\.key \}\)/)
+  assert.doesNotMatch(panel, /askClose/, 'no second close dialog: the sentence is the reason')
+  // both doors open the same room
+  const start = day.slice(day.indexOf('export function StartMenu'), day.indexOf('export function SettleMenu'))
+  const settle = day.slice(day.indexOf('export function SettleMenu'), day.indexOf('export function RowBar'))
+  assert.match(start, /<\$\{RowPanel\} rows=\$\{\[row\]\}[^>]*focus="start"/)
+  assert.match(settle, /<\$\{RowPanel\} rows=\$\{ok\}[^>]*focus="close"/)
+  const bar = day.slice(day.indexOf('export function RowBar'), day.indexOf('export function RowBar') + 700)
+  assert.match(bar, /<\$\{StartMenu\}[\s\S]*<\$\{SettleMenu\}[\s\S]*<\$\{PinStar\}/)
+})
+
+test('row panel: no second place for a note, a model or a start beside it', () => {
+  const detail = read('views/detail.js')
+  assert.doesNotMatch(detail, /<\$\{NoteBlock\}/, 'the note lives in the panel')
+  assert.doesNotMatch(detail, /<\$\{LaunchPick\}/, 'the model lives in the panel')
+  assert.doesNotMatch(detail, /t\.startTitle/, 'the start lives in the panel')
+  assert.doesNotMatch(read('views/overlays.js'), /<\$\{LaunchPick\}/)
+  for (const lang of [text.TABLES.en, text.TABLES.de]) {
+    for (const k of ['panelText', 'panelTextHint', 'startNeedsHint', 'sendHint', 'startMore', 'approvedBack', 'btnSaveNote',
+      'laterTomorrow', 'laterMonday', 'laterWeek', 'streamEndAsk', 'streamEndYes', 'streamEndNo', 'settleReopen']) assert.ok(lang[k], k)
+    for (const g of ['start', 'close', 'later', 'keep']) assert.ok(lang.grp?.[g], `grp.${g}`)
+  }
+  assert.equal(text.TABLES.de.grp.start, 'Weitergeben')
+  assert.equal(text.TABLES.de.grp.close, 'Abschließen')
+})
+
+test('row panel: stands fixed in the window, so no column, card or table clips it', () => {
+  const day = read('views/day.js')
+  const panel = day.slice(day.indexOf('function RowPanel'), day.indexOf('export function StartMenu'))
+  assert.match(panel, /anchor\.current\?\.getBoundingClientRect\(\)/)
+  assert.match(panel, /window\.innerWidth/)
+  assert.match(panel, /window\.innerHeight/)
+  assert.match(panel, /addEventListener\('scroll', place, true\)/)            // any scrolling column moves it along
+  assert.doesNotMatch(panel, /is-left/)
+  for (const door of ['export function StartMenu', 'export function SettleMenu']) {
+    const body = day.slice(day.indexOf(door), day.indexOf(door) + 2400)
+    assert.match(body, /anchor=\$\{box\}/, `${door} anchors the panel at itself`)
+  }
+  const css = read('style.css')
+  assert.match(css, /\.row-panel \{[^}]*position: fixed/)
+  // a transform on an ancestor would make fixed relative to it: no entrance animation keeps one, no card lifts while open
+  assert.match(css, /\.row-in \{ animation: row-in 360ms ease-out backwards;/)
+  assert.match(css, /\.hcard:has\(\.row-panel\) \{ transform: none; \}/)
+})
+
+// ---------------------------------------------------------------- what a row is
+
+test('rowKind: four kinds and a rest, read from the row alone', () => {
+  assert.deepEqual(logic.rowKind({ key: 'task:a', task: 'a' }), { kind: 'task', task: 'a' })
+  assert.deepEqual(logic.rowKind({ key: 'task:s', task: 's', stream: true }), { kind: 'stream', task: 's' })
+  assert.deepEqual(logic.rowKind({ key: 'inbox:x', inbox_id: 'x', task: null }), { kind: 'inbox', task: null })
+  assert.deepEqual(logic.rowKind({ key: 'inbox:x', inbox_id: 'x', task: 'a' }), { kind: 'inbox', task: 'a' })     // a report about a task
+  assert.deepEqual(logic.rowKind({ key: 'ref:o/r#12', ref: 'o/r#12', sources: ['boards'] }), { kind: 'issue', ref: 'o/r#12' })
+  assert.deepEqual(logic.rowKind({ key: 'ref:2026-10/app', ref: '2026-10/app', sources: ['Bewerbungen'] }), { kind: 'other', source: 'Bewerbungen' })
+  assert.deepEqual(logic.rowKind({ key: 'item:x' }), { kind: 'other', source: null })
+})
+
+test('the kind stands first on every row, in the detail head and in the drawer head', () => {
+  const day = read('views/day.js')
+  const meta = day.slice(day.indexOf('export function RowMeta'), day.indexOf('export function RowMeta') + 500)
+  assert.match(meta, /<\$\{KindTag\} row=\$\{row\}/, 'first thing in the meta line')
+  assert.match(day, /export function KindTag\(/)
+  const tag = day.slice(day.indexOf('export function KindTag('), day.indexOf('export function KindTag(') + 1400)
+  assert.match(tag, /t\.kind\[k\.kind\]/)
+  assert.match(tag, /t\.kindAbout/)                              // a report names the task it is about
+  assert.match(tag, /c\.select\(`task:\$\{k\.task\}`\)/)
+  assert.match(read('views/detail.js'), /<\$\{KindTag\} row=\$\{row\} s=\$\{s\} c=\$\{c\} link \/>/)
+  assert.match(read('views/overlays.js'), /t\.kind\[/)
+  assert.match(read('views/stage.js'), /<\$\{KindTag\}/)
+  for (const lang of [text.TABLES.en, text.TABLES.de]) {
+    for (const k of ['task', 'stream', 'inbox', 'issue', 'other']) assert.ok(lang.kind?.[k], `kind.${k}`)
+    assert.ok(lang.kindAbout && lang.kindTitle?.stream && lang.streamHint, 'about, titles, the stream hint')
+    assert.ok(lang.helpText.some(([k]) => k === lang.kindHelp), 'the help names the kinds')
+  }
+  assert.equal(text.TABLES.de.kind.inbox, 'Meldung')
+  assert.equal(text.TABLES.de.kind.stream, 'Stream')
+  const panel = day.slice(day.indexOf('function RowPanel'), day.indexOf('export function StartMenu'))
+  assert.match(panel, /t\.streamHint/)
 })

@@ -11,7 +11,7 @@ import {
 import { flash } from '../motion.js'
 import { T, language } from '../text.js'
 import { ChatThread, Thinking, useQuickLive } from './chat.js'
-import { RowActions, SettleMenu } from './day.js'
+import { KindTag, RowBar } from './day.js'
 import {
   DayBars, PinStar, ReturnCard, ReturnChip, jumpToTab, openWhole, pageParts, pageTitleOf, pct, returnsOf, shownTiles,
 } from './home.js'
@@ -168,14 +168,12 @@ function StageCard({ s, c, tabs, onWeigh }) {
     <span class=${`stage-dot tk-${dot(r)}`} aria-hidden="true"></span>
     <button type="button" class="stage-row-main" onClick=${e => openWhole(c, r, e.currentTarget)} title=${h.openRow(short(r.title, 60))}>
       <span class="stage-row-title">${fresh.has(r.key) ? html`<span class="new-tag">${h.isNew}</span>` : null}${r.priority ? html`<em class=${`tk-${dot(r)}`}>${r.priority} </em>` : null}${short(r.title, lead ? 120 : 80)}</span>
-      ${sub(r) ? html`<span class="stage-row-sub">${sub(r)}</span>` : null}
+      <span class="stage-row-sub"><${KindTag} row=${r} s=${s} />${sub(r) ? html` ${sub(r)}` : null}</span>
       <${ReturnChip} s=${s} rowKey=${r.key} />
     </button>
     ${lead ? html`<span class="stage-pill">${h.focusTitle}</span>` : null}
     ${lead ? html`<div class="stage-row-acts">
-      ${tabOfTask(tabs, r.task) ? html`<${Btn} size="xs" variant="primary" onClick=${() => jumpToTab(s, c, tabOfTask(tabs, r.task).ref)}>${h.toTab}<//>`
-        : html`<${RowActions} row=${r} s=${s} c=${c} />`}
-      <${SettleMenu} rows=${[r]} s=${s} c=${c} /><${PinStar} rowKey=${r.key} s=${s} c=${c} /></div>` : null}
+      <${RowBar} row=${r} s=${s} c=${c} tab=${tabOfTask(tabs, r.task)} /></div>` : null}
   </div>`
   return html`<section class="stage-card" aria-labelledby="stage-card-title">
     <header class="stage-card-head"><h2 id="stage-card-title">${h.cardTitle}</h2>
@@ -248,9 +246,7 @@ function StageInspector({ x, st, s, c, tabs, onClose }) {
     const rows = (s.model?.sections ?? []).find(r => r.id === 'now')?.rows ?? []
     // the morning round from the start page: the first row carries its buttons, and once it is settled
     // the next one moves up and carries them; a row whose task already has a tab leads to that tab
-    const acts = r => tabOfTask(tabs, r.task)
-      ? html`<${Btn} size="xs" variant="primary" onClick=${() => jumpToTab(s, c, tabOfTask(tabs, r.task).ref)}>${h.toTab}<//>`
-      : html`<${RowActions} row=${r} s=${s} c=${c} /><${SettleMenu} rows=${[r]} s=${s} c=${c} /><${PinStar} rowKey=${r.key} s=${s} c=${c} />`
+    const acts = r => html`<${RowBar} row=${r} s=${s} c=${c} tab=${tabOfTask(tabs, r.task)} />`
     body = html`${head(h.waitingNow, String(rows.length))}
       ${rows.slice(0, 8).map((r, i) => html`<${InspectRow} key=${r.key} tone=${r.urgency === 'now' ? 'danger' : r.urgency === 'today' ? 'warning' : 'info'}
         title=${short(r.title, i ? 90 : 140)} sub=${r.area || r.mark?.label || ''} onClick=${e => openWhole(c, r, e.currentTarget)}>${i === 0 ? acts(r) : null}<//>`)}

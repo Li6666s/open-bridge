@@ -5,18 +5,17 @@
 import { html, useEffect, useRef } from '../vendor/htm-preact-3.1.1.module.js'
 import {
   DAY, attentionTabs, clockTime, detailNeedsLoad, formatDay, isoDate, nextFocusIndex, nextMonday, noteToken, short,
-  toneToken, actionRow, serious, detailText, linkParts, probeText, newestFirst, upcomingEvents, muteScope, rowActionKey,
+  toneToken, actionRow, serious, detailText, linkParts, probeText, newestFirst, upcomingEvents, muteScope, rowActionKey, rowKind,
 } from '../logic.js'
 import { T, language } from '../text.js'
 import { TriageGist } from '../triage.js'
-import { PageItemActions, RowActions, SettleMenu } from './day.js'
+import { PageItemActions, RowBar } from './day.js'
 import { DetailFailed, Lines, Segmented } from './detail.js'
 import { AsOf, RelayBadge } from './header.js'
 import { ReturnPanel } from './home.js'
 import {
   AGENTS_PAGE, CHAT_PAGE, CHECK_PAGE, JEV_PAGE, SESSIONS_PAGE, START_PAGE, WORKERS_PAGE, briefingTitle, onPageOf,
 } from './nav.js'
-import { LaunchPick } from './launch.js'
 import { MeterBar, RowSteps, StatusMenu } from './pages.js'
 import { GH_REF, GitHubDetail } from './github.js'
 import { CalendarFacts } from './dates.js'
@@ -231,40 +230,31 @@ export function ItemDrawer({ s, c, byKey }) {
   const it = cur.it ?? {}
   const tri = s.triage?.items?.[key] ?? null
   const own = byKey.get(key)
-  const row = own ?? actionRow(isInbox ? { inbox: id, title: it.title, task: it.task } : { task: id, title: it.title }, byKey)
   const data = s.details[isInbox ? 'inbox' : 'task'][id]?.data
+  const made = own ? null : actionRow(isInbox ? { inbox: id, title: it.title, task: it.task } : { task: id, title: it.title }, byKey)
+  // a row built here knows from the item whether its yes is given already, so its start button says so
+  const row = own ?? (made && isInbox && data?.item?.state ? { ...made, inbox_state: data.item.state } : made)
   const title = (isInbox ? data?.item?.summary : data?.front?.headline) || it.title || id
   const slug = isInbox ? (data?.item?.task ?? it.task) : id
   // a close from inside the drawer ends the item: the drawer goes with it
   const cc = { ...c, act: async (verb, args) => { const r = await c.act(verb, args); if (r?.ok && (verb === 'settle' || verb === 'do_it')) c.closeItem(); return r } }
   const asks = it.ask && cur.page && cur.section && it.index != null
-  // the row's own buttons may already start it (or jump to its tab): then no second "Get it done" beside them
-  const ownStarts = (own?.actions ?? []).some(a => ['do', 'restart', 'to_tab'].includes(a.id))
-  // the row a start here would hand on, for the model picker under the buttons
-  const startKey = ownStarts ? key : slug && s.details.task[slug]?.data?.kind !== 'done' ? `task:${slug}`
-    : isInbox && data?.item?.state !== 'approved' ? key : null
   return html`<div class="overlay" onClick=${e => { if (e.target === e.currentTarget) c.closeItem() }}>
     <aside class="drawer drawer-right idrawer" role="dialog" aria-modal="true" aria-labelledby="idrawer-title" ref=${ref}>
       <header class="idrawer-head">
         <div class="idrawer-head-main">
-          <span class="eyebrow">${isInbox ? t.inboxTitle : t.taskTitle}</span>
+          <span class="eyebrow">${t.kind[rowKind(row ?? { inbox_id: isInbox ? id : null, task: isInbox ? null : id }).kind]}</span>
           <h2 class="idrawer-title" id="idrawer-title">${title}</h2>
         </div>
         <${Btn} variant="ghost" size="xs" icon="close" label=${t.item.close} onClick=${c.closeItem} />
       </header>
       <div class="btn-row idrawer-actions">
         ${cur.prev ? html`<${Btn} size="xs" variant="ghost" icon="back" onClick=${() => c.openItem(cur.prev.key, cur.prev.it, { page: cur.prev.page, section: cur.prev.section }, cur.prev.prev)}>${t.item.backTo}<//>` : null}
-        ${own ? html`<${RowActions} row=${own} s=${s} c=${cc} all />` : null}
-        ${ownStarts ? null : slug && s.details.task[slug]?.data?.kind !== 'done' ? html`<${Btn} size="xs" variant="secondary" busy=${!!s.ui.busy[`task:${slug}`]} title=${t.btnStartAgentTitle}
-          onClick=${() => c.act('start_agent', { keys: [`task:${slug}`] })}>${t.btnOpenTab}<//>`
-          : isInbox && data?.item?.state !== 'approved' ? html`<${Btn} size="xs" variant="secondary" busy=${!!s.ui.busy[key]} title=${t.btnStartAgentTitle}
-          onClick=${() => c.act('start_agent', { keys: [key] })}>${t.btnOpenTab}<//>` : null}
+        ${row ? html`<${RowBar} row=${row} s=${s} c=${cc} />` : null}
         ${asks ? html`<${Btn} size="xs" variant="ghost" onClick=${() => c.ask('info', { page: cur.page, section: cur.section, index: it.index })}>${t.btnAsk}<//>` : null}
-        ${row ? html`<${SettleMenu} rows=${[row]} s=${s} c=${cc} />` : null}
         ${slug ? html`<${Btn} size="xs" variant="ghost" onClick=${() => c.openInner(`task:${slug}`)}>${t.item.inNet}<//>` : null}
         ${own && !isInbox ? html`<${Btn} size="xs" variant="ghost" onClick=${() => { c.closeItem(); c.peek(key) }}>${t.item.more}<//>` : null}
       </div>
-      ${startKey ? html`<${LaunchPick} s=${s} c=${c} items=${[{ key: startKey, title: own?.title ?? it.title ?? title }]} />` : null}
       <div class="idrawer-body">
         <${ReturnPanel} s=${s} c=${c} keys=${[key, slug ? `task:${slug}` : null]} />
         ${slug ? html`<section class="idrawer-sec"><${TaskSessions} row=${{ task: slug, key: `task:${slug}` }} s=${s} c=${c} /></section>` : null}
@@ -423,7 +413,8 @@ export function HelpDialog({ c }) {
           <p class="muted small">${t.commandHint}</p>
         </section>
         <section>
-          <dl class="help-text">${t.helpText.map(([k, v]) => html`<div key=${k}><dt>${k}</dt><dd>${v}</dd></div>`)}</dl>
+          <dl class="help-text">${t.helpText.map(([k, v]) => html`<div key=${k}><dt>${k}</dt><dd>${Array.isArray(v)
+            ? html`<ul class="plain help-list">${v.map(x => html`<li key=${x}>${x}</li>`)}</ul>` : v}</dd></div>`)}</dl>
         </section>
       </div>
     </div>
