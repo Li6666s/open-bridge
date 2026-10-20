@@ -137,6 +137,8 @@ const store = createStore({
     settingsSection: load('bridge-cockpit.settingsSection', 'start'),
     busy: {}, snapshotText: null, openMsg: null, tabView: null, room: null, quickConv: null, agentPeer: null, agentConv: null, agentMode: 'question', agentsListHidden: load('bridge-cockpit.agentsList', 'shown') === 'hidden',
     railHidden: load('bridge-cockpit.rail', 'shown') === 'hidden',
+    // keyboard shortcuts wait until switched on in the settings (this browser only): a stray letter acts on nothing
+    shortcuts: load('bridge-cockpit.shortcuts', 'off') === 'on',
     // the order of the workspaces in the chat as cmux: the terminal's (default) or the most urgent first; kept in this browser
     roomsSort: load('bridge-cockpit.roomsSort', 'terminal') === 'urgency' ? 'urgency' : 'terminal',
     answered: {},   // per tab ref the answer the page sent last: { hash, q, ms } (views/reply.js)
@@ -428,7 +430,15 @@ async function act(verb, args = {}) {
     // the task facts and inbox events of the touched row changed on disk: fetch them again when shown
     const touched = (p.args.key ? [p.args.key] : p.args.keys ?? []).map(k => rowIndex().get(k)).filter(Boolean)
     if (touched.length) store.set(s => ({ ...s, details: touched.reduce(invalidateDetails, s.details) }))
-    if (r.settled?.length) setUi(ui => ({ picked: ui.picked.filter(k => !r.settled.includes(k)), rvPicked: ui.rvPicked.filter(k => !r.settled.includes(k)) }))
+    if (r.settled?.length) {
+      setUi(ui => ({ picked: ui.picked.filter(k => !r.settled.includes(k)), rvPicked: ui.rvPicked.filter(k => !r.settled.includes(k)) }))
+      // a row that left the list takes its open detail along: back to the list, whatever closed it
+      const sel = store.get().ui.selectedKey
+      if (sel && r.settled.includes(sel)) {
+        if (store.get().ui.pageDetail) ctl.closePeek()
+        else setUi({ selectedKey: null, pane: 'day' })
+      }
+    }
     return r
   }, { rows: p.rows, refuse: p.refuse })
 }
@@ -637,6 +647,10 @@ const ctl = {
     save('bridge-cockpit.theme', mode)
     applyTheme(mode)
     setUi({ theme: mode })
+  },
+  setShortcuts(on) {
+    save('bridge-cockpit.shortcuts', on ? 'on' : 'off')
+    setUi({ shortcuts: on })
   },
   cycleTheme() {
     const order = ['auto', 'light', 'dark']
@@ -922,16 +936,6 @@ const ctl = {
       const r = await act('drop', { key: c.key, reason: c.reason })
       if (r?.muted) ctl.loadNoise()
     }
-    if (c?.kind === 'task_close') {
-      const text = (c.text ?? '').trim()
-      const r = await act('task_close', { keys: c.keys, reason: c.reason, ...(text ? { text } : {}) })
-      // a closed task is gone: its detail would only fail to load, so go back to the list
-      const sel = store.get().ui.selectedKey
-      if (r?.settled?.includes(sel)) {
-        if (store.get().ui.pageDetail) ctl.closePeek()
-        else setUi({ selectedKey: null, pane: 'day' })
-      }
-    }
   },
   cancelConfirm: () => setUi({ confirm: null }),
   /** Ask why before dropping an inbox report; the item's source and key say what a mute would cover.
@@ -942,7 +946,6 @@ const ctl = {
     const res = await api.inbox(row.inbox_id)
     if (res.ok) setUi(ui => ({ confirm: ui.confirm?.kind === 'drop' && ui.confirm.key === row.key ? { ...ui.confirm, item: res.data.item } : ui.confirm }))
   },
-  /** Ask why before closing; one row gets the four reasons, several also "as the check says" */
   // "runs on": a small dialog asks until when and on what; it acts through runs_on
   askRunsOn(rows, on = '') {
     const list = rows.filter(Boolean)
@@ -954,19 +957,6 @@ const ctl = {
     if (!conf || conf.kind !== 'runs_on' || !conf.until) return
     setUi({ confirm: null })
     await act('runs_on', { keys: conf.keys, until: conf.until, ...(conf.on.trim() ? { on: conf.on.trim() } : {}) })
-  },
-  askClose(rows) {
-    const list = rows.filter(r => r?.closable)
-    if (!list.length) return
-    const all = [...indexRows(store.get().model).values()]
-    const tasks = new Set(list.map(r => r.task))
-    const openInbox = all.filter(r => r.inbox_id && tasks.has(r.task)).length
-    const one = list.length === 1 ? list[0] : null
-    const rv = one?.review
-    setUi({ confirm: { kind: 'task_close', keys: list.map(r => r.key), titles: list.map(r => r.title),
-      reason: one ? (rv?.verdict === 'stale' ? 'not_doing' : 'done') : 'auto',
-      text: rv && (rv.verdict === 'close' || rv.resolved) ? (rv.reason ?? '').slice(0, 400) : '',
-      liveTab: list.some(r => r.tab?.live), openInbox } })
   },
   setConfirm: patch => setUi(ui => ({ confirm: ui.confirm ? { ...ui.confirm, ...patch } : null })),
   review(keys, escalate = false, fresh = false) {
@@ -982,11 +972,12 @@ const ctl = {
     const r = await act(list ? 'snapshot_list' : 'snapshot', {})
     if (r && list) setUi({ snapshotText: r.note })
   },
-  laterDays(row, days) {
-    return act('later', { key: row.key, until: isoDate(today() + days * DAY) })
+  // text: the person's sentence, which the server keeps where the row lives
+  laterDays(row, days, text = '') {
+    return act('later', { key: row.key, until: isoDate(today() + days * DAY), ...(text ? { text } : {}) })
   },
-  laterMonday(row) {
-    return act('later', { key: row.key, until: isoDate(nextMonday(today())) })
+  laterMonday(row, text = '') {
+    return act('later', { key: row.key, until: isoDate(nextMonday(today())), ...(text ? { text } : {}) })
   },
   rowAction(row, id) {
     switch (id) {
@@ -1100,6 +1091,7 @@ function onKey(e) {
     if (isTypingTarget(e.target)) e.target.blur()
     return
   }
+  if (!s.ui.shortcuts) return
   // nothing acts on the list hidden behind an open drawer or confirmation (g t still focuses the tabs)
   if (s.ui.tabView) return
   if (!modalKeyAllowed(s.ui, e.key, gPending) || s.ui.organize) return

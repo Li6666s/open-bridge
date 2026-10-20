@@ -673,7 +673,6 @@ test('task check: every verdict and close reason has a word in both languages', 
     for (const v of logic.VERDICT_ORDER) {
       assert.ok(t.verdictName[v] && t.verdictTag[v], `${lang} ${v}`)
     }
-    for (const r of ['done', 'not_doing', 'superseded', 'elsewhere', 'auto']) assert.ok(t.closeReason[r], `${lang} ${r}`)
   }
 })
 
@@ -2158,12 +2157,11 @@ test('launch: the picker stands in every start block and only there through one 
   assert.match(app, /launchEffort: load\('bridge-cockpit\.launchEffort', null\)/)
   assert.match(app, /setLaunchModel: m => \{ save\('bridge-cockpit\.launchModel', m\); setUi\(\{ launchModel: m \}\) \}/)
   assert.match(app, /launch: payload\.launch \?\? s\.launch/)
-  // the row panel (every row, every view), the chat foot, both bulk bars
-  for (const name of ['RowPanel', 'ChatFoot', 'SelectionBar']) {
+  // the row panel (every row, every view, a selection too) and the chat foot; the bulk bars open the panel
+  for (const name of ['RowPanel', 'ChatFoot']) {
     const body = comp.match(new RegExp(`function ${name}\\([\\s\\S]*?\\n\\}`))[0]
     assert.match(body, /<\$\{LaunchPick\}/, name)
   }
-  assert.match(read('views/check.js'), /<\$\{LaunchPick\} s=\$\{s\} c=\$\{c\} items=/)
   for (const lang of ['en', 'de']) {
     const t = text.TABLES[lang]
     for (const m of ['auto', 'haiku', 'sonnet', 'opus']) assert.ok(t.launch.model[m], `${lang} ${m}`)
@@ -4136,40 +4134,55 @@ test('one row bar everywhere: every view shows RowBar, none builds its own start
 })
 
 
-test('row panel: one sentence field, four groups, the same panel behind both buttons', () => {
+test('row panel: two doors, each with its own groups and its own meaning of the one sentence', () => {
   const day = read('views/day.js')
   const panel = day.slice(day.indexOf('function RowPanel'), day.indexOf('export function StartMenu'))
-  // the order of the groups is fixed: hand on, close, not now, keep
-  const at = k => panel.indexOf(`t.grp.${k}`)
-  assert.ok(at('start') > 0 && at('start') < at('close') && at('close') < at('later') && at('later') < at('keep'), 'group order')
-  // every verb takes the one sentence along, in its own meaning
-  assert.match(panel, /c\.act\('do_it', \{ keys, \.\.\.\(x \? \{ note: x \} : \{\}\) \}\)/)
-  assert.match(panel, /c\.act\('advise', \{ keys, \.\.\.\(x \? \{ note: x \} : \{\}\) \}\)/)
-  assert.match(panel, /c\.act\('collect_context'/)
-  assert.match(panel, /target: 'workspace'/)
-  assert.match(panel, /c\.act\('settle', \{ keys, outcome, \.\.\.\(x \? \{ text: x \} : \{\}\)/)   // a reason of your own, any row
-  assert.match(panel, /c\.askRunsOn\(rows, x\)/)                                                    // what it waits on
-  assert.match(panel, /c\.act\('note', \{ key: one\.key, text: x \}\)/)                              // keep it, nothing else
-  assert.match(panel, /c\.laterDays\(r, 1\)/)
-  assert.match(panel, /c\.laterMonday\(r\)/)
-  assert.match(panel, /c\.laterDays\(r, 7\)/)
-  assert.match(panel, /c\.act\('later', \{ key: r\.key, until: iso \}\)/)                          // a day of your own
-  assert.doesNotMatch(read('views/detail.js'), /function DateBlock/, 'not now lives in the panel')
-  assert.match(panel, /<\$\{LaunchPick\}/)                                                          // the model, on every row
+  const startPart = panel.slice(panel.indexOf('const startPart'), panel.indexOf('const settlePart'))
+  const settlePart = panel.slice(panel.indexOf('const settlePart'), panel.indexOf('if (asking)'))
+  assert.match(panel, /part === 'start' \? startPart\(\) : settlePart\(\)/)
+  // Let AI do it ▾: the sentence is the order for the agent; it hands on and asks, it never closes or puts off
+  assert.match(startPart, /c\.act\('do_it', \{ keys, \.\.\.\(x \? \{ note: x \} : \{\}\) \}\)/)
+  assert.match(startPart, /c\.act\('advise', \{ keys, \.\.\.\(x \? \{ note: x \} : \{\}\) \}\)/)
+  assert.match(startPart, /c\.act\('collect_context'/)
+  assert.match(startPart, /target: 'workspace'/)
+  assert.match(startPart, /<\$\{LaunchPick\}/)                                                      // the model, on every row
+  assert.match(startPart, /inbox_reopen/)
+  assert.match(startPart, /'follow_up'/)
+  assert.match(startPart, /c\.ask\('row', \{ key: one\.key \}\)/)
+  for (const g of ['close', 'later', 'keep']) assert.doesNotMatch(startPart, new RegExp(`t\\.grp\\.${g}`), `no ${g} behind the start door`)
+  // Close ▾: the sentence is a comment; done or discard, not now, keep it; never a start
+  const at = k => settlePart.indexOf(`t.grp.${k}`)
+  assert.ok(at('close') > 0 && at('close') < at('later') && at('later') < at('keep'), 'group order')
+  assert.doesNotMatch(settlePart, /c\.act\('(do_it|advise|collect_context)'/, 'no start behind the close door')
+  assert.match(settlePart, /settle\('done'\)/)
+  assert.match(panel, /c\.act\('settle', \{ keys, outcome, \.\.\.\(x \? \{ text: x \} : \{\}\)/)   // the reason, any row
+  assert.match(settlePart, /c\.askRunsOn\(rows, x\)/)                                                  // what it waits on
+  assert.match(settlePart, /item\(t\.settleNot, discard/)
+  assert.match(panel, /c\.askDrop\(one\)/)                                                              // an inbox item without a reason asks why
   assert.match(panel, /stream: true/)
-  assert.match(panel, /t\.streamEndAsk/)
-  assert.match(panel, /c\.askDrop\(one\)/)                                                           // an inbox item without a reason asks why
-  assert.match(panel, /inbox_reopen/)
-  assert.match(panel, /'follow_up'/)
-  assert.match(panel, /c\.ask\('row', \{ key: one\.key \}\)/)
+  // not now takes the sentence to the server with the day, which keeps it where the row lives (write_note)
+  assert.match(settlePart, /c\.laterDays\(r, 1, x\)/)
+  assert.match(settlePart, /c\.laterMonday\(r, x\)/)
+  assert.match(settlePart, /c\.laterDays\(r, 7, x\)/)
+  assert.match(settlePart, /onClick=\$\{untilDay\}/)
+  assert.match(panel, /c\.act\('later', \{ key: r\.key, until: iso, \.\.\.\(x \? \{ text: x \} : \{\}\) \}\)/)
+  assert.match(read('app.js'), /laterDays\(row, days, text = ''\) \{\s*return act\('later', \{ key: row\.key, until: isoDate\(today\(\) \+ days \* DAY\), \.\.\.\(text \? \{ text \} : \{\}\) \}\)/)
+  // a note on any row and on several: the server puts it on the task, the inbox item, or into the log
+  assert.match(settlePart, /rows\.forEach\(r => c\.act\('note', \{ key: r\.key, text: x \}\)\)/)
   assert.doesNotMatch(panel, /askClose/, 'no second close dialog: the sentence is the reason')
-  // both doors open the same room
-  const start = day.slice(day.indexOf('export function StartMenu'), day.indexOf('export function SettleMenu'))
+  assert.match(panel, /t\.streamEndAsk/)
+  // the field says what the sentence becomes behind this door
+  assert.match(panel, /part === 'start' \? t\.panelTextStart : t\.panelTextSettle/)
+  // each door opens its part
+  const start = day.slice(day.indexOf('export function StartMenu'), day.indexOf('export function StartMany'))
   const settle = day.slice(day.indexOf('export function SettleMenu'), day.indexOf('export function RowBar'))
-  assert.match(start, /<\$\{RowPanel\} rows=\$\{\[row\]\}[^>]*focus="start"/)
-  assert.match(settle, /<\$\{RowPanel\} rows=\$\{ok\}[^>]*focus="close"/)
+  assert.match(start, /<\$\{RowPanel\} rows=\$\{\[row\]\}[^>]*part="start"/)
+  assert.match(settle, /<\$\{RowPanel\} rows=\$\{ok\}[^>]*part="settle"/)
   const bar = day.slice(day.indexOf('export function RowBar'), day.indexOf('export function RowBar') + 700)
   assert.match(bar, /<\$\{StartMenu\}[\s\S]*<\$\{SettleMenu\}[\s\S]*<\$\{PinStar\}/)
+  // a row that left the list takes its open detail along, whatever closed it
+  const act = read('app.js')
+  assert.match(act, /if \(sel && r\.settled\.includes\(sel\)\)/)
 })
 
 test('row panel: no second place for a note, a model or a start beside it', () => {
@@ -4179,9 +4192,9 @@ test('row panel: no second place for a note, a model or a start beside it', () =
   assert.doesNotMatch(detail, /t\.startTitle/, 'the start lives in the panel')
   assert.doesNotMatch(read('views/overlays.js'), /<\$\{LaunchPick\}/)
   for (const lang of [text.TABLES.en, text.TABLES.de]) {
-    for (const k of ['panelText', 'panelTextHint', 'startNeedsHint', 'sendHint', 'startMore', 'approvedBack', 'btnSaveNote',
+    for (const k of ['panelTextStart', 'panelStartHint', 'panelTextSettle', 'panelSettleHint', 'startNeedsHint', 'sendHint', 'startMore', 'approvedBack', 'btnSaveNote',
       'laterTomorrow', 'laterMonday', 'laterWeek', 'streamEndAsk', 'streamEndYes', 'streamEndNo', 'settleReopen']) assert.ok(lang[k], k)
-    for (const g of ['start', 'close', 'later', 'keep']) assert.ok(lang.grp?.[g], `grp.${g}`)
+    for (const g of ['start', 'ask', 'close', 'later', 'keep']) assert.ok(lang.grp?.[g], `grp.${g}`)
   }
   assert.equal(text.TABLES.de.grp.start, 'Weitergeben')
   assert.equal(text.TABLES.de.grp.close, 'Abschließen')
@@ -4204,6 +4217,11 @@ test('row panel: stands fixed in the window, so no column, card or table clips i
   // a transform on an ancestor would make fixed relative to it: no entrance animation keeps one, no card lifts while open
   assert.match(css, /\.row-in \{ animation: row-in 360ms ease-out backwards;/)
   assert.match(css, /\.hcard:has\(\.row-panel\) \{ transform: none; \}/)
+  assert.ok(css.indexOf('.hcard:has(.row-panel) { transform: none; }') > css.indexOf('.hcard:hover { transform'), 'after the hover, or the hover wins')
+  // a container on an ancestor (the start page, the day column) would move a fixed panel: its origin is measured out
+  assert.match(panel, /origin\.current\?\.getBoundingClientRect\(\)/)
+  assert.match(css, /\.fixed-origin \{ position: fixed; left: 0; top: 0;/)
+  assert.match(panel, /left: left - o\.left/)
 })
 
 // ---------------------------------------------------------------- what a row is
@@ -4264,4 +4282,65 @@ test('issues from boards stand grouped by repo, the other sections as they are',
   assert.match(sec, /section\.id === 'track'/)
   assert.match(sec, /repoGroups\(rows\)/)
   assert.match(sec, /class="row-group-head"/)
+})
+
+// ---------------------------------------------------------------- the panel on many rows, the check, the keys
+
+test('a selection starts through the same panel: one door, a sentence for all, the model folded in', () => {
+  const day = read('views/day.js')
+  const bar = day.slice(day.indexOf('function SelectionBar'), day.indexOf('function HiddenList'))
+  assert.doesNotMatch(bar, /c\.act\('do_it'/, 'no start on one click')
+  assert.doesNotMatch(bar, /c\.act\('advise'/)
+  assert.doesNotMatch(bar, /<\$\{LaunchPick\}/, 'the model lives in the panel')
+  assert.match(bar, /<\$\{StartMany\} rows=/)
+  assert.match(bar, /<\$\{SettleMenu\} rows=/)
+  const many = day.slice(day.indexOf('export function StartMany'), day.indexOf('export function SettleMenu'))
+  assert.match(many, /<\$\{RowPanel\} rows=\$\{ok\}[^>]*part="start"/)
+  assert.match(many, /t\.startMany\(ok\.length\)/)
+  const panel = day.slice(day.indexOf('function RowPanel'), day.indexOf('export function StartMenu'))
+  // several rows: start, advise, each in its own workspace, all with the sentence, and one model for all
+  assert.match(panel, /t\.startManyGo\(starts\.length\)/)
+  assert.match(panel, /const go = \(\) => c\.act\('do_it', \{ keys: one \? keys : starts\.map\(r => r\.key\), \.\.\.\(x \? \{ note: x \} : \{\}\) \}\)/)
+  assert.match(panel, /item\(t\.startManyGo\(starts\.length\), \(\) => done\(go\)/)
+  assert.match(panel, /c\.act\('advise', \{ keys: starts\.map\(r => r\.key\), \.\.\.\(x \? \{ note: x \} : \{\}\) \}\)/)
+  assert.match(panel, /items=\$\{starts\.map\(r => \(\{ key: r\.key, title: r\.title \}\)\)\}/)
+  for (const lang of [text.TABLES.en, text.TABLES.de]) assert.ok(lang.startMany && lang.startManyGo, 'labels')
+  assert.equal(text.TABLES.de.startMany(3), 'AI machen lassen (3)')
+})
+
+test('the check uses the panel: no own close dialog, no start button that only advises', () => {
+  const check = read('views/check.js')
+  assert.doesNotMatch(check, /askClose/, 'closing goes through the panel')
+  assert.doesNotMatch(check, /t\.bulkStart/, 'the old button said do and only advised')
+  assert.doesNotMatch(check, /<\$\{LaunchPick\}/)
+  assert.match(check, /<\$\{StartMany\} rows=\$\{pickedRows\}/)
+  assert.match(check, /<\$\{SettleMenu\} rows=\$\{pickedRows\}/)
+  assert.match(check, /<\$\{SettleMenu\} rows=\$\{\[row\]\}[^>]*seed=/, 'a close verdict hands its reason to the sentence')
+  assert.doesNotMatch(read('app.js'), /askClose/)
+  assert.doesNotMatch(read('views/overlays.js'), /function CloseDialog/)
+  const day = read('views/day.js')
+  const panel = day.slice(day.indexOf('function RowPanel'), day.indexOf('export function StartMenu'))
+  assert.match(panel, /useState\(seed \?\? ''\)/)
+  assert.match(panel, /t\.taskDoneLiveTab/, 'the panel still warns of a live tab')
+})
+
+test('keyboard shortcuts are off unless switched on in the settings, this browser only', () => {
+  const app = read('app.js')
+  assert.match(app, /shortcuts: load\('bridge-cockpit\.shortcuts', 'off'\) === 'on'/)
+  assert.match(app, /setShortcuts\(on\) \{\s*save\('bridge-cockpit\.shortcuts', on \? 'on' : 'off'\)/)
+  // Escape still closes what is open; every other key waits for the switch
+  const onKey = app.slice(app.indexOf('function onKey(e)'), app.indexOf('// ---------------------------------------------------------------- boot'))
+  const esc = onKey.indexOf("e.key === 'Escape'")
+  const gate = onKey.indexOf('if (!s.ui.shortcuts) return')
+  assert.ok(esc > 0 && gate > esc, 'the gate stands after Escape')
+  assert.ok(gate < onKey.indexOf("key === '?'") && gate < onKey.indexOf('e.altKey && !e.metaKey'), 'and before every shortcut')
+  const settings = read('views/settings.js')
+  assert.match(settings, /function KeysCard/)
+  assert.match(settings, /c\.setShortcuts\(v === 'on'\)/)
+  assert.match(settings.slice(settings.indexOf('function LookArea')), /<\$\{KeysCard\}/)
+  assert.match(read('views/header.js'), /s\.ui\.shortcuts \? html`<\$\{CommandBox\}/, 'the code box only with shortcuts on')
+  const help = read('views/overlays.js')
+  assert.match(help, /t\.keysOff/)
+  assert.match(help, /c\.openSettings\('look'\)/)
+  for (const lang of [text.TABLES.en, text.TABLES.de]) assert.ok(lang.keysOff && lang.keysOn && lang.settings.keysTitle && lang.settings.keysIntro, 'labels')
 })
