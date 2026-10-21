@@ -29,9 +29,13 @@ without a commit and rows without a file; it reports and exits 1, never fixes.
 
 For a proposal with `target.type: skill`, `record --to implemented` also
 appends one provenance line (format: skills/bridge-learn/SKILL.md, accept
-step 8) to `skills/<name>/references/provenance.md`, created on first use;
-`SKILL.md` is never touched. `check --provenance` is the opt-in cross-check of those lines against
-the trail's implemented rows, in both directions.
+step 8) to `work/_learning/provenance/<name>.md`, created on first use. The
+record is instance data, so it lives under `work/`, never inside the (possibly
+CORE) skill folder; `SKILL.md` is never touched. `check --provenance` is the
+opt-in cross-check of those lines against the trail's implemented rows, in both
+directions. A record still at the old path, `skills/<name>/references/
+provenance.md`, is named by both `record` (a warning) and `check --provenance`
+(a finding) with the path it belongs at; neither moves it.
 
 `fingerprint` stores `recurrence_fingerprint: <target.path>#<id without its
 date>` on an implemented proposal. `recurrences` lists implemented proposals
@@ -431,7 +435,7 @@ def folder_problem(prop: Proposal) -> str | None:
 
 PROVENANCE_HEADER = """# Provenance
 
-One line per accepted proposal that changed this skill, appended by
+One line per accepted proposal that changed the skill of this name, appended by
 `scripts/learning-ledger.py record <id> --to implemented`, never by hand. The
 line format is defined in skills/bridge-learn/SKILL.md, accept step 8.
 
@@ -440,11 +444,19 @@ PROVENANCE_LINE_RE = re.compile(r"^- (\d{4}-\d{2}-\d{2}) · (\S+) · (.*)$")
 
 
 def provenance_file(root: Path, target_path: str) -> Path | None:
-    """`skills/<name>/references/provenance.md` for a skill target, else None."""
+    """`work/_learning/provenance/<name>.md` for a skill target, else None."""
     parts = Path(target_path).parts
     if len(parts) < 2 or parts[0] != "skills":
         return None
-    return root / "skills" / parts[1] / "references" / "provenance.md"
+    return root / LEARNING / "provenance" / f"{parts[1]}.md"
+
+
+LEGACY_PROVENANCE_GLOB = "skills/*/references/provenance.md"
+
+
+def legacy_provenance_file(root: Path, record: Path) -> Path:
+    """The pre-move path of the record `record`, which may or may not exist."""
+    return root / "skills" / record.stem / "references" / "provenance.md"
 
 
 def append_provenance(root: Path, prop: Proposal, why: str) -> Path | None:
@@ -459,6 +471,10 @@ def append_provenance(root: Path, prop: Proposal, why: str) -> Path | None:
         text += "\n"
     line = f"- {datetime.now().strftime('%Y-%m-%d')} · {prop.id} · {why or '(no reason recorded)'}"
     record.write_text(text + line + "\n", encoding="utf-8")
+    legacy = legacy_provenance_file(root, record)
+    if legacy.is_file():
+        print(f"note: {legacy.relative_to(root)} is the old provenance path; move its lines "
+              f"to {record.relative_to(root)}", file=sys.stderr)
     return record
 
 
@@ -573,7 +589,7 @@ def build_provenance_check(root: Path) -> list[tuple[str, str]]:
     implemented = {r.id for r in read_trail(root) if r.to_state == "implemented"}
 
     recorded: dict[str, Path] = {}
-    for record in sorted(root.glob("skills/*/references/provenance.md")):
+    for record in sorted((root / LEARNING / "provenance").glob("*.md")):
         for line in record.read_text(encoding="utf-8").splitlines():
             match = PROVENANCE_LINE_RE.match(line)
             if match:
@@ -591,6 +607,11 @@ def build_provenance_check(root: Path) -> list[tuple[str, str]]:
         if pid not in implemented:
             problems.append((pid, f"{record.relative_to(root)} names it, but the audit "
                                   "trail has no implemented row (provenance)"))
+    for legacy in sorted(root.glob(LEGACY_PROVENANCE_GLOB)):
+        target = root / LEARNING / "provenance" / f"{legacy.parent.parent.name}.md"
+        problems.append((str(legacy.relative_to(root)),
+                         f"old provenance path; move its lines to "
+                         f"{target.relative_to(root)} (provenance)"))
     return problems
 
 
@@ -643,7 +664,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     ch = sub.add_parser("check", help="folder, status and trail agree for every proposal")
     ch.add_argument("--provenance", action="store_true",
-                    help="also cross-check skills/*/references/provenance.md (opt-in)")
+                    help="also cross-check work/_learning/provenance/*.md (opt-in)")
     ch.set_defaults(func=cmd_check)
 
     return parser
