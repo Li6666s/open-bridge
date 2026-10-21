@@ -1078,6 +1078,74 @@ test('the agents section no longer lists an expired conversation', () => {
 })
 
 
+test('an agent whose card cannot be read says why in plain words, what to do, and offers to check again', () => {
+  const { AgentsPage } = views.agents
+  const s0 = cockpitState(NOW)
+  const p = s0.agents.peers.find(x => x.id === 'partner-bridge')
+  assert.ok(p, 'the demo state has a peer with an unreadable card')
+  const c = recorder()
+  const s = cockpitState(NOW, { ui: { agentPeer: p.id } })
+  const el = mount(html`<${AgentsPage} s=${s} c=${c} />`)
+  const trouble = el.$$('.agent-trouble').map(x => x.text())
+  assert.equal(trouble.length, 2, trouble.join(' | '))
+  // the card: the name does not resolve, and the hint names the tailnet, the host and its owner
+  assert.match(trouble[0], /address not found/)
+  assert.match(trouble[0], /tailnet of partner/)
+  assert.match(trouble[0], /example\.org/)
+  // the last message: refused, with the token advice
+  assert.match(trouble[1], /refused/)
+  assert.match(trouble[1], /token/)
+  // the raw text is kept, folded away, never the headline
+  assert.ok(el.$$('.agent-trouble-raw code').some(x => x.text().includes('nodename')))
+  assert.doesNotMatch(el.$('.agent-trouble-hint').text(), /Errno/)
+  // without a card the profile still shows the card address from the peer file and the summary
+  assert.match(el.$('.agent-facts').text(), /example\.org\/partner\//)
+  assert.match(el.$('.agent-profile-desc').text(), /partner team/)
+  // check again asks the server for fresh cards
+  el.$('.agent-profile-head').$$('button').find(b => /check again/.test(b.text())).click()
+  assert.ok(c.calls.some(([name, fresh]) => name === 'loadAgents' && fresh === true), JSON.stringify(c.calls))
+})
+
+
+test('the agent stands in a bar above the conversation: name, state and a real button for its card', () => {
+  const { AgentsPage } = views.agents
+  const s0 = cockpitState(NOW)
+  const p = s0.agents.peers.find(x => x.id === 'partner-bridge')
+  const conv = { id: 'g0000000009', peer: p.id, started_ms: NOW - 60000, last_ms: NOW - 60000, context_id: null, running: false,
+    turns: [{ q: 'Hello?', mode: 'question', a: 'Hi.', state: 'completed', task_id: null, waiting: false, at_ms: NOW, answered_ms: NOW, error: null }] }
+  const s = cockpitState(NOW, { agents: { ...s0.agents, convs: [conv] }, ui: { agentPeer: p.id, agentConv: conv.id } })
+  const el = mount(html`<${AgentsPage} s=${s} c=${recorder()} />`)
+  const bar = el.$('.agent-bar')
+  assert.ok(bar, 'a bar above the conversation')
+  assert.match(bar.text(), /partner-bridge/)
+  // the trouble shows in the bar too, so it is seen with the card folded away
+  assert.match(bar.text(), /card not readable/i)
+  // the card is no chip among the conversations any more
+  assert.equal(el.$$('.agent-convs .agent-profile-toggle').length, 0)
+  // with a conversation open the card is folded; the bar's button opens it
+  assert.equal(el.$('.agent-profile'), null)
+  const btn = bar.$$('button').find(b => /card/i.test(b.text()))
+  assert.ok(btn, 'a button named for the card in the bar')
+  assert.equal(btn.getAttribute('aria-expanded'), 'false')
+})
+
+
+test('every agent card in the list carries its own card button, which picks the agent and opens the card', () => {
+  const { AgentsPage } = views.agents
+  const s0 = cockpitState(NOW)
+  const c = recorder()
+  const el = mount(html`<${AgentsPage} s=${s0} c=${c} />`)
+  const cards = el.$$('.agents-list .agent-card')
+  assert.equal(cards.length, s0.agents.peers.length)
+  for (const card of cards) assert.ok(card.$$('button').some(b => /card/i.test(b.text())), card.text())
+  // no button inside a button: the pick and the card button are siblings
+  assert.equal(el.$$('.agents-list button button').length, 0)
+  const last = cards.at(-1)
+  last.$$('button').find(b => /card/i.test(b.text())).click()
+  assert.ok(c.calls.some(([name, id]) => name === 'pickAgent' && id === s0.agents.peers.at(-1).id), JSON.stringify(c.calls))
+})
+
+
 // ---------------------------------------------------------------- review findings
 
 test('the demo state carries only question states the server emits and ids it accepts', () => {
