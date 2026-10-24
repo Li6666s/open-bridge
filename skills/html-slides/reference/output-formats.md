@@ -63,6 +63,7 @@ about a third), nothing more.
 node scripts/render-pdf.cjs path/to/deck.html path/to/deck.pdf
 node scripts/render-pdf.cjs deck.html deck.pdf --width 210 --height 297  # A4 portrait
 node scripts/render-pdf.cjs deck.html deck-dark.pdf --theme dark
+node scripts/render-pdf.cjs deck.html handout.pdf --notes      # notes page after each noted slide
 node scripts/render-pdf.cjs --probe   # where playwright was found
 ```
 
@@ -73,6 +74,11 @@ explicit size wins over the CSS one, orientation included. Every slide is one pa
 **Theme:** `--theme light|dark` sets `.theme-light` or `.theme-dark` on `<html>`
 for the render, without touching the viewer's saved choice. Without it the deck
 renders as it opens: the saved choice, else the OS (headless reports light).
+
+**Handout:** `--notes` sets `data-print-notes` on the deck for the render, and the
+engine prints a notes page after every slide that has `<aside class="notes">`.
+Putting `data-print-notes` on the deck element (`new-deck.py --deck-attr
+data-print-notes=`) makes the browser's own print do the same.
 
 **Why not `chrome --print-to-pdf` directly?**
 The slide engine relies on an `IntersectionObserver` to add `.visible` to each
@@ -158,6 +164,11 @@ html_slides:
   # or a list: [protocols/names.txt, protocols/ids.txt]
 ```
 
+The script finds `bridge-config.yaml` by walking up from the deck. A copy outside the
+instance repo (a temp or export folder) has none above it, so the instance list is not
+read and a clean run only means the default list found nothing: the report names the
+lists it used. Check such a copy with `--config <path to bridge-config.yaml>`.
+
 The check finds that file walking up from the deck (or takes `--config FILE`) and
 adds the lists to the default without a flag; `--no-config` skips it. The older key
 `html_slides.wordlist` is still read. `--extra-wordlist` is the older spelling of `--wordlist`
@@ -194,3 +205,24 @@ zip -r package.zip deck-standalone.html deck.pdf README.md
 
 If any audit step has hits, decide per term: remove (sensitive), keep with a note
 (intentional disclosure), or improve the wordlist (false positive class).
+
+### A copy to be read, not presented
+
+A deck sent to people who will read it alone (no speaker, no keys) can open in the
+reading view of the `read` module: every slide of the active track as one scrolling
+document, with its speaker notes under each slide. Build it with the module and the
+deck attribute `data-read-default`. `--deck-attr` is a build flag, so `--refresh`
+refuses it; build the presenting deck and the reading copy from the same `--slides`
+fragment instead:
+
+```bash
+python3 $SKILL/new-deck.py --with read --slides slides.html --out deck.html ...
+python3 $SKILL/new-deck.py --with read --slides slides.html --out deck-read.html ... \
+    --deck-attr data-read-default=              # or set the attribute on <html> by hand
+```
+
+The attribute works on `.deck` or `<html>`; `data-read-default="off"` (or `"false"`)
+keeps the slide view, for example in the presenting copy of the same deck. A deep
+link (`#<id>`) still picks the slide the view opens at, and R or Esc switches to the
+slide view. Print and `render-pdf.cjs` are unaffected: the PDF still has one slide per
+page. Details: `reference/modules.md` § Module: read.

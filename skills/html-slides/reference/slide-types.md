@@ -15,6 +15,12 @@ Available accent colors for `var(--{color})` and `var(--{color}-dim)`:
 
 Add custom semantic colors by extending `:root` with additional `--{name}` / `--{name}-dim` pairs.
 
+With the `design` preset (a DESIGN.md is present) these colours are status colours
+and carry state only: a heading or label colour and a glow taken from them give way
+to the heading colour and the accent, so write `accent` there. Buttons take
+`.slide__btn` (and `.slide__btn--primary` for the one main action) inside
+`.slide__actions`; the primary one is the brand's `primary` fill.
+
 ## Slide Types
 
 ### 1. Title Slide
@@ -23,11 +29,11 @@ Center-aligned, large display text, accent-colored heading. Use for opening slid
 ```html
 <section class="slide slide--title slide--with-grid">
   <div class="reveal">
-    <p class="slide__subtitle" style="margin-bottom:clamp(16px,2vh,32px);">{subtitle}</p>
+    <p class="slide__subtitle">{subtitle}</p>
   </div>
   <h1 class="slide__display reveal">{Main Title}</h1>
   <div class="reveal">
-    <p class="slide__subtitle" style="margin-top:clamp(16px,2vh,32px);">{tagline}</p>
+    <p class="slide__subtitle">{tagline}</p>
   </div>
 </section>
 ```
@@ -37,7 +43,7 @@ Big faded number in background, heading + subtitle. Use to introduce new section
 
 ```html
 <section class="slide slide--divider" style="background-image:radial-gradient(ellipse at 80% 60%, var(--{color}-dim) 0%, transparent 40%);">
-  <span class="slide__number">{01}</span>
+  <span class="slide__number" aria-hidden="true">{01}</span>
   <div>
     <h2 class="slide__heading reveal" style="color:var(--{color});">{Section Title}</h2>
     <p class="slide__subtitle reveal" style="margin-top:12px;">{Section subtitle}</p>
@@ -97,7 +103,7 @@ Full-width data table with header and hover effects. The card is as tall as its 
 <section class="slide slide--table" style="background-image:radial-gradient(ellipse at 70% 30%, var(--cyan-dim) 0%, transparent 40%);">
   <p class="slide__label reveal">{Label}</p>
   <h2 class="slide__heading reveal" style="font-size:clamp(22px,3.5vw,36px);">{Title}</h2>
-  <div class="table-wrap reveal" style="margin-top:clamp(8px,1.5vh,20px);">
+  <div class="table-wrap reveal">
     <div class="table-scroll">
       <table class="data-table">
         <thead><tr><th>Col 1</th><th>Col 2</th></tr></thead>
@@ -116,14 +122,14 @@ Centered code with filename badge and syntax highlighting via CSS classes.
 ```html
 <section class="slide slide--code" style="background-image:radial-gradient(ellipse at 50% 80%, var(--accent-dim) 0%, transparent 40%);">
   <h2 class="slide__heading reveal" style="text-align:center;font-size:clamp(22px,3.5vw,36px);">{Title}</h2>
-  <div class="slide__code-block reveal" style="margin-top:clamp(12px,2vh,24px); max-width:900px;">
+  <div class="slide__code-block reveal">
     <span class="slide__code-filename">{filename}</span>
     <pre><code><span class="kw">keyword</span> <span class="str">"string"</span> <span class="cm"># comment</span> <span class="hl">highlighted</span></code></pre>
   </div>
 </section>
 ```
 
-Syntax classes: `.hl` (accent/green), `.cm` (dim/comment), `.str` (amber), `.kw` (cyan).
+Syntax classes: `.hl` (accent/green), `.cm` (dim/comment), `.str` (amber), `.kw` (cyan); with the `design` preset they take the brand scale instead (`.kw` accent, `.str` accent mixed into the code text, `.hl` the heading colour), so no status colour reads as syntax.
 
 ### 7. Pipeline / Flow Diagram
 Horizontal steps with arrows between them.
@@ -211,7 +217,11 @@ Any slide may carry an `<aside class="notes">`. It never shows on the slide or i
     <div>
       <p class="slide__label reveal">{Label}</p>
       <h2 class="slide__heading reveal">{Heading}</h2>
-      <p class="slide__body reveal">{One result sentence}</p>
+      <p class="slide__body reveal">{One result sentence, with <code>inline code</code> if it names one}</p>
+      <div class="slide__actions reveal">
+        <button type="button" class="slide__btn slide__btn--primary" data-deck="notes">{Main action} <span class="slide__btn-arrow" aria-hidden="true">→</span></button>
+        <button type="button" class="slide__btn" data-deck="next">{Other action}</button>
+      </div>
     </div>
   </div>
   <aside class="notes">
@@ -228,25 +238,38 @@ What `assets/slide-engine.js` (first line `slide-engine v2`) reads from the mark
 | Markup | Effect |
 |---|---|
 | `<html lang="de">` | Controls, help, ARIA texts in German; any other language falls back to English |
+| `<span data-de>…</span><span data-en>…</span>` pairs | A bilingual deck: only the active language shows (before the engine runs, `<html lang>` decides). Key L and `data-deck="lang"` switch, the choice is kept per deck id, and `data-aria-de` / `data-aria-en` give `aria-label` and `title` per language. A deck without a pair has no L key; `SlideDeck.setLang()` still relabels the controls. An element with both attributes shows in both languages |
+| `data-print-notes` | Print and PDF add a notes page after every slide that has `<aside class="notes">` (`render-pdf.cjs --notes` sets it for one render) |
 | `data-counter-format="padded"` | Counter reads `01 / 09` |
 | `data-dots="off"` | No dot navigation |
-| `data-back-href="{url}"` plus optional `data-back-label` | A back link in the top left corner |
+| `data-back-href="{url}"` plus optional `data-back-label` | A back link in the top left corner, "← Back to page" (DE "← Zurück zur Seite") unless the label names the page |
 | `data-deep-link="off"` | Do not keep the slide in the address |
 | `data-track="{name}"` on a slide | The slide belongs to that track (several names separated by spaces); slides without one belong to every track. Old decks: `data-spur` |
 | `data-tracks-default="{name}"` | Track shown at start; key F switches between it and all slides. The name need not appear on any slide: a track named here (or in the cycle) shows the untagged slides plus the slides tagged with it |
 | `data-tracks-cycle="{a} {b} all"` | Order key F cycles through |
 | `data-deck-id="{id}"` | Storage key for the chosen track; defaults to the file path |
+| `data-tracks-labels="{name}={label} ..."` | What the track badge, the presenter window and `SlideDeck.trackLabel()` show for a track name, for a deck in another language than its track names; `data-track`, storage and links keep the name. `data-tracks-labels-de` and `data-tracks-labels-en` (same form) win in that language, so a bilingual deck names a track in both; the gate pairs them, so set both or neither. A label is one word (pairs are split at spaces) |
 | `data-key-ignore` on any element | Keys pressed inside it are left alone (also inputs, text areas, editable regions) |
-| `data-deck="next"`, `prev`, `theme`, `notes`, `help`, `track`, `track:{name}`, `goto:{n}`, `goto:#{id}` on a button | Declarative controls, no script needed. `goto:{n}` counts the slides the active track shows, so in a deck with tracks prefer `goto:#{id}` |
+| `data-deck="next"`, `prev`, `theme`, `notes`, `help`, `lang`, `track`, `track:{name}`, `goto:{n}`, `goto:#{id}` on a button | Declarative controls, no script needed. `goto:{n}` counts the slides the active track shows, so in a deck with tracks prefer `goto:#{id}`. A `track:{name}` button carries `aria-pressed`, true while its track is active |
 | `class="reveal"` | The only entrance class: it starts hidden and appears when its slide is entered; print shows it at once |
 | `<aside class="notes">` in a slide | Speaker notes for key N |
 
-Keys: arrows, Space and Shift+Space, Page Up and Down, Home, End, T (theme), F (track), N (notes), ? (help), Esc (close); the `?` help lists them, with V when the deck has a stage. Keys with Ctrl, Cmd or Alt are ignored.
+Keys: arrows, Space and Shift+Space, Page Up and Down, Home, End, T (theme), F (track), N (notes), L (language, bilingual decks only), ? (help), Esc (close); the `?` help lists them, with V when the deck has a stage and the rows of every deck module. Keys with Ctrl, Cmd or Alt are ignored.
 
-Deep link: the address keeps `#<id>` when the active slide has an id, else `#<n>`, the 1-based position among the slides the active track shows. Both forms are read on load and on a hash change. Give the slides people link to an id: `#<n>` depends on the track a viewer has stored, `#<id>` does not.
+Presenting live, always on:
 
-With the stage module (`new-deck.py --with-stage`) a slide can run a live page: key V, `data-stage` buttons and the `.stage` element are documented in `reference/stage.md`. While focus is inside the stage frame, only V, Esc, Page Up and Page Down reach the deck; click outside the frame to use the other keys.
+| Input | Effect |
+|---|---|
+| B, W | A black or white screen over everything; B on black or W on white lifts it, so does any other key, which then does nothing else, or a click |
+| digits, then Enter | Jump to slide n of the active track (the counter's number); Backspace corrects, Esc or any other key drops the number, three seconds without a key too |
+| Alt+click | Zoom 2x around the pointer on the active slide; the next click, Esc or a slide change resets |
 
-Script API: `window.SlideDeck` with `goTo(i)`, `next()`, `prev()`, `current()`, `count()`, `setTrack(name)`, `track()`, `toggleTheme()`, `toggleNotes()`, `toggleHelp()`, `strings()` and `on(event, fn)` for `ready`, `slidechange` and `trackchange`. Indexes are 0-based among the slides the active track shows. Old decks reaching for `window.slideEngine` or `window.__slideEngine`, or calling `new SlideEngine()`, get the same single instance.
+Accessibility: every slide is `role="group"` with `aria-roledescription` "slide" and `aria-label` "n / total"; every slide but the active one is `inert` (all stay in the DOM for scroll-snap, print shows them all), so browser find (Cmd+F), Tab and a screen reader's browse mode reach the active slide only, in every deck since skill version 2.1.0, with or without modules; to search or read a deck through, use the reading view (`--with read`, key R) or the PDF; a polite live region announces each slide change. Under `prefers-reduced-motion` every animation and transition of the deck, its modules included, ends at once, scrolling jumps and module transitions are skipped.
+
+Deep link: the address keeps `#<id>` when the active slide has an id, else `#<n>`, the 1-based position among the slides the active track shows; while a deck module reports a step above 0 it adds `.<step>` (`#<id>.2`). Every form is read on load and on a hash change. Give the slides people link to an id: `#<n>` depends on the track a viewer has stored, `#<id>` does not.
+
+With the stage module (`new-deck.py --with-stage`) a slide can run a live page: key V, `data-stage` buttons and the `.stage` element are documented in `reference/stage.md`. While focus is inside the stage frame, only V, Esc, Page Up, Page Down, T and L reach the deck; click outside the frame to use the other keys.
+
+Script API: `window.SlideDeck` with `goTo(i)`, `next()`, `prev()`, `current()`, `count()`, `setTrack(name)`, `track()`, `trackLabel(name?)`, `toggleTheme()`, `setTheme(t)`, `setLang(l)`, `toggleNotes()`, `toggleHelp()`, `strings()`, `slides()`, `state()`, `setStep(n)`, `step()`, `reducedMotion()`, `use(module)` and `on(event, fn)` for `ready`, `slidechange`, `trackchange` (detail `{track, label, count}`), `stepchange`, `themechange` and `langchange`. `next()` and `prev()` first offer the move to the deck modules as a step. Modules and the plugin API: `reference/modules.md`. Indexes are 0-based among the slides the active track shows. Old decks reaching for `window.slideEngine` or `window.__slideEngine`, or calling `new SlideEngine()`, get the same single instance.
 
 A filter that would leave no slide shows all of them. Print and PDF always show every slide, one per 297 x 167 mm page. Screens of at least 1500 x 880 and 2200 x 1200 zoom slide content; under 700 px height or 768 px width a slide grows with its content.

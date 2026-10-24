@@ -15,6 +15,9 @@ else is generated, and lives in a marked region the tool owns:
   slide-stage:css    <style>  assets/slide-stage.css (only with --with-stage)
   slide-engine:js    <body>   assets/slide-engine.js in a <script>, byte for byte
   slide-stage:js     <body>   assets/slide-stage.js in a <script> (only with --with-stage)
+  deck-module:NAME   <body>   assets/modules/NAME.css in its own <style>, if present, then
+                              assets/modules/NAME.js in a <script> (only with --with NAME),
+                              after the engine and the stage, one region per module by name
 
 Each region is `<!-- NAME:start -->CONTENT<!-- NAME:end -->`. In a stylesheet
 CSS skips only the `<!--` and `-->` of a marker, not the name between them, so
@@ -23,7 +26,8 @@ inside <style> therefore opens with an empty rule `{}` that swallows it.
 
 --refresh rewrites only the regions a deck already carries, from the current
 assets, DESIGN.md and preset; text outside them is never touched, no region is
-added, and a second run gives the same bytes. Every splice is read back and
+added (the set of modules stays the one the deck has), and a second run gives
+the same bytes. Every splice is read back and
 compared before the file is written.
 
 Preset choice: --preset when given; else `design` when a DESIGN.md is given
@@ -36,7 +40,7 @@ Fonts: embedded by default (style presets depend on their typefaces);
 Usage:
   new-deck.py --title "Quarterly review" --out deck.html [--slides slides.html]
               [--preset SLUG] [--design DESIGN.md] [--lang en|de]
-              [--with-stage] [--no-embed-fonts] [--force]
+              [--with-stage] [--with NAME | --with all ...] [--no-embed-fonts] [--force]
   new-deck.py --refresh deck.html [--out other.html] [--preset SLUG]
               [--design DESIGN.md] [--embed-fonts | --no-embed-fonts]
 
@@ -56,6 +60,7 @@ import yaml
 
 SKILL = Path(__file__).resolve().parents[1]
 ASSETS = SKILL / "assets"
+MODULES = ASSETS / "modules"
 PRESETS = SKILL / "presets"
 CANVAS_SCRIPTS = SKILL.parent / "html-canvas" / "scripts"
 
@@ -80,6 +85,9 @@ REGIONS = (
 )
 CSS_REGIONS = {name for name, where in REGIONS if where == "css"}
 STAGE_REGIONS = ("slide-stage:css", "slide-stage:js")
+MODULE_PREFIX = "deck-module:"
+MODULE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+MODULE_MARK_RE = re.compile(r"<!-- deck-module:([a-z0-9][a-z0-9-]*):start -->")
 
 # Hex-free values the deck keeps where DESIGN.md has no role for a variable:
 # system colours for the ground and the text, everything else derived from them.
@@ -100,6 +108,8 @@ NEUTRAL_TOKENS = """\
   --border-bright: color-mix(in srgb, var(--text) 28%, var(--bg));
   --accent: LinkText;
   --accent-dim: color-mix(in srgb, var(--accent) 12%, var(--bg));
+  --primary: var(--text);
+  --on-primary: var(--bg);
   --code-bg: var(--surface2);
   --code-text: var(--text);
   --green: var(--accent); --green-dim: var(--accent-dim);
@@ -271,19 +281,29 @@ def design_font_stack(typography: dict, spec: dict) -> str:
 def design_tokens(preset: dict, design: Path) -> str:
     d2c = design_to_css()
     try:
-        entries, selectors = d2c.load_map(PRESETS / preset.get("map", "design.map.yaml"))
+        entries, selectors, print_block = d2c.load_map(PRESETS / preset.get("map", "design.map.yaml"))
     except (OSError, ValueError, yaml.YAMLError) as e:
         raise DeckError("design map: %s" % e)
     data = d2c.frontmatter(design)
-    css, missing = d2c.build_mapped_css(data, entries, selectors)
+    css, missing = d2c.build_mapped_css(data, entries, selectors, print_block)
     if missing:
         print("new-deck: %d mapped role(s) not in %s, the neutral value stays: %s"
               % (len(missing), design, ", ".join(missing)), file=sys.stderr)
     typography = data.get("typography") or {}
     fonts = preset.get("fonts") or {}
-    css += "\n:root {\n%s\n}\n" % "\n".join(
-        "  --font-%s: %s;" % (var, design_font_stack(typography, fonts.get(role) or {}))
-        for var, role in (("display", "display"), ("body", "body"), ("mono", "mono")))
+    lines = ["  --font-%s: %s;" % (var, design_font_stack(typography, fonts.get(role) or {}))
+             for var, role in (("display", "display"), ("body", "body"), ("mono", "mono"))]
+    label = fonts.get("label")
+    if isinstance(label, dict):
+        lines.append("  --font-label: %s;" % design_font_stack(typography, label))
+        for role in label.get("roles") or []:
+            spec = typography.get(role) or {}
+            if spec.get("fontFamily"):
+                track = str(spec.get("letterSpacing") or "").strip()
+                if re.match(r"^-?\d+(\.\d+)?(em|px|rem)$", track):
+                    lines.append("  --label-tracking: %s;" % track)
+                break
+    css += "\n:root {\n%s\n}\n" % "\n".join(lines)
     begin, end, _ = d2c.markers("deck-tokens")
     filled = d2c.inject(begin + "\n" + NEUTRAL_TOKENS + "\n" + end, css, "deck-tokens")
     return css_region("/* deck-preset: design */\n" + filled)
@@ -339,7 +359,56 @@ def region_contents(names, slug, preset, design, embed) -> dict[str, str]:
             out[name] = css_region(read_asset("slide-stage.css"))
         elif name == "slide-stage:js":
             out[name] = script_region(read_asset("slide-stage.js"))
+        elif name.startswith(MODULE_PREFIX):
+            out[name] = module_region(name[len(MODULE_PREFIX):])
     return out
+
+
+# --- deck modules --------------------------------------------------------------------------
+
+def available_modules(root: Path = MODULES) -> list[str]:
+    return sorted(p.stem for p in root.glob("*.js") if MODULE_NAME_RE.match(p.stem)) if root.is_dir() else []
+
+
+def module_region_name(name: str) -> str:
+    return MODULE_PREFIX + name
+
+
+def module_region(name: str, root: Path = MODULES) -> str:
+    """One module: its stylesheet in an own <style> (no marker inside CSS), then its script."""
+    js = root / ("%s.js" % name)
+    if not MODULE_NAME_RE.match(name) or not js.is_file():
+        raise DeckError("unknown module %r (available: %s)"
+                        % (name, ", ".join(available_modules(root)) or "none"))
+    css = js.with_suffix(".css")
+    out = "\n"
+    for path, closing in ((css, "</style"), (js, "</script")):
+        if path.is_file() and closing in path.read_text(encoding="utf-8").lower():
+            raise DeckError("modules/%s contains %s>, which would end its element early" % (path.name, closing))
+    if css.is_file():
+        text = css.read_text(encoding="utf-8")
+        out += "<style>\n" + text + ("" if text.endswith("\n") else "\n") + "</style>\n"
+    return out + "<script>\n" + js.read_text(encoding="utf-8") + "\n</script>\n"
+
+
+def resolve_modules(requested: list[str]) -> list[str]:
+    """--with values: names or `all`, unknown names refused, each once, sorted."""
+    known = available_modules()
+    names: set[str] = set()
+    for item in requested or []:
+        if item == "all":
+            names.update(known)
+        elif item in known:
+            names.add(item)
+        else:
+            raise DeckError("unknown module %r (available: %s)" % (item, ", ".join(known) or "none"))
+    return sorted(names)
+
+
+def region_order(names) -> list[str]:
+    """Document order of the given region names: fixed regions first, modules after, by name."""
+    fixed = [n for n, _ in REGIONS if n in names]
+    return fixed + sorted(n for n in names if n.startswith(MODULE_PREFIX))
 
 
 # --- markers -------------------------------------------------------------------------------
@@ -371,12 +440,13 @@ def splice(html: str, contents: dict[str, str]) -> str:
     return html
 
 
-def verify(html: str, contents: dict[str, str]) -> None:
-    """Read every splice back: present once, in order, holding exactly what was meant."""
+def verify(html: str, contents: dict[str, str], order: list[str] | None = None) -> None:
+    """Read every splice back: present once, in order, holding exactly what was meant.
+
+    A build checks the order it writes; a refresh passes the order the deck already
+    has, since module order is behaviour (key priority, transition nesting)."""
     last = -1
-    for name, _ in REGIONS:
-        if name not in contents:
-            continue
+    for name in (order or region_order(contents)):
         pos = span(html, name)
         if pos is None:
             raise DeckError("verify: region %s is missing after the splice" % name)
@@ -404,7 +474,7 @@ def deck_attrs(items: list[str]) -> str:
     return "".join(out)
 
 
-def skeleton(title: str, lang: str, slides: str, stage: bool, attrs: str = "") -> str:
+def skeleton(title: str, lang: str, slides: str, stage: bool, attrs: str = "", modules=()) -> str:
     def r(name: str) -> str:
         s, e = marks(name)
         return s + e
@@ -413,6 +483,7 @@ def skeleton(title: str, lang: str, slides: str, stage: bool, attrs: str = "") -
     if stage:
         style.append(r("slide-stage:css"))
         body_end.append(r("slide-stage:js"))
+    body_end.extend(r(module_region_name(m)) for m in modules)
     return "\n".join([
         "<!DOCTYPE html>",
         '<html lang="%s">' % lang,
@@ -474,9 +545,11 @@ def build(args) -> int:
     attrs = deck_attrs(args.deck_attr)
     slug, preset, design = choose_preset(args.preset, args.design, out.resolve().parent)
 
+    modules = resolve_modules(args.with_modules)
     names = [name for name, _ in REGIONS if args.with_stage or name not in STAGE_REGIONS]
+    names += [module_region_name(m) for m in modules]
     contents = region_contents(names, slug, preset, design, not args.no_embed_fonts)
-    html = splice(skeleton(args.title, args.lang, slides, args.with_stage, attrs), contents)
+    html = splice(skeleton(args.title, args.lang, slides, args.with_stage, attrs, modules), contents)
     verify(html, contents)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(html, encoding="utf-8")
@@ -488,10 +561,19 @@ def refresh(args) -> int:
     src = Path(args.refresh)
     if not src.is_file():
         raise DeckError("--refresh: %s not found" % src)
+    if args.with_modules:
+        raise DeckError("--with is for a new build; --refresh keeps the modules the deck has "
+                        "(add one by building the slides into a fresh deck)")
+    if args.deck_attr:
+        raise DeckError("--deck-attr is for a new build; --refresh keeps the deck element as it is "
+                        "(build the slides again with --deck-attr for a copy with other options)")
     html = src.read_text(encoding="utf-8")
     present = [name for name, _ in REGIONS if span(html, name) is not None]
+    present += [module_region_name(m) for m in sorted(set(MODULE_MARK_RE.findall(html)))
+                if span(html, module_region_name(m)) is not None]
     if not present:
         raise DeckError("%s carries no marker region; nothing to refresh" % src)
+    present.sort(key=lambda n: span(html, n)[0])   # the deck's own order, kept
 
     tokens = span(html, "deck-tokens")
     found = PRESET_RE.search(html[tokens[0]:tokens[1]]) if tokens else None
@@ -516,7 +598,7 @@ def refresh(args) -> int:
 
     contents = region_contents(present, slug, preset, design, embed)
     updated = splice(html, contents)
-    verify(updated, contents)
+    verify(updated, contents, [n for n in present if n in contents])
     out = Path(args.out) if args.out else src
     out.write_text(updated, encoding="utf-8")
     report(out, slug, design, updated, refreshed=present)
@@ -528,8 +610,10 @@ def report(out: Path, slug: str | None, design: Path | None, html: str, refreshe
     engine = "engine v%s" % (stamp.group(1) if stamp else "1")
     what = ("refreshed %s" % ", ".join(refreshed)) if refreshed is not None else "built"
     source = (" from %s" % design) if (slug == "design" and design) else ""
-    print("new-deck: %s %s (preset %s%s, %s, %d slides)"
-          % (what, out, slug or "unknown", source, engine, len(SLIDE_RE.findall(html))))
+    mods = [m for m in MODULE_MARK_RE.findall(html)]
+    modules = (", modules %s" % ", ".join(dict.fromkeys(mods))) if mods else ""
+    print("new-deck: %s %s (preset %s%s, %s, %d slides%s)"
+          % (what, out, slug or "unknown", source, engine, len(SLIDE_RE.findall(html)), modules))
 
 
 def main() -> int:
@@ -542,6 +626,9 @@ def main() -> int:
     ap.add_argument("--design", help="DESIGN.md to use (default: the nearest one above the output)")
     ap.add_argument("--lang", choices=("en", "de"), default="en", help="<html lang> (default en)")
     ap.add_argument("--with-stage", action="store_true", help="add the live stage (assets/slide-stage.*)")
+    ap.add_argument("--with", dest="with_modules", action="append", default=[], metavar="NAME",
+                    help="inline the deck module assets/modules/NAME.js (+ .css); repeatable, "
+                         "`all` takes every module (build only, a refresh keeps the deck's set)")
     ap.add_argument("--deck-attr", action="append", default=[], metavar="data-NAME=VALUE",
                     help="an engine option on the deck element, e.g. data-tracks-default=short or "
                          "data-back-href=page.html (repeatable; build only, a refresh keeps the deck element)")

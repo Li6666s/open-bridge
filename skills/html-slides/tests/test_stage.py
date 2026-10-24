@@ -251,8 +251,12 @@ def test_n4_fit_stage_scales_down_never_up_and_stays_inside(open_deck):
     assert inner["x"] >= frame["x"] - 1 and inner["y"] >= frame["y"] - 1
     assert inner["x"] + inner["w"] <= frame["x"] + frame["w"] + 1
     assert inner["y"] + inner["h"] <= frame["y"] + frame["h"] + 1
-    # The logical viewport is what the child lays out in, whatever the frame is.
-    assert child_frame(page, "stageA").evaluate("innerWidth") == 1600
+    # The declared viewport is the least the child lays out in; it grows along the
+    # axis the frame has to spare, so the page fills the frame instead of sitting
+    # in a band of empty stage on two sides.
+    vw, vh = child_frame(page, "stageA").evaluate("[innerWidth, innerHeight]")
+    assert vw >= 1600 and vh >= 1000 and (vw == 1600 or vh == 1000), (vw, vh)
+    assert abs(inner["w"] - frame["w"]) <= 3 and abs(inner["h"] - frame["h"]) <= 3, (inner, frame)
 
 
 def test_n4_fit_follows_the_frame_without_a_window_resize(open_deck):
@@ -389,3 +393,171 @@ def test_print_hides_the_stage_buttons(open_deck):
     shown = page.evaluate("""() => [...document.querySelectorAll('[data-stage]')]
       .filter(b => getComputedStyle(b).display !== 'none').length""")
     assert shown == 0
+
+
+# --- the slide's look reaches the page inside ------------------------------------------
+
+def test_stage_hands_theme_and_language_to_the_page(open_deck):
+    """The page's own toolbar is hidden inside a stage, so the slide sets its theme and language."""
+    page = open_deck(lang="de")
+    go(page, 2)
+    wait_loaded(page, "stageA")
+    child = child_frame(page, "stageA")
+    deck_dark = page.evaluate("document.documentElement.classList.contains('theme-dark')")
+    child.wait_for_function("(d) => document.documentElement.classList.contains('dark') === d", arg=deck_dark)
+    assert child.evaluate("document.documentElement.getAttribute('data-lang')") == "de"
+    # what the engine's T key does: swap the theme class on <html>
+    page.evaluate("""() => { const r = document.documentElement, d = r.classList.contains('theme-dark');
+      r.classList.toggle('theme-dark', !d); r.classList.toggle('theme-light', d); }""")
+    child.wait_for_function("(d) => document.documentElement.classList.contains('dark') === d", arg=not deck_dark)
+    assert page.errors == []
+
+
+# --- theme and language reach the child (stage:theme, stage:lang) ---------------------
+
+def child_msgs(page, sid: str, kind: str) -> list:
+    return child_frame(page, sid).evaluate("(k) => window.__msgs.filter(m => m.type === k)", kind)
+
+
+def test_theme_and_lang_are_sent_after_ready_and_on_change(open_deck):
+    page = open_deck(color_scheme="light")
+    go(page, 2)
+    wait_loaded(page, "stageA")
+    frame_wait = "(k) => window.__msgs.some(m => m.type === k)"
+    child_frame(page, "stageA").wait_for_function(frame_wait, arg="stage:theme")
+    child_frame(page, "stageA").wait_for_function(frame_wait, arg="stage:lang")
+    assert child_msgs(page, "stageA", "stage:theme")[-1]["theme"] == "light", "no class yet: the OS decides"
+    assert child_msgs(page, "stageA", "stage:lang")[-1]["lang"] == "en"
+    page.evaluate("() => document.documentElement.classList.add('theme-dark')")
+    child_frame(page, "stageA").wait_for_function(
+        "() => window.__msgs.filter(m => m.type === 'stage:theme').slice(-1)[0].theme === 'dark'")
+    page.evaluate("() => { document.documentElement.setAttribute('data-lang', 'de'); }")
+    child_frame(page, "stageA").wait_for_function(
+        "() => window.__msgs.filter(m => m.type === 'stage:lang').slice(-1)[0].lang === 'de'")
+    n = len(child_msgs(page, "stageA", "stage:theme"))
+    page.evaluate("() => document.documentElement.classList.add('unrelated')")
+    page.wait_for_timeout(150)
+    assert len(child_msgs(page, "stageA", "stage:theme")) == n, "only a real change is sent"
+    assert page.errors == []
+
+
+# --- one protocol end to end: a real simulation inside a real stage -------------------
+
+def test_a_real_simulation_in_a_stage_hides_its_toolbar_and_follows_the_deck(open_deck, tmp_path):
+    """slide-stage.js sends stage:theme and stage:lang, sim-engine.js applies them.
+
+    The child is a flow simulation assembled by html-canvas new-simulation.py, so the
+    toolbar rule in simulation.css and the child listener are the shipped ones."""
+    import subprocess
+    import sys
+    from urllib.parse import urlparse, unquote
+    built = tmp_path / "sim-flow-built.html"
+    tool = SKILL.parent / "html-canvas" / "scripts" / "new-simulation.py"
+    r = subprocess.run([sys.executable, str(tool), "--archetype", "flow", "--title", "Stage probe",
+                        "--out", str(built), "--force"], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    page = open_deck(color_scheme="light")
+    deck_dir = Path(unquote(urlparse(page.url).path)).parent
+    (deck_dir / "child.html").write_text(built.read_text("utf-8"), encoding="utf-8")
+    go(page, 2)
+    wait_loaded(page, "stageA")
+    child = child_frame(page, "stageA")
+    assert child.evaluate("document.documentElement.getAttribute('data-sim-embedded')") == "yes"
+    assert child.evaluate("getComputedStyle(document.querySelector('.topbar')).display") == "none"
+    child.wait_for_function("() => !document.documentElement.classList.contains('dark')")
+    page.evaluate("() => document.documentElement.classList.add('theme-dark')")
+    child.wait_for_function("() => document.documentElement.classList.contains('dark')")
+    page.evaluate("() => document.documentElement.setAttribute('data-lang', 'de')")
+    child.wait_for_function("() => document.documentElement.getAttribute('data-lang') === 'de'")
+    assert child.evaluate("[localStorage.getItem('html-canvas-theme'), localStorage.getItem('html-canvas-lang')]") == [None, None]
+    assert page.errors == []
+
+
+# --- Keys while a stage fills the window (review wave 4) --------------------------------
+
+def test_enter_on_a_button_still_works_while_large(open_deck):
+    page = open_deck()
+    go(page, 2)
+    wait_loaded(page, "stageA")
+    page.keyboard.press("v")
+    assert stage(page, "stageA")["max"]
+    page.focus(".stage-close")
+    page.keyboard.press("Enter")
+    page.wait_for_function("!document.getElementById('stageA').classList.contains('is-max')")
+    assert page.evaluate("document.querySelectorAll('.stage-close').length") == 0
+
+
+def test_single_key_shortcuts_never_reach_the_deck_behind_a_large_stage(open_deck):
+    page = open_deck()
+    go(page, 2)
+    wait_loaded(page, "stageA")
+    page.evaluate("""window.__seen = [];
+      document.addEventListener('keydown', function (e) { if (e.key.length === 1 || e.key === 'Enter') window.__seen.push(e.key); });""")
+    page.keyboard.press("v")
+    assert stage(page, "stageA")["max"]
+    for k in ["d", "r", "b", "w", "q", "p", "n", "2", "Enter", "?", "Shift+P"]:
+        page.keyboard.press(k)
+    assert page.evaluate("window.__seen") == []
+    assert stage(page, "stageA")["max"], "a key closed the stage"
+    # The look keys still reach the deck: the stage follows them.
+    page.keyboard.press("t")
+    page.keyboard.press("l")
+    assert page.evaluate("window.__seen") == ["t", "l"]
+    assert stage(page, "stageA")["max"]
+
+
+def test_t_and_l_inside_a_real_simulation_go_to_the_slide_and_store_nothing(open_deck, tmp_path):
+    """T and L pressed inside the frame belong to the slide: the frame never flips on
+    its own and never writes the page's stored choice (review wave 4)."""
+    import subprocess
+    import sys
+    from urllib.parse import urlparse, unquote
+    built = tmp_path / "sim-flow-keys.html"
+    tool = SKILL.parent / "html-canvas" / "scripts" / "new-simulation.py"
+    r = subprocess.run([sys.executable, str(tool), "--archetype", "flow", "--title", "Stage keys",
+                        "--out", str(built), "--force"], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    page = open_deck(color_scheme="light")
+    deck_dir = Path(unquote(urlparse(page.url).path)).parent
+    (deck_dir / "child.html").write_text(built.read_text("utf-8"), encoding="utf-8")
+    # The fixture deck stands in for the engine: T and L as the engine does them.
+    page.evaluate("""() => { const r = document.documentElement;
+      window.__calls = [];
+      document.body.insertAdjacentHTML('beforeend', '<span data-de hidden>bilingual</span>');
+      window.SlideDeck.toggleTheme = function () { window.__calls.push('theme');
+        const d = r.classList.contains('theme-dark'); r.classList.toggle('theme-dark', !d); r.classList.toggle('theme-light', d); };
+      window.SlideDeck.setLang = function (l) { window.__calls.push('lang:' + l); r.setAttribute('data-lang', l); };
+      window.SlideDeck.state = function () { return { lang: r.getAttribute('data-lang') || 'en' }; }; }""")
+    go(page, 2)
+    wait_loaded(page, "stageA")
+    child = child_frame(page, "stageA")
+    child.wait_for_function("() => !document.documentElement.classList.contains('dark')")
+    page.click("#stageA iframe")
+    page.keyboard.press("t")
+    page.wait_for_function("window.__calls.length === 1")
+    child.wait_for_function("() => document.documentElement.classList.contains('dark')")
+    assert page.evaluate("document.documentElement.classList.contains('theme-dark')")
+    page.keyboard.press("l")
+    page.wait_for_function("window.__calls.length === 2")
+    child.wait_for_function("() => document.documentElement.getAttribute('data-lang') === 'de'")
+    assert page.evaluate("window.__calls") == ["theme", "lang:de"]
+    assert child.evaluate("[localStorage.getItem('html-canvas-theme'), localStorage.getItem('html-canvas-lang')]") == [None, None]
+    assert page.errors == []
+
+
+def test_a_large_stage_covers_the_deck_chrome_of_an_isolated_slide(open_deck):
+    """The engine gives every slide isolation: isolate, a stacking context that kept the large
+    stage under the deck's fixed chrome (back link, dots, counter) on top of it."""
+    page = open_deck()
+    page.evaluate("""() => {
+      document.querySelectorAll('.slide').forEach(s => { s.style.isolation = 'isolate'; s.style.position = 'relative'; s.style.zIndex = '1'; });
+      const c = document.createElement('div'); c.id = 'chrome';
+      c.style.cssText = 'position:fixed;left:0;bottom:0;width:120px;height:40px;z-index:100;background:red';
+      document.body.appendChild(c); }""")
+    go(page, 2)
+    wait_loaded(page, "stageA")
+    page.keyboard.press("v")
+    assert stage(page, "stageA")["max"]
+    vh = page.evaluate("innerHeight")
+    hit = page.evaluate("(y) => { const e = document.elementFromPoint(20, y); return e && (e.id || e.tagName); }", vh - 10)
+    assert hit != "chrome", "the deck chrome sits on top of the large stage"

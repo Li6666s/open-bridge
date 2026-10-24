@@ -20,7 +20,7 @@ the flag (`--refresh` never adds a region).
 |---|---|
 | `data-src` | relative path of the page to run |
 | `data-srcdoc-ref` | id of an inert `<script type="text/plain">` or `<template>` that holds the page itself; base64 when it carries `data-encoding="base64"` (UTF-8 safe). Wins over `data-src` |
-| `data-mode="fit"` (default) | the page renders in a logical window (`data-viewport`, default `1440x900`) and is scaled down to the frame, never up: for pictures |
+| `data-mode="fit"` (default) | the page renders in a logical window (`data-viewport`, default `1440x900`) and is scaled down to the frame, never up: for pictures. The window is the least the page gets: it grows along the axis the frame has to spare, so the page fills the frame instead of sitting between empty bands. Declare the size the page needs to be read, not more: a smaller viewport scales less |
 | `data-mode="read"` | no scaling, the page fills the frame and scrolls: for documents |
 | `data-title` | accessible name of the frame |
 | `data-stage="maximize"`, `data-stage="restart"` on a button in the same slide | the large stage, a fresh run |
@@ -29,8 +29,12 @@ Keys: V toggles the large stage of the active slide, Escape leaves it. The large
 stage fills the window with CSS, not the browser's full screen interface, so it
 works from `file://` and inside frames. Once a click puts focus inside the frame, the
 simulation keeps its own keys (arrows, Space, its shortcuts); it hands V, Escape,
-Page Up and Page Down back to the deck. Click outside the frame for T, F, N and
-the arrows.
+Page Up, Page Down, T and L back to the deck, so the theme and the language stay the
+slide's. Click outside the frame for F, N and the arrows. While the stage fills the
+window, the deck behind it takes no key but T, L, V and Escape: arrows, digits,
+Enter and the single-key shortcuts of the engine and its modules (draw, read, the
+B / W cover, presenter) wait until the stage is back in its slide. Enter and Space
+still press a focused button.
 
 ## Behaviour
 
@@ -49,10 +53,17 @@ The reasons, one test each, are in the header of `assets/slide-stage.js` and in
 ## The contract with the page inside
 
 The deck and the simulation share no code: they talk through `postMessage`
-(`stage:ready`, `stage:key`, `stage:maximize`, `stage:restart`), and each side
-accepts a message only from the window it expects (`event.source`). The page side
+(`stage:ready`, `stage:key`, `stage:maximize`, `stage:restart`, and from the deck
+`stage:theme {theme: "light"|"dark"}` and `stage:lang {lang: "de"|"en"}`, each sent
+after `stage:ready` and again on every real change of the deck's theme or language),
+and each side accepts a message only from the window it expects (`event.source`).
+The deck reads theme and language from `<html>` (theme class, else the OS;
+`data-lang`, else `lang`), so the stage works with any engine version. The page side
 is built into html-canvas `sim-engine.js` and speaks only when it is framed. The
-whole contract: `html-canvas/references/simulation.md`, "Embedding in a slide".
+whole contract: `html-canvas/references/simulation.md`, "Embedding in a slide". Inside a stage
+the simulation hides its own toolbar; the stage hands it the deck's theme and
+language (`stage:theme`, `stage:lang`) once it is ready and on every switch, so T and L on the
+deck reach the page as well.
 
 ## Sending a deck with a stage
 
@@ -67,4 +78,6 @@ copy from an empty folder to prove it runs.
 
 On paper every stage is loaded (print loads them all), `render-pdf.cjs` waits for
 each frame before it writes the PDF, and the `data-stage` buttons are hidden. The
-simulation prints its end state.
+simulation prints its end state. The browser's own print dialog does not wait: a
+stage that was not loaded yet (one more than a slide away) can print empty, so make
+a PDF of a deck with stages with `render-pdf.cjs`.

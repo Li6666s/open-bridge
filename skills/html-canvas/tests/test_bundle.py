@@ -335,3 +335,154 @@ def test_a_page_named_in_a_script_string_is_warned_about(tree, tmp_path):
     assert r.returncode == 0, r.stderr
     warned = [ln for ln in r.stderr.splitlines() if ln.startswith("bundle: WARNING")]
     assert len(warned) == 1 and "pages/second.html" in warned[0], r.stderr
+
+
+# ---- the deck back link (data-back-href) -------------------------------------
+
+# What slide-engine.js does with the attribute: one link in the corner.
+BACK_LINK_JS = ("<script>(function(){var d=document.querySelector('[data-back-href]');"
+                "var a=document.createElement('a');a.className='deck-back';a.id='back';"
+                "a.href=d.getAttribute('data-back-href');a.textContent='Back';document.body.appendChild(a);})();</script>")
+
+
+def _deck(tree: Path, back: str, name: str = "deck.html") -> Path:
+    page = tree / name
+    page.write_text('<!doctype html><html lang="en" data-back-href="%s"><head><meta charset="utf-8">'
+                    '<title>Deck</title></head><body><h1>Deck</h1>%s</body></html>' % (back, BACK_LINK_JS),
+                    encoding="utf-8")
+    return page
+
+
+def _warnings(r) -> list[str]:
+    return [ln for ln in r.stderr.splitlines() if ln.startswith("bundle: WARNING")]
+
+
+def test_back_link_to_a_missing_page_is_warned_about(tree, tmp_path):
+    r = run(SCRIPT, _deck(tree, "gone.html"), "--out", tmp_path / "o.html")
+    assert r.returncode == 0, r.stderr
+    warned = _warnings(r)
+    assert len(warned) == 1 and "data-back-href" in warned[0] and "gone.html" in warned[0], r.stderr
+    assert "missing" in warned[0]
+
+
+def test_back_link_to_a_local_page_without_pages_is_warned_about(tree, tmp_path):
+    out = tmp_path / "o.html"
+    r = run(SCRIPT, _deck(tree, "pages/second.html"), "--out", out)
+    assert r.returncode == 0, r.stderr
+    warned = _warnings(r)
+    assert len(warned) == 1 and "--pages" in warned[0] and "pages/second.html" in warned[0], r.stderr
+    assert 'data-back-href="pages/second.html"' in out.read_text("utf-8")
+
+
+def test_back_link_in_page_or_remote_is_left_alone(tree, tmp_path):
+    for back in ("#top", "https://example.com/deck"):
+        out = tmp_path / "o.html"
+        r = run(SCRIPT, _deck(tree, back), "--out", out)
+        assert r.returncode == 0 and not _warnings(r), r.stderr
+        assert 'data-back-href="%s"' % back in out.read_text("utf-8")
+
+
+def test_back_link_to_a_file_becomes_a_data_uri(tree, tmp_path):
+    out = tmp_path / "o.html"
+    r = run(SCRIPT, _deck(tree, "img/dot.png"), "--out", out)
+    assert r.returncode == 0 and not _warnings(r), r.stderr
+    dot = (tree / "img" / "dot.png").read_bytes()
+    assert 'data-back-href="data:image/png;base64,%s"' % base64.b64encode(dot).decode() in out.read_text("utf-8")
+
+
+def test_back_link_with_pages_travels_as_a_payload_and_opens(browser, tree, tmp_path):
+    out = tmp_path / "deck-out.html"
+    r = run(SCRIPT, _deck(tree, "pages/second.html#h"), "--out", out, "--pages")
+    assert r.returncode == 0 and not _warnings(r), r.stderr
+    text = out.read_text("utf-8")
+    tag = re.search(r"<html[^>]*>", text).group(0)
+    assert 'data-back-href="#"' in tag and 'data-back-hash="#h"' in tag
+    ref = re.search(r'data-back-bundle="([^"]+)"', tag).group(1)
+    assert payloads(text)[ref][0] == "pages/second.html"
+    ctx, page, _ = _open_alone(browser, out, tmp_path)
+    try:
+        with ctx.expect_page() as popup:
+            page.click("#back")
+        new = popup.value
+        new.wait_for_load_state()
+        assert new.inner_text("#h") == "Zweite Seite: Größe äöüß"
+        assert new.url.endswith("#h")
+        assert page.errors == []
+    finally:
+        ctx.close()
+
+
+def test_a_fragment_with_quotes_stays_inside_its_attribute(tree, tmp_path):
+    """An escaped quote in a link or back link fragment must not become a live attribute."""
+    evil = "#x&quot; onmouseover=&quot;alert(1)"
+    page = _deck(tree, "pages/second.html" + evil)
+    page.write_text(page.read_text("utf-8").replace(
+        "<h1>Deck</h1>", '<h1>Deck</h1><a id="l" href="pages/second.html%s&amp;b">l</a>' % evil), encoding="utf-8")
+    out = tmp_path / "o.html"
+    r = run(SCRIPT, page, "--out", out, "--pages")
+    assert r.returncode == 0, r.stderr
+    text = out.read_text("utf-8")
+    assert "onmouseover=" not in text.replace("onmouseover=&quot;", ""), "a quote in the fragment broke out"
+    assert 'data-back-hash="#x&quot; onmouseover=&quot;alert(1)"' in text
+    assert 'data-bundle-hash="#x&quot; onmouseover=&quot;alert(1)&amp;b"' in text
+
+
+def test_a_style_tag_written_by_a_script_is_not_read_as_css(tmp_path):
+    """A script that builds a page in a string ('<style>' + css + '<\\/style>') and later
+    calls URL.revokeObjectURL(x) must not look like a CSS url(x) to the safety net:
+    the presenter module does exactly this, and the send copy was refused."""
+    page = tmp_path / "deck.html"
+    page.write_text(
+        "<!doctype html><html><head><style>body{margin:0}</style></head><body>"
+        "<script>var html = '<style>' + css + '<\\/style>';"
+        " var pageUrl = null; function f() { URL.revokeObjectURL(pageUrl); }</script>"
+        "<style>p{margin:0}</style><div style=\"color:red\">x</div></body></html>", encoding="utf-8")
+    out = tmp_path / "out.html"
+    r = run(SCRIPT, page, "--out", out)
+    assert r.returncode == 0, r.stderr
+    assert "pageUrl" not in r.stderr
+
+
+def test_a_css_url_in_a_real_style_still_counts(tmp_path):
+    from importlib import util
+    spec = util.spec_from_file_location("bundle_mod", SCRIPT)
+    mod = util.module_from_spec(spec)
+    sys.modules["bundle_mod"] = mod
+    spec.loader.exec_module(mod)
+    html = ("<style>a{background:url(missing.png)}</style>"
+            "<div style=\"background:url(other.png)\"></div>"
+            "<script>var s = 'style=\"background:url(js.png)\"';</script>")
+    assert mod.leftover_refs(html) == ["missing.png", "other.png"]
+
+
+def test_no_design_md_for_a_page_without_faces_is_said(tmp_path):
+    """A page naming a font family, with no @font-face and no DESIGN.md to embed from,
+    renders in a fallback: the bundle says so instead of staying quiet."""
+    d = tmp_path / "alone"
+    d.mkdir()
+    (d / "p.html").write_text('<!doctype html><html><head><meta charset="utf-8"><title>p</title>'
+                              '<style>body{font-family:"Fixture Sans",sans-serif}</style></head>'
+                              '<body>x</body></html>', encoding="utf-8")
+    r = run(SCRIPT, d / "p.html", "--out", tmp_path / "o.html")
+    assert r.returncode == 0, r.stderr
+    assert "no DESIGN.md" in r.stderr and "--design" in r.stderr, r.stderr
+
+
+def test_a_linked_page_gets_its_fonts_in_its_payload(tree, tmp_path):
+    """--pages: each bundled page embeds its own faces, not only the entry."""
+    out = tmp_path / "o.html"
+    shutil.copyfile(FONT_FIXTURES / "fixture-sans-latin-400.woff2", tree / "fixture-sans-latin-400.woff2")
+    design = tree / "DESIGN.md"
+    design.write_text("---\nname: fx\ntypography:\n  body:\n    fontFamily: Fixture Sans\n    fontWeight: 400\n---\n",
+                      encoding="utf-8")
+    second = tree / "pages" / "second.html"
+    second.write_text(second.read_text("utf-8").replace("</head>", "<style>body{font-family:'Fixture Sans'}</style></head>", 1),
+                      encoding="utf-8")
+    entry = tree / "linked.html"
+    entry.write_text((tree / "index.html").read_text("utf-8").replace(
+        '<script src="app.js">', '<a href="pages/second.html">2</a>\n<script src="app.js">'), encoding="utf-8")
+    r = run(SCRIPT, entry, "--out", out, "--pages", "--design", design, "--font-dir", tree)
+    assert r.returncode == 0, r.stderr
+    pays = payloads(out.read_text("utf-8"))
+    page = [data for src, data in pays.values() if src == "pages/second.html"]
+    assert page and b"@font-face" in page[0], r.stderr

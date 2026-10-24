@@ -168,6 +168,13 @@ body {
   display: grid; grid-template-columns: auto 1fr; gap: 10px 20px; align-items: baseline;
 }
 .deck-help__list dt { display: flex; flex-wrap: wrap; gap: 4px; }
+/* a wide, low screen (a laptop) takes the list in two columns, so it fits without a scroll */
+@media (min-width: 900px) and (max-height: 1000px) {
+  .deck-help__card { max-width: 1040px; max-height: 94vh; padding: 18px 28px; }
+  .deck-help__title { margin-bottom: 10px; }
+  .deck-help__list { grid-template-columns: auto 1fr auto 1fr; gap: 6px 20px; }
+  .deck-help__list dd { font-size: 15px; line-height: 1.3; }
+}
 .deck-help__list dd { font-size: 17px; line-height: 1.4; color: var(--text); }
 .deck-help kbd {
   font-family: var(--font-mono); font-size: 14px; min-width: 26px; text-align: center;
@@ -246,6 +253,55 @@ body {
   color: var(--text-dim);
   letter-spacing: 1px;
 }
+
+/* A heading keeps its distance to the text below it; the label above carries its own. */
+.slide__heading + .slide__body,
+.slide__heading + .slide__bullets { margin-top: clamp(12px, 2.2vh, 24px); }
+/* The display line sits tight (line-height 0.95), so what stands above or below it
+   keeps a gap the descenders cannot reach; a code block under a heading leaves room
+   for its filename badge. An inline margin on the snippet still wins. */
+.slide__display + * { margin-top: clamp(16px, 2vh, 32px); }
+.slide > * + .slide__display { margin-top: clamp(16px, 2vh, 32px); }
+.slide__heading + .slide__code-block,
+.slide__heading + .table-wrap { margin-top: clamp(20px, 2.5vh, 32px); }
+
+/* Code is set in the mono family wherever it stands, also inline in prose. Inline
+   code does not break at its own hyphens: a flag or attribute is one token. */
+.slide code, .slide kbd, .slide samp, .slide pre, .deck-notes code {
+  font-family: var(--font-mono);
+  font-variant-ligatures: none;
+  hyphens: manual;
+}
+.slide :not(pre) > code { white-space: nowrap; }
+
+/* Buttons on a slide: data-deck / data-stage controls, or links styled as one.
+   The primary one is the brand's primary fill; a style preset without a primary
+   colour falls back to its accent. aria-pressed marks the active choice in a set
+   (the engine keeps it current on data-deck="track:<name>" buttons). */
+.slide__actions {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+  margin-top: clamp(14px, 2.4vh, 24px);
+}
+.slide__btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  min-height: 44px; padding: 10px 20px; border-radius: 6px; cursor: pointer;
+  font: 600 clamp(14px, 1.3vw, 16px)/1.25 var(--font-body); text-decoration: none;
+  color: var(--text); background: var(--surface); border: 1px solid var(--border-bright);
+  transition: background-color 0.2s ease-out, border-color 0.2s ease-out;
+}
+.slide__btn:hover, .slide__btn:focus-visible { border-color: var(--accent); }
+.slide__btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.slide__btn[aria-pressed="true"] { background: var(--accent-dim); border-color: var(--accent); }
+.slide__btn--primary {
+  background: var(--primary, var(--accent)); border-color: var(--primary, var(--accent));
+  color: var(--on-primary, var(--bg));
+}
+.slide__btn--primary:hover, .slide__btn--primary:focus-visible {
+  background: color-mix(in srgb, var(--primary, var(--accent)) 86%, var(--text));
+  border-color: var(--primary, var(--accent));
+}
+.slide__btn-arrow { flex-shrink: 0; transition: transform 0.2s ease-out; }
+.slide__btn:hover .slide__btn-arrow { transform: translateX(3px); }
 
 .slide__label {
   font-family: var(--font-mono);
@@ -471,6 +527,7 @@ body {
   flex: 1;
 }
 .pipeline__file {
+  font-family: var(--font-mono);
   font-size: clamp(10px, 1.1vw, 12px);
   color: var(--accent);
   background: var(--accent-dim);
@@ -615,6 +672,7 @@ body {
 }
 @media (max-width: 768px) {
   .deck-dots { display: none; }
+  .slide__code-block { padding: 20px 16px; }
   .slide { padding: clamp(28px, 5vh, 48px) 16px; }
   .slide--split, .slide--bleed { padding: 0; }
   .slide--content .slide__inner { grid-template-columns: 1fr; }
@@ -635,6 +693,8 @@ body {
    possible via the preset's css_overrides section. */
 @media print {
   @page { size: 297mm 167mm; margin: 0; }
+  /* a focused deck or control would print its focus ring round the page */
+  *:focus, *:focus-visible { outline: none !important; }
   html, body {
     height: auto !important;
     overflow: visible !important;
@@ -683,5 +743,68 @@ body {
     opacity: 1 !important;
     transform: none !important;
     visibility: visible !important;
+  }
+}
+
+/* ============ CORE TOOLS: cover, number jump, zoom, language, handout ============ */
+/* B / W: a plain black or white screen over everything (a blank projector). */
+.deck-cover { position: fixed; inset: 0; z-index: 200; background: black; cursor: none; }
+.deck-cover[data-cover="white"] { background: white; }
+.deck-cover[hidden] { display: none; }
+
+/* Digits typed before Enter. */
+.deck-jump {
+  position: fixed; bottom: clamp(12px, 2vh, 24px); left: 50%; transform: translateX(-50%);
+  z-index: 104; padding: 6px 12px; border-radius: 18px;
+  font-family: var(--font-mono); font-size: 14px; font-variant-numeric: tabular-nums;
+  color: var(--text); background: var(--surface-elevated, var(--surface));
+  border: 1px solid var(--accent);
+}
+.deck-jump[hidden] { display: none; }
+
+/* Alt+click zoom: the engine scales the active slide's children inline. */
+:root.deck-zoomed .slide.is-active { cursor: zoom-out; }
+
+/* Language pairs (key L, data-de / data-en): only the inactive language is hidden.
+   Before the engine sets data-lang, <html lang> decides, so a deck without script
+   shows one language too. An element carrying both attributes is never hidden. */
+:root[data-lang="de"] [data-en]:not([data-de]),
+:root[data-lang="en"] [data-de]:not([data-en]),
+:root:not([data-lang]):lang(de) [data-en]:not([data-de]),
+:root:not([data-lang]):not(:lang(de)) [data-de]:not([data-en]) { display: none; }
+
+/* Print handout (data-print-notes): a notes page after each slide that has notes. */
+.deck-print-notes { display: none; }
+
+@media print {
+  .deck-cover, .deck-jump { display: none !important; }
+  .deck-print-notes {
+    display: block !important;
+    width: 297mm; height: 167mm; box-sizing: border-box; overflow: hidden;
+    padding: 16mm 20mm;
+    break-before: page; page-break-before: always;
+    break-after: page; page-break-after: always;
+    font-family: var(--font-body); font-size: 15pt; line-height: 1.5;
+    color: var(--text); background: var(--bg);
+  }
+  .deck-print-notes:last-child { break-after: auto; page-break-after: auto; }
+  .deck-print-notes__title {
+    font-family: var(--font-mono); font-size: 10pt; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 1px; color: var(--accent); margin-bottom: 6mm;
+  }
+  .deck-print-notes__body p + p { margin-top: 0.6em; }
+}
+
+/* reduced motion: every animation */
+/* Applies to the engine, the slides and every deck module alike: a module never needs
+   its own rule, and an animation still ends at its final frame. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-delay: 0s !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0s !important;
+    transition-delay: 0s !important;
+    scroll-behavior: auto !important;
   }
 }

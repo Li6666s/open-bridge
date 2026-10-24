@@ -20,7 +20,8 @@
                         so a send-out copy runs without the file next to it.
       data-mode         "fit" (default): the page renders in a logical window
                         (data-viewport, default 1440x900) and is scaled down to
-                        the frame, never up. "read": no scaling, the page fills
+                        the frame, never up; the window grows along the axis the
+                        frame has to spare, so the page fills the frame. "read": no scaling, the page fills
                         the frame and scrolls at its natural size.
       data-title        accessible name of the iframe
     Buttons anywhere in the same slide: data-stage="maximize" | "restart".
@@ -46,7 +47,7 @@
           loaded stage is never reloaded by a second load call, only by restart
 
     The contract with the page inside (stage:ready, stage:key, stage:maximize,
-    stage:restart) is documented in html-canvas references/simulation.md,
+    stage:restart, stage:theme, stage:lang) is documented in html-canvas references/simulation.md,
     "Embedding in a slide". A message counts only when its source is the
     window of one of our own frames: srcdoc and file:// pages have no origin
     worth comparing, so the window is the only reliable check.
@@ -59,15 +60,23 @@
   var maxed = null;
   var closer = null;
   var DECK_KEYS = ['ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight', 'PageDown', 'PageUp',
-                   ' ', 'Home', 'End', 'f', 'F', 'n', 'N'];
+                   ' ', 'Home', 'End', 'f', 'F', 'n', 'N',
+                   '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'Enter'];
+  var LOOK_KEYS = ['t', 'T', 'l', 'L'];
   var LABELS = {
     en: { close: 'Exit full view', closeTitle: 'Back to the slide (Escape)', frame: 'Embedded simulation' },
     de: { close: 'Vollbild beenden', closeTitle: 'Zurück (Escape)', frame: 'Eingebettete Simulation' }
   };
 
   function lang() {
-    var l = (root.getAttribute('lang') || 'en').toLowerCase().slice(0, 2);
+    var l = (root.getAttribute('data-lang') || root.getAttribute('lang') || 'en').toLowerCase().slice(0, 2);
     return LABELS[l] ? l : 'en';
+  }
+  /* The theme the deck shows: its class, else the OS (dark is the deck default). */
+  function theme() {
+    if (root.classList.contains('theme-light')) return 'light';
+    if (root.classList.contains('theme-dark')) return 'dark';
+    return window.matchMedia && matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
   }
   function reduced() {
     return !!(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches);
@@ -236,13 +245,17 @@
     var w = st.frame.clientWidth, h = st.frame.clientHeight;
     if (!w || !h) return;                       /* nothing to fit into yet */
     var s = Math.min(w / st.vw, h / st.vh, 1);  /* scale down, never up */
+    /* The declared viewport is the least the page gets: it grows along the axis
+       the frame has to spare, so the page fills the frame at that scale instead
+       of sitting between two bands of empty stage. */
+    var lw = Math.max(st.vw, Math.floor(w / s)), lh = Math.max(st.vh, Math.floor(h / s));
     /* The transform sits on the iframe itself, the click target, never on an
        ancestor: a scaled ancestor would also break the large stage (N2). */
-    f.style.width = st.vw + 'px';
-    f.style.height = st.vh + 'px';
+    f.style.width = lw + 'px';
+    f.style.height = lh + 'px';
     f.style.position = 'absolute';
-    f.style.left = Math.round((w - st.vw * s) / 2) + 'px';
-    f.style.top = Math.round((h - st.vh * s) / 2) + 'px';
+    f.style.left = Math.round((w - lw * s) / 2) + 'px';
+    f.style.top = Math.round((h - lh * s) / 2) + 'px';
     f.style.transform = 'scale(' + s + ')';
     st.frame.setAttribute('data-scale', s.toFixed(3));
   }
@@ -315,6 +328,17 @@
     if (api && typeof api[dir] === 'function') api[dir]();
   }
 
+  /* T or L pressed inside a frame: the slide owns theme and language, so the
+     deck switches and the frame follows through stage:theme / stage:lang. */
+  function lookKey(k) {
+    var api = window.SlideDeck || window.slideEngine || window.__slideEngine;
+    if (!api) return;
+    if (k === 't' && typeof api.toggleTheme === 'function') api.toggleTheme();
+    else if (k === 'l' && typeof api.setLang === 'function' && doc.querySelector('[data-de], [data-en]')) {
+      api.setLang(lang() === 'de' ? 'en' : 'de');
+    }
+  }
+
   /* ===== Wiring ===== */
 
   function typing(t) {
@@ -327,13 +351,16 @@
     if (maxed) {
       if (k === 'Escape' || k === 'v' || k === 'V') {
         e.preventDefault(); e.stopPropagation(); exitMax();
-      } else if (DECK_KEYS.indexOf(k) > -1) {
+      } else if (DECK_KEYS.indexOf(k) > -1 || (k.length === 1 && LOOK_KEYS.indexOf(k) < 0)) {
         /* Capture phase, so this runs before the deck: while a stage fills the
-           window, an arrow key must not move the slide behind it unseen. */
+           window, no key may act on the deck behind it unseen. That covers the
+           arrows and every single-key shortcut of the engine and its modules
+           (draw, read, cover, presenter). Only the look keys T and L pass: the
+           stage follows them. */
         e.stopPropagation();
-        /* No scrolling behind it either. Space keeps its job on a button. */
+        /* No scrolling behind it either. Space and Enter keep their job on a button. */
         var onButton = e.target && e.target.closest && e.target.closest('button,a[href],summary');
-        if (!(k === ' ' && onButton)) e.preventDefault();
+        if (!((k === ' ' || k === 'Enter') && onButton)) e.preventDefault();
       }
       return;
     }
@@ -353,6 +380,8 @@
       st.frame.setAttribute('data-ready', 'yes');
       fit(st);
       tell(st, { type: 'stage:maximize', on: maxed === st });
+      st.sentTheme = st.sentLang = null;
+      sendLook(st);
     } else if (d.type === 'stage:maximize') {
       if (d.on === true) enterMax(st);
       else if (d.on === false) { if (maxed === st) exitMax(); }
@@ -360,8 +389,35 @@
     } else if (d.type === 'stage:key') {
       if (d.key === 'v') toggleMax(st);
       else if (d.key === 'Escape') { if (maxed === st) exitMax(); }
+      else if (d.key === 't' || d.key === 'l') lookKey(d.key);
       else if (!maxed && d.key === 'PageDown') deckStep('next');
       else if (!maxed && d.key === 'PageUp') deckStep('prev');
+    }
+  }
+
+  /* ===== Theme and language reach the page (stage:theme, stage:lang) =====
+     Sent after stage:ready and on every real change. Read from <html>, not from
+     the engine, so any engine version or none works; the page may ignore them. */
+
+  function sendLook(st) {
+    if (!st.iframe || !st.ready) return;
+    var t = theme(), l = lang();
+    if (st.sentTheme !== t) { st.sentTheme = t; tell(st, { type: 'stage:theme', theme: t }); }
+    if (st.sentLang !== l) { st.sentLang = l; tell(st, { type: 'stage:lang', lang: l }); }
+  }
+
+  function lookChanged() {
+    stages.forEach(sendLook);
+    if (closer) { closer.textContent = LABELS[lang()].close; closer.title = LABELS[lang()].closeTitle; }
+  }
+
+  function watchLook() {
+    if (window.MutationObserver) {
+      new MutationObserver(lookChanged).observe(root, { attributes: true, attributeFilter: ['class', 'data-lang', 'lang'] });
+    }
+    if (window.matchMedia) {
+      var mq = matchMedia('(prefers-color-scheme: light)');
+      if (mq.addEventListener) mq.addEventListener('change', lookChanged);
     }
   }
 
@@ -384,6 +440,7 @@
     discover();
     if (!stages.length) return;
     bindButtons();
+    watchLook();
     window.addEventListener('keydown', onKey, true);
     window.addEventListener('message', onMessage);
     window.addEventListener('resize', fitAll);
