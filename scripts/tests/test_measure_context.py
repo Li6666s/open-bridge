@@ -56,6 +56,19 @@ generalises that cap to the whole always-on surface.
         One row per always-on item, sorted by (source, path) so an unchanged
         tree renders identically twice.
 
+    HARNESS ITEMS. Some always-on payload is loaded by the harness itself and
+    named in no file of this tree. `harness:memory-index` is the auto-memory
+    `MEMORY.md` Claude Code loads into every main session, resolved through
+    `scripts/memory-location.py` (the directory the harness reads, so
+    `autoMemoryDirectory` or its per-project default). Absent when there is no
+    index or auto memory is off (setting or `CLAUDE_CODE_DISABLE_AUTO_MEMORY`),
+    which is no error. A lookup that RAISES is the failing state `error`, never
+    "no index". Counted is what the harness loads: the file cut at its load
+    limit, and a cut file is `over` whatever the cap. `cmd:` items run with
+    `CLAUDECODE=1`, because the meter measures the session CLAUDE.md opens and
+    a command that answers differently inside one must not count a file the
+    harness row already counted.
+
     item_state(row) -> str
         ok          measured, under `max_bytes`
         over        measured, above `max_bytes`               -> FAILS
@@ -63,6 +76,15 @@ generalises that cap to the whole always-on surface.
         undeclared  discovered on disk, absent from budget    -> FAILS
         absent      declared `optional: true`, not on disk    -> ok
         missing     declared and required, not on disk        -> FAILS
+        contradiction  declares a `card:` AND is `@`-imported    -> FAILS
+                    (the import loads the file whole, so the full text is
+                    measured and the card is reported as a claim nothing
+                    honours, whatever the size)
+        error       a harness lookup raised                    -> FAILS
+
+        `contradiction` and `error` fail even under `enforce: advisory`:
+        advisory excuses a size driven by ongoing work, not a false claim
+        about what loads or a meter that cannot see its subject.
 
         `undeclared` is the load-bearing one. Without it the budget silently
         stops covering the tree the moment somebody adds an import, and a meter
@@ -495,7 +517,19 @@ REGISTRY = (
 )
 
 
-def _declare_card(tree: Path, cap: str = "") -> Path:
+def _declare_card(tree: Path, cap: str = "", keep_import: bool = False) -> Path:
+    """Declare a card on `ecosystem.yaml`, and drop its `@`-import with it.
+
+    A card replaces the import; it does not sit beside it. The fixture tree
+    imports the registry, so a card test that left the import in place would
+    be testing the contradiction below rather than an indexed source.
+    """
+    if not keep_import:
+        entry = tree / "CLAUDE.md"
+        entry.write_text(
+            entry.read_text(encoding="utf-8").replace("@ecosystem.yaml\n", ""),
+            encoding="utf-8",
+        )
     budget = (tree / "context-budget.yaml").read_text(encoding="utf-8")
     budget = budget.replace(
         "  ecosystem.yaml:\n    optional: true\n",
@@ -563,6 +597,72 @@ def test_an_indexed_item_that_is_absent_is_still_not_a_failure(tree):
     rows = mc.collect_rows(tree, mc.load_budget(tree), "bytes")
 
     assert next(r for r in rows if r["path"] == "ecosystem.yaml")["state"] == "absent"
+
+
+# A card is a claim that the session loads the card INSTEAD of the file. An
+# `@`-import of the same file loads the file whole, every session, whatever the
+# budget says. With both in place the meter used to measure the card and report
+# green while the session paid for the full text: measured on a live instance,
+# a 3 829 byte card stood in for a 24 369 byte import. That pair is neither an
+# indexed source nor an imported one, so it gets its own failing state.
+
+
+def test_a_card_on_an_imported_file_is_a_contradiction(tree):
+    _write(tree, "ecosystem.yaml", REGISTRY)
+    _declare_card(tree, keep_import=True)
+    rows = mc.collect_rows(tree, mc.load_budget(tree), "bytes")
+    row = next(r for r in rows if r["path"] == "ecosystem.yaml")
+
+    assert row["state"] == "contradiction"
+
+
+def test_a_contradiction_is_measured_by_the_full_text(tree):
+    """The import is what loads, so the import is what gets counted."""
+    _write(tree, "ecosystem.yaml", REGISTRY)
+    _declare_card(tree, keep_import=True)
+    rows = mc.collect_rows(tree, mc.load_budget(tree), "bytes")
+    row = next(r for r in rows if r["path"] == "ecosystem.yaml")
+
+    assert row["bytes"] == len(REGISTRY.encode("utf-8"))
+    assert not row["body_bytes"], "a contradiction must not be reported as indexed"
+
+
+def test_a_contradiction_fails_the_build(tree):
+    _write(tree, "ecosystem.yaml", REGISTRY)
+    _declare_card(tree, keep_import=True)
+    assert mc.main(["--repo-root", str(tree), "--quiet"]) == 1
+
+
+def test_a_contradiction_fails_even_when_the_full_text_fits_the_cap(tree):
+    """The size is not the finding. The claim about what loads is."""
+    _write(tree, "ecosystem.yaml", REGISTRY)
+    _declare_card(tree, cap="    max_bytes: 100000\n", keep_import=True)
+    assert mc.main(["--repo-root", str(tree), "--quiet"]) == 1
+
+
+def test_a_contradiction_enters_the_surface_whole(tree):
+    _write(tree, "ecosystem.yaml", REGISTRY)
+    _declare_card(tree, keep_import=True)
+    parts = mc.always_on_parts(tree, mc.load_budget(tree))
+    assert parts["ecosystem.yaml"] == REGISTRY
+
+
+def test_the_report_says_what_a_contradiction_is(tree):
+    _write(tree, "ecosystem.yaml", REGISTRY)
+    _declare_card(tree, keep_import=True)
+    rows = mc.collect_rows(tree, mc.load_budget(tree), "bytes")
+    report = mc.render_report(rows, "bytes", 2.4)
+    assert "contradiction" in report
+    assert "@`-import" in report or "@-import" in report
+
+
+def test_a_card_on_a_file_imported_only_indirectly_is_a_contradiction(tree):
+    """An import inside an imported file loads just the same."""
+    _write(tree, "ecosystem.yaml", REGISTRY)
+    _declare_card(tree)
+    _write(tree, "AGENTS.md", "A" * 500 + "\n@ecosystem.yaml\n")
+    rows = mc.collect_rows(tree, mc.load_budget(tree), "bytes")
+    assert next(r for r in rows if r["path"] == "ecosystem.yaml")["state"] == "contradiction"
 
 
 def test_init_writes_what_the_shipped_schema_requires(tree):
@@ -818,3 +918,255 @@ def test_a_fresh_file_is_still_written_whole(tree):
 def _declare_import(tree, rel):
     entry = tree / "CLAUDE.md"
     entry.write_text(entry.read_text(encoding="utf-8") + f"\n@{rel}\n", encoding="utf-8")
+
+
+# ------------------------------------------------- the harness memory index --
+#
+# Claude Code loads the auto-memory index (`MEMORY.md` in the configured memory
+# directory) into every main session, before the first answer, and nothing
+# measured it. Measured on a live instance: 20 227 bytes, uncounted. It is not
+# a file CLAUDE.md names, so no import discovery can find it; the directory is
+# resolved the way the harness resolves it, by `scripts/memory-location.py`,
+# rather than by a second copy of that precedence here.
+
+HARNESS_KEY = "harness:memory-index"
+
+
+@pytest.fixture(autouse=True)
+def _isolated_home(tmp_path, monkeypatch):
+    """No test may read the developer's real ~/.claude."""
+    home = tmp_path / "_home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    return home
+
+
+def _legacy_index(tree: Path, home: Path, text: str) -> Path:
+    encoded = str(tree.resolve()).replace("/", "-")
+    return _write(home, f".claude/projects/{encoded}/memory/MEMORY.md", text)
+
+
+def _declare_harness(tree: Path, body: str = "    optional: true\n") -> None:
+    budget = tree / "context-budget.yaml"
+    budget.write_text(
+        budget.read_text(encoding="utf-8") + f'  "{HARNESS_KEY}":\n    source: harness\n{body}',
+        encoding="utf-8",
+    )
+
+
+def _row(tree: Path, key: str):
+    rows = mc.collect_rows(tree, mc.load_budget(tree), "bytes")
+    return next((r for r in rows if r["path"] == key), None)
+
+
+def test_the_harness_memory_index_is_counted(tree, _isolated_home):
+    _legacy_index(tree, _isolated_home, "- [a](feedback_a.md): hook\n" * 10)
+    _declare_harness(tree)
+    row = _row(tree, HARNESS_KEY)
+
+    assert row is not None
+    assert row["source"] == "harness"
+    assert row["bytes"] == len(("- [a](feedback_a.md): hook\n" * 10).encode("utf-8"))
+    assert row["state"] == "uncapped"
+
+
+def test_the_harness_index_follows_auto_memory_directory(tree, _isolated_home):
+    """The configured directory, not a hardcoded one."""
+    _write(tree, "work/memory/MEMORY.md", "M" * 77)
+    _legacy_index(tree, _isolated_home, "L" * 5)
+    _write(
+        tree,
+        ".claude/settings.local.json",
+        '{"autoMemoryDirectory": "%s"}' % (tree.resolve() / "work" / "memory"),
+    )
+    _declare_harness(tree)
+    assert _row(tree, HARNESS_KEY)["bytes"] == 77
+
+
+def test_a_missing_harness_index_is_no_failure(tree):
+    _declare_harness(tree)
+    assert _row(tree, HARNESS_KEY)["state"] == "absent"
+    assert mc.main(["--repo-root", str(tree), "--quiet"]) == 0
+
+
+def test_a_missing_and_undeclared_harness_index_adds_no_row(tree):
+    assert _row(tree, HARNESS_KEY) is None
+    assert mc.main(["--repo-root", str(tree), "--quiet"]) == 0
+
+
+def test_an_existing_harness_index_is_discovered_without_a_declaration(tree, _isolated_home):
+    """Discovered, never merely declared, same as every other channel."""
+    _legacy_index(tree, _isolated_home, "x\n")
+    assert _row(tree, HARNESS_KEY)["state"] == "undeclared"
+
+
+def test_a_harness_index_over_its_cap_fails(tree, _isolated_home):
+    _legacy_index(tree, _isolated_home, "x" * 200)
+    _declare_harness(tree, "    optional: true\n    max_bytes: 100\n")
+    assert _row(tree, HARNESS_KEY)["state"] == "over"
+    assert mc.main(["--repo-root", str(tree), "--quiet"]) == 1
+
+
+def test_auto_memory_off_means_nothing_is_loaded(tree, _isolated_home):
+    _legacy_index(tree, _isolated_home, "x" * 200)
+    _write(tree, ".claude/settings.json", '{"autoMemoryEnabled": false}')
+    _declare_harness(tree)
+    assert _row(tree, HARNESS_KEY)["state"] == "absent"
+
+
+def test_the_harness_index_enters_the_surface(tree, _isolated_home):
+    _legacy_index(tree, _isolated_home, "see infra/example-family/\n")
+    _declare_harness(tree)
+    parts = mc.always_on_parts(tree, mc.load_budget(tree))
+    assert parts[HARNESS_KEY] == "see infra/example-family/\n"
+
+
+def test_command_items_run_as_a_claude_code_session(tree, monkeypatch):
+    """The meter enters through CLAUDE.md, so it measures a Claude Code session.
+
+    `memory-location.py index` prints the whole index outside Claude Code and
+    one line inside it, because there the harness already loaded the file.
+    Run from a plain terminal or CI, the command row would count the same
+    index the harness row counts, twice.
+    """
+    monkeypatch.delenv("CLAUDECODE", raising=False)
+    _write(
+        tree,
+        "scripts/env_probe.py",
+        "import os\nprint(os.environ.get('CLAUDECODE', 'unset'))\n",
+    )
+    key = "cmd:python3 scripts/env_probe.py"
+    budget = tree / "context-budget.yaml"
+    budget.write_text(
+        budget.read_text(encoding="utf-8") + f'  "{key}":\n    source: phase1\n',
+        encoding="utf-8",
+    )
+    parts = mc.always_on_parts(tree, mc.load_budget(tree))
+    assert parts[key].strip() == "1"
+
+
+# ---------------------------------------------- review follow-up: no quiet green --
+#
+# `enforce: advisory` exempts an item from the exit code because its SIZE is
+# driven by ongoing work. A contradiction is not a size: it is a false claim
+# about what loads. The same holds for a harness lookup that broke. Neither may
+# hide behind advisory.
+
+
+def test_a_contradiction_fails_even_when_the_item_is_advisory(tree):
+    _write(tree, "ecosystem.yaml", REGISTRY)
+    _declare_card(tree, cap="    enforce: advisory\n", keep_import=True)
+    row = _row(tree, "ecosystem.yaml")
+    assert row["state"] == "contradiction"
+    assert not row["advisory"]
+    assert mc.main(["--repo-root", str(tree), "--quiet"]) == 1
+
+
+# A lookup that raises is not "no index". Reported as absent, a renamed or
+# broken memory-location.py turned the harness row green, the false green this
+# meter exists to remove.
+
+
+def _broken_memory_location(monkeypatch):
+    def boom():
+        raise AttributeError("module 'memory_location' has no attribute 'resolve_memory_dir'")
+
+    monkeypatch.setattr(mc, "_memory_location", boom)
+
+
+def test_a_broken_harness_lookup_is_an_error_and_fails(tree, monkeypatch):
+    _declare_harness(tree)
+    _broken_memory_location(monkeypatch)
+    row = _row(tree, HARNESS_KEY)
+    assert row["state"] == "error"
+    assert "resolve_memory_dir" in row["error"]
+    assert mc.main(["--repo-root", str(tree), "--quiet"]) == 1
+
+
+def test_a_broken_harness_lookup_fails_even_when_undeclared(tree, monkeypatch):
+    """An undeclared row must not vanish just because the lookup broke."""
+    _broken_memory_location(monkeypatch)
+    assert _row(tree, HARNESS_KEY)["state"] == "error"
+
+
+def test_a_harness_error_fails_even_when_advisory(tree, monkeypatch):
+    _declare_harness(tree, "    optional: true\n    enforce: advisory\n")
+    _broken_memory_location(monkeypatch)
+    assert mc.main(["--repo-root", str(tree), "--quiet"]) == 1
+
+
+def test_the_report_names_a_harness_error(tree, monkeypatch):
+    _declare_harness(tree)
+    _broken_memory_location(monkeypatch)
+    rows = mc.collect_rows(tree, mc.load_budget(tree), "bytes")
+    report = mc.render_report(rows, "bytes", 2.4)
+    assert "resolve_memory_dir" in report
+
+
+def test_the_memory_location_interface_the_meter_uses_exists():
+    """Pins the coupling: the meter calls these, so a rename has to fail here."""
+    ml = mc._memory_location()
+    for name in ("repo_root_for", "resolve_memory_dir", "_first_setting"):
+        assert callable(getattr(ml, name)), name
+    assert isinstance(ml.LOAD_LIMIT_LINES, int)
+    assert isinstance(ml.LOAD_LIMIT_BYTES, int)
+
+
+def test_auto_memory_disabled_by_env_means_nothing_is_loaded(tree, _isolated_home, monkeypatch):
+    """Same switch the harness honours, and `memory-location.py` with it."""
+    _legacy_index(tree, _isolated_home, "x" * 200)
+    _declare_harness(tree)
+    monkeypatch.setenv("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "1")
+    assert _row(tree, HARNESS_KEY)["state"] == "absent"
+
+
+def test_command_items_keep_the_auto_memory_switch(tree, monkeypatch):
+    """With auto memory off the harness row is empty, so the command row has to
+    see the switch too and print the index itself: counted once, not zero times."""
+    monkeypatch.setenv("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "1")
+    _write(
+        tree,
+        "scripts/env_probe.py",
+        "import os\nprint(os.environ.get('CLAUDE_CODE_DISABLE_AUTO_MEMORY', 'unset'))\n",
+    )
+    key = "cmd:python3 scripts/env_probe.py"
+    budget = tree / "context-budget.yaml"
+    budget.write_text(
+        budget.read_text(encoding="utf-8") + f'  "{key}":\n    source: phase1\n',
+        encoding="utf-8",
+    )
+    parts = mc.always_on_parts(tree, mc.load_budget(tree))
+    assert parts[key].strip() == "1"
+
+
+def test_an_oversized_harness_index_counts_only_what_the_harness_loads(tree, _isolated_home):
+    """The harness truncates MEMORY.md at its load limit. The tail is not in the
+    session through this channel (Phase 1 then prints it whole, counted there)."""
+    ml = mc._memory_location()
+    line = "- [a](feedback_a.md): hook\n"
+    _legacy_index(tree, _isolated_home, line * (ml.LOAD_LIMIT_LINES + 50))
+    _declare_harness(tree)
+    assert _row(tree, HARNESS_KEY)["bytes"] == len(line) * ml.LOAD_LIMIT_LINES
+
+
+def test_an_oversized_harness_index_is_cut_at_the_byte_limit(tree, _isolated_home):
+    ml = mc._memory_location()
+    _legacy_index(tree, _isolated_home, "y" * (ml.LOAD_LIMIT_BYTES + 999))
+    _declare_harness(tree)
+    assert _row(tree, HARNESS_KEY)["bytes"] == ml.LOAD_LIMIT_BYTES
+
+
+def test_an_oversized_harness_index_still_fails(tree, _isolated_home):
+    """Counting only the loaded part must not hide the defect: past the load
+    limit the tail is silently dropped, so the row is `over` and names the
+    full size, whatever the declared cap."""
+    ml = mc._memory_location()
+    _legacy_index(tree, _isolated_home, "y" * (ml.LOAD_LIMIT_BYTES + 999))
+    _declare_harness(tree, "    optional: true\n    max_bytes: 999999\n")
+    row = _row(tree, HARNESS_KEY)
+    assert row["state"] == "over"
+    assert row["truncated_from"] == ml.LOAD_LIMIT_BYTES + 999
+    assert mc.main(["--repo-root", str(tree), "--quiet"]) == 1
+    report = mc.render_report(mc.collect_rows(tree, mc.load_budget(tree), "bytes"), "bytes", 2.4)
+    assert "load limit" in report

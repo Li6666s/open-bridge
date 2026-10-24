@@ -50,6 +50,39 @@ named ref space. open-bridge typically isn't a configured `git remote`
 (only one `upstream` slot exists by convention), so this fetch-by-URL
 pattern is the safe default.
 
+### Step 0b: Refuse a flat-mirror overlay (fail closed)
+
+For every overlay destination (`scope: org` or `scope: personal`), ask the
+export tool whether the branch Step 0 fetched into `refs/remotes/{name}/{branch}`
+is a flat mirror. It reads only the manifest, writes nothing, and refuses on
+any non-zero exit:
+
+```bash
+for each overlay {name}/{branch}:
+  if ! python3 scripts/overlay-export.py --check-ref "{name}/{branch}"; then
+    echo "  ⊘ {name}: flat-mirror overlay or unverifiable ref, not a cherry-pick target"
+    # drop {name} from the routing matrix; the other destinations go on
+  fi
+```
+
+The check fails closed. Exit 3 is a flat mirror. Exit 2 means the ref does not
+resolve to a commit (the Step 0 fetch failed, or `{name}`/`{branch}` is
+mistyped) or git itself failed: that refuses too, it never reads as "no
+manifest". Only a fetched commit with no `overlay.manifest.yaml`, or one whose
+`source_root` is the repo root, exits 0.
+
+**Why this is a refusal and not a warning.** `scripts/overlay.py` reads an
+overlay only below `defaults.source_root` (`tree/` when the manifest is silent).
+Mode A and Mode B in Step 5 both write the source path unchanged, so every file
+lands at the overlay's repo root, CI stays green, the PR merges, and no consumer
+ever materializes it. The way into such an overlay is
+`python3 scripts/overlay-export.py --target <overlay checkout> --scope <tier>
+--dry-run`, reviewed, then run without `--dry-run`, after any colleague PR
+against `tree/` since your last export has been carried back into this Bridge. Full
+recipe: [`docs/org-overlays.md`](../../../docs/org-overlays.md) § Authoring an
+overlay. There is no override flag. Only an overlay without a manifest, or
+one whose manifest sets `source_root: .`, passes the check.
+
 ### Step 1: Find Promotable Commits
 
 **Histories may be disjoint.** Both `bks-lab/open-bridge` and
@@ -232,7 +265,8 @@ Promote Analysis: 5 commits on user/{name}
 
 ### Step 5: Cherry-Pick (or Path-Selective Re-Apply)
 
-Two modes — pick the right one per commit:
+Only for destinations that passed Step 0b. A flat-mirror overlay never gets
+here. Two modes, pick the right one per commit:
 
 #### Mode A — `git cherry-pick` (simple commits, shared history)
 

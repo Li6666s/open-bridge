@@ -40,6 +40,40 @@ scrubbing and parallel PR creation.
 
 ## Workflow
 
+### Step 0a: Refuse a flat-mirror overlay (fail closed)
+
+Run this per overlay destination before anything else, because Step 0's
+drift side-PRs and Step 5's cherry-picks are both same-path writes. `{name}`,
+`{repo}` and `{branch}` are the `name`, `repo` and `branch` of each
+`bridge-config.yaml.upstreams[]` entry with `scope: org` or `scope: personal`.
+The step fetches its own ref, by URL, so it does not depend on Step 0 or on a
+configured `git remote`:
+
+```bash
+# per overlay upstream {name} / {repo} / {branch}:
+if ! git fetch -q "git@github.com:{repo}.git" "{branch}:refs/remotes/{name}/{branch}"; then
+  echo "  ⊘ {name}: fetch failed, cannot verify the layout, dropped"   # refuse
+elif ! python3 scripts/overlay-export.py --check-ref "{name}/{branch}"; then
+  echo "  ⊘ {name}: flat-mirror overlay or unverifiable ref, dropped"  # refuse
+fi
+```
+
+The check fails closed: a failed fetch refuses, and so does exit 2 (the ref
+does not resolve to a commit, or git failed). Exit 0 only for a fetched commit
+without `overlay.manifest.yaml`, or with a `source_root` at the repo root.
+
+Exit 3: the overlay is a flat mirror. `scripts/overlay.py` reads it only below
+`defaults.source_root` (`tree/` when unset), so every cherry-picked file would
+land at the repo root, merge green, and stay invisible to every consumer.
+Drop that destination from the sync (no clone, no branch, no PR, not even for
+`scope: core` commits), print why, and continue with open-bridge. The overlay
+is built with `python3 scripts/overlay-export.py --target <overlay checkout>
+--scope <tier> --dry-run`, then without `--dry-run`, after every colleague
+PR against `tree/` since your last export has been carried back here:
+[`docs/org-overlays.md`](../../../docs/org-overlays.md) § Authoring an overlay.
+No flag overrides this. Only an overlay without a manifest, or one whose
+manifest sets `source_root: .`, passes.
+
 ### Step 0: Pre-sync drift audit
 
 Before classifying commits, run cross-repo skill-tree drift detection
@@ -277,7 +311,7 @@ Bridge Sync — window: bridge-sync-2026-04-26 .. HEAD (12 commits)
 
 ### Step 5: Parallel cherry-pick + scrub
 
-Two independent temp clones in `/tmp` for parallel operation. Within
+Only destinations that passed Step 0a. Two independent temp clones in `/tmp` for parallel operation. Within
 each clone, walk the commits in chronological order and apply the
 right recipe per category.
 

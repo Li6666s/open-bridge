@@ -2,9 +2,11 @@
 
 # Claude Code specifics
 
-The canonical, tool-agnostic operating manual for this repo is the **~800-line
-[`AGENTS.md`](AGENTS.md)**
-(Linux-Foundation convention, read natively by Codex/Cursor/Copilot/Gemini). It is inlined
+The canonical, tool-agnostic operating manual for this repo is
+**[`AGENTS.md`](AGENTS.md)**
+(Linux-Foundation convention, read natively by Codex/Cursor/Copilot/Gemini). Its size, and
+that of everything else a session loads, is reported by `python3 scripts/measure-context.py`
+rather than written down here, where it would go stale. AGENTS.md is inlined
 above via `@AGENTS.md`, so the full manual — session-start gate, rules, task management, agents,
 standing orders, commands — is already in your context. This file only adds the
 Claude-Code-specific bits.
@@ -20,7 +22,8 @@ order to know that the project exists. Details: [`docs/context-index.md`](docs/c
 That trade has a real cost worth naming: an `@`-import is resident for the whole session,
 while a Phase 1 read is ordinary conversation and can be compacted away later. The card is
 small enough to re-run, and `--get` is always available; a file large enough to matter here is
-too large to keep resident on that argument alone.
+too large to keep resident on that argument alone. Keeping the `@`-import beside a `card:` gets
+neither: `measure-context.py` fails it as `contradiction`, since the import loads the file whole.
 
 Onboarding appends further `@`-imports here as it seeds the live USER files
 (e.g. `identity/agent/SOUL.md` + `IDENTITY.md`).

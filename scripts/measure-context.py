@@ -33,6 +33,8 @@ The full contract, including every state and why it exists, lives in
 from __future__ import annotations
 
 import argparse
+import functools
+import importlib.util
 import os
 import re
 import shlex
@@ -86,12 +88,38 @@ LISTINGS = {
 
 FRONTMATTER_RE = re.compile(r"\A---\n(.*?)\n---", re.S)
 
+HARNESS_PREFIX = "harness:"
+# The fourth channel: what the HARNESS loads on its own, named in no file this
+# tree controls. Claude Code reads the auto-memory index (`MEMORY.md` in the
+# configured memory directory) into every main session before the first
+# answer. Measured on a live instance at 20 227 bytes, counted nowhere. The
+# directory is resolved by `scripts/memory-location.py`, the one place that
+# knows the harness's precedence, so the meter cannot drift from it.
+HARNESS_MEMORY_INDEX = HARNESS_PREFIX + "memory-index"
+MEMORY_LOCATION = Path(__file__).resolve().parent / "memory-location.py"
+
 DEFAULT_BYTES_PER_TOKEN = 2.4
 DEFAULT_MODEL = "claude-opus-5"
 
 # The states that fail the build. `uncapped` is deliberately absent: a newly
 # declared item must be addable in one line without breaking anyone's CI.
-FAILING = {"over", "undeclared", "missing"}
+#
+# `contradiction` is a file that declares a `card:` AND is `@`-imported. The
+# import loads the whole file every session; the card claims only the card
+# does. Measuring the card there reported green while the session paid for the
+# full text (on a live instance, 3 829 bytes reported for a 24 369 byte
+# import). The pair is a false statement about what loads, so it fails at any
+# size, and the full text is what gets counted.
+#
+# `error` is a harness item whose lookup raised (a renamed or broken
+# `memory-location.py`, say). Reported as "no index", that read as green; it is
+# a meter that cannot see its subject, so it fails.
+FAILING = {"over", "undeclared", "missing", "contradiction", "error"}
+
+# The failing states that are not about SIZE, so `enforce: advisory` cannot
+# excuse them: advisory covers a number driven by ongoing work, and these are
+# a false claim about what loads and a lookup that broke.
+STRUCTURAL = {"contradiction", "error"}
 
 # An item may declare `enforce: advisory` to be measured and reported without
 # failing the build. It exists for the one class the cap cannot honestly govern:
@@ -256,6 +284,17 @@ def run_command_item(repo_root: Path, key: str):
             f"error: budget item {key!r} is outside the command allowlist.\n"
             f"       Only {CMD_ALLOWED_PREFIX!r} is accepted."
         )
+    # The meter enters through CLAUDE.md, so it measures a Claude Code session,
+    # and a command that behaves differently inside one has to see one. The
+    # case that needs it: `memory-location.py index` prints the whole memory
+    # index outside Claude Code and one line inside, because there the harness
+    # already loaded the file. Run from CI or a terminal, the command row
+    # counted the same index as the `harness:` row, twice.
+    env = dict(os.environ)
+    env["CLAUDECODE"] = "1"
+    # CLAUDE_CODE_DISABLE_AUTO_MEMORY passes through untouched: with it set the
+    # harness row is empty and the command prints the index itself, so the
+    # index is counted once either way.
     try:
         done = subprocess.run(
             shlex.split(command),
@@ -263,6 +302,7 @@ def run_command_item(repo_root: Path, key: str):
             capture_output=True,
             text=True,
             timeout=60,
+            env=env,
         )
     except (OSError, subprocess.SubprocessError):
         return None
@@ -356,8 +396,94 @@ def discover_listings(repo_root: Path) -> list[str]:
     ]
 
 
-def item_state(row: dict, policy, exists: bool) -> str:
-    """ok | over | uncapped | undeclared | absent | missing."""
+@functools.lru_cache(maxsize=1)
+def _memory_location():
+    spec = importlib.util.spec_from_file_location("memory_location", MEMORY_LOCATION)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def harness_memory_index(repo_root: Path, home: Path | None = None) -> Path | None:
+    """The MEMORY.md the harness loads for this repo, or None when it loads none.
+
+    None covers both "auto memory is switched off" and "no index yet", which
+    on a fresh clone is the normal case and not an error. The directory is the
+    one the harness READS (`autoMemoryDirectory`, else its per-project default),
+    not the reader fallback `work/memory/`: a directory the harness does not
+    load costs a session nothing until Phase 1 reads it, and that read is
+    measured as its own `cmd:` row.
+
+    Errors are NOT swallowed here. A lookup that raises is a meter that cannot
+    see its subject, and `discover_harness` turns it into the failing state
+    `error` rather than into "no index".
+    """
+    home = Path(home) if home is not None else Path.home()
+    if os.environ.get("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "").lower() in ("1", "true"):
+        return None  # the same switch the harness and memory-location.py honour
+    ml = _memory_location()
+    root = ml.repo_root_for(repo_root)
+    enabled, _source = ml._first_setting(root, home, "autoMemoryEnabled")
+    if enabled is False:
+        return None
+    directory, _source, _warnings = ml.resolve_memory_dir(repo_root, home)
+    index = Path(directory) / "MEMORY.md"
+    return index if index.is_file() else None
+
+
+class HarnessError(str):
+    """A harness lookup that raised, carried as its message."""
+
+
+def _harness_loaded_text(text: str) -> str:
+    """What the harness actually puts into the session: MEMORY.md cut at its
+    load limit (lines, then bytes). Beyond it, the tail reaches a session only
+    through the Phase 1 read, which is measured as its own `cmd:` row."""
+    ml = _memory_location()
+    lines = text.splitlines(keepends=True)[: ml.LOAD_LIMIT_LINES]
+    data = "".join(lines).encode("utf-8")[: ml.LOAD_LIMIT_BYTES]
+    return data.decode("utf-8", errors="ignore")
+
+
+def discover_harness(repo_root: Path) -> dict[str, Path]:
+    """The harness-loaded items that exist for this tree right now, by key.
+
+    Resolved once per run: the directory lookup asks git, and a meter that
+    asked it once per row would pay for that on every item.
+    """
+    try:
+        index = harness_memory_index(repo_root)
+    except Exception as exc:  # noqa: BLE001 - reported, never swallowed
+        return {HARNESS_MEMORY_INDEX: HarnessError(f"{type(exc).__name__}: {exc}")}
+    return {HARNESS_MEMORY_INDEX: index} if index else {}
+
+
+def read_harness_item(key: str, found: dict[str, Path]):
+    """Text of a `harness:` item, or None when the harness loads nothing there."""
+    if key != HARNESS_MEMORY_INDEX:
+        sys.exit(
+            f"error: budget item {key!r} names no harness item.\n"
+            f"       Known: {HARNESS_MEMORY_INDEX}."
+        )
+    index = found.get(key)
+    if not index or isinstance(index, HarnessError):
+        return None
+    return _harness_loaded_text(index.read_text(encoding="utf-8", errors="replace"))
+
+
+def item_state(
+    row: dict, policy, exists: bool, contradiction: bool = False, error: bool = False
+) -> str:
+    """ok | over | uncapped | undeclared | absent | missing | contradiction | error.
+
+    A row carrying `truncated_from` is a harness item cut at the harness's load
+    limit: its tail never reaches the session, so it is `over` whatever the
+    declared cap says.
+    """
+    if error:
+        return "error"
+    if contradiction:
+        return "contradiction"
     if policy is None:
         # Discovered on disk (or declared as an import) but absent from the
         # budget. Without this the budget silently stops covering the tree the
@@ -366,6 +492,8 @@ def item_state(row: dict, policy, exists: bool) -> str:
         return "undeclared"
     if not exists:
         return "absent" if policy.get("optional") else "missing"
+    if row.get("truncated_from"):
+        return "over"
     cap = policy.get("max_bytes")
     if cap is None:
         return "uncapped"
@@ -389,6 +517,9 @@ def collect_rows(repo_root: Path, budget: dict, method: str) -> list[dict]:
         discovered.setdefault(rel, "standing-order")
     for rel in discover_listings(root):
         discovered.setdefault(rel, "listing")
+    harness = discover_harness(root)
+    for rel in harness:
+        discovered.setdefault(rel, "harness")
 
     rows = []
     for path in sorted(set(discovered) | set(items)):
@@ -396,7 +527,15 @@ def collect_rows(repo_root: Path, budget: dict, method: str) -> list[dict]:
         source = discovered.get(path) or (policy or {}).get("source") or "phase1"
         body_bytes = None
         largest = None
-        if path.startswith(LISTING_PREFIX):
+        contradiction = False
+        error = None
+        if path.startswith(HARNESS_PREFIX):
+            if isinstance(harness.get(path), HarnessError):
+                error = str(harness[path])
+            text = read_harness_item(path, harness)
+            exists = text is not None
+            source = (policy or {}).get("source") or "harness"
+        elif path.startswith(LISTING_PREFIX):
             entries = listing_entries(root, path)
             exists = entries is not None
             text = render_listing(root, path) if exists else None
@@ -425,7 +564,13 @@ def collect_rows(repo_root: Path, budget: dict, method: str) -> list[dict]:
             # the gate has to measure. Measuring the file instead would report
             # red for content no session pays for, and the obvious response to
             # that red — raise the cap — would quietly undo the feature.
-            if exists and (policy or {}).get("card"):
+            #
+            # Unless the file is ALSO `@`-imported. Then the import loads it
+            # whole and the card is a claim nothing honours: measure the full
+            # text and fail, whatever its size.
+            if exists and (policy or {}).get("card") and discovered.get(path) == "import":
+                contradiction = True
+            elif exists and (policy or {}).get("card"):
                 body_bytes = len(text.encode("utf-8"))
                 text = render_card(text, policy["card"], path)
 
@@ -440,12 +585,21 @@ def collect_rows(repo_root: Path, budget: dict, method: str) -> list[dict]:
             "largest": largest,
             "advisory": (policy or {}).get("enforce") == "advisory",
         }
+        if exists and path.startswith(HARNESS_PREFIX):
+            full = harness[path].stat().st_size
+            if full > len(text.encode("utf-8")):
+                row["truncated_from"] = full
         if exists:
             row["bytes"] = len(text.encode("utf-8"))
             row["tokens"], row["method"] = count_tokens(
                 text, method, bytes_per_token, model
             )
-        row["state"] = item_state(row, policy, exists)
+        row["state"] = item_state(row, policy, exists, contradiction, error is not None)
+        if error is not None:
+            row["error"] = error
+        # Advisory excuses a size, never a structural failure.
+        if row["state"] in STRUCTURAL:
+            row["advisory"] = False
         rows.append(row)
 
     rows.sort(key=lambda r: (r["source"], r["path"]))
@@ -466,9 +620,12 @@ def always_on_parts(repo_root: Path, budget: dict) -> dict[str, str]:
     """
     root = Path(repo_root)
     parts: dict[str, str] = {}
+    harness = discover_harness(root)
     for row in collect_rows(root, budget, "bytes"):
         path = row["path"]
-        if path.startswith(LISTING_PREFIX):
+        if path.startswith(HARNESS_PREFIX):
+            text = read_harness_item(path, harness)
+        elif path.startswith(LISTING_PREFIX):
             text = render_listing(root, path)
         elif path.startswith(CMD_PREFIX):
             text = run_command_item(root, path)
@@ -484,8 +641,9 @@ def always_on_parts(repo_root: Path, budget: dict) -> dict[str, str]:
             # ~25 KB of never-read registry into the reachability contract and
             # let a family claim a route through text nobody sees — the second
             # definition of always-on this function exists to prevent.
+            # A contradiction loads whole, so it enters the surface whole.
             policy = (budget.get("items") or {}).get(path) or {}
-            if text and policy.get("card"):
+            if text and policy.get("card") and row["state"] != "contradiction":
                 text = render_card(text, policy["card"], path)
         if text:
             parts[path] = text
@@ -589,6 +747,47 @@ def render_report(
         for row in listings:
             entries = ", ".join(f"{n} ({_cell(b)} B)" for n, b in row["largest"])
             out.append(f"- `{row['path']}` \u2014 heaviest: {entries}")
+
+    contradicted = [r for r in rows if r["state"] == "contradiction"]
+    if contradicted:
+        out += [
+            "",
+            f"{len(contradicted)} source(s) declare a `card:` and are also "
+            f"`@`-imported. The import loads the whole file every session, so "
+            f"the full text is counted above and the card is not. Remove the "
+            f"`@`-import (and import a generated card file instead, if "
+            f"sub-agents need the registry), or drop the `card:`:",
+            "",
+        ]
+        for row in contradicted:
+            out.append(f"- `{row['path']}` ({_cell(row['bytes'])} bytes loaded in full)")
+
+    truncated = [r for r in rows if r.get("truncated_from")]
+    if truncated:
+        out += [
+            "",
+            f"{len(truncated)} harness item(s) exceed the harness load limit, so "
+            f"their tail is silently not loaded. The row counts what loads; trim "
+            f"the file below the limit:",
+            "",
+        ]
+        for row in truncated:
+            out.append(
+                f"- `{row['path']}` ({_cell(row['truncated_from'])} bytes on disk, "
+                f"{_cell(row['bytes'])} loaded)"
+            )
+
+    errored = [r for r in rows if r["state"] == "error"]
+    if errored:
+        out += [
+            "",
+            f"{len(errored)} harness item(s) could not be resolved, so what the "
+            f"harness loads there is unknown. Fix the lookup "
+            f"(`scripts/memory-location.py`); the meter does not guess:",
+            "",
+        ]
+        for row in errored:
+            out.append(f"- `{row['path']}`: {row['error']}")
 
     outside = [r for r in rows if r["state"] in FAILING]
     failing = [r for r in outside if not r["advisory"]]
