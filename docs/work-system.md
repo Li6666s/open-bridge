@@ -1,7 +1,7 @@
 ---
 summary: "Task Management concept: log/board/tasks lifecycle, status enum, KIND-as-folder — the human-readable companion to AGENTS.md § Task Management."
 type: guide
-last_updated: 2026-10-09
+last_updated: 2026-10-24
 related:
   - AGENTS.md
   - docs/structure.md
@@ -119,6 +119,12 @@ The remedy is to close, reprioritise, or **reclassify a genuine long-runner to
 `work/streams/`** — streams never count against WIP. (`gen-board.py` mirrors the
 same threshold and flags `⚠️ WIP n > cap` in the generated header.)
 
+One number, one comparison. The cap applies when the count **exceeds** it (`>`),
+never at equality. Unset means the default 10, held once as `WIP_WARN` in
+`scripts/gen-board.py`; the template ships the same value, the pre-commit hook
+falls back to it, and `scripts/tests/test_gen_board.py` fails when any of them
+drifts. `max_active: 0` switches the warning off.
+
 ## 3-step close
 
 Closing or reclassifying a task is three steps, in order:
@@ -170,11 +176,30 @@ How often that roll happens is configurable:
 The same key drives `/briefing`'s "archive overdue" warning, so the prompt and
 the archiver can never disagree. Leaving it unset behaves exactly as before.
 
-**Choosing one is a context trade, not a filing preference.** `log.md` is read
-in full at every session start, so the cadence sets how much history is loaded
-each time. A rough guide: at ~13 rows on an active day and ~250 bytes a row, a
-month of daily work is ~16k tokens per session, a year ~190k. Pick the longest
-cadence whose loaded size you are willing to pay for on every single session.
+**Choosing one is a context trade, not a filing preference.** Session start
+reads only the recent slice, but `/briefing` and `/archive` read `log.md` in
+full, so the cadence sets how much history each of those runs loads. A rough
+guide: at ~13 rows on an active day and ~250 bytes a row, a month of daily work
+is ~16k tokens per full read, a year ~190k. Pick the longest cadence whose
+loaded size you are willing to pay for on every briefing.
+
+### Rollover detection
+
+`/archive` runs on request, so a reminder that only prose carried went quiet once
+nobody asked, and the log kept growing. The session start therefore names the
+debt itself: `python3 scripts/worklog.py --recent 3` leads with a `> ⚠` line
+whenever `log.md` still holds a period the cadence has closed, with the periods,
+their rows and their size, on every session until it is archived.
+`python3 scripts/worklog.py --check` reports the same and exits 1, for an audit.
+Neither archives: `/archive` distils memory first and asks before it writes. The
+period arithmetic is `scripts/archive-buckets.py`'s, the plan `/archive` itself
+follows, so the warning and the archiver cannot disagree.
+
+`--check-placement` names rows filed under another day's block, with exit 1.
+Every row carries its own date, so a Tuesday row under the Monday heading is
+detectable. It stays apart from `--check`: a session past midnight files
+tomorrow's rows under today, which is cosmetic and must not drown the archive
+signal.
 
 ### Distillation — archiving is not forgetting
 
@@ -216,6 +241,12 @@ Conventions:
   always tell which day a row belongs to without scrolling to the header — a stale or
   unarchived log is never ambiguous. The legacy time-only `| HH:MM | ... |` row is **retired**
   — do not emit it.
+- **One write path:** `python3 scripts/worklog.py --append --context <tag> --what
+  "<what + why>"` (optional `--glyph`, `--at 'YYYY-MM-DD HH:MM'`) puts the row into
+  the block of its own date and opens that block when it is missing, in the
+  log's own order. The day ends at the next `## ` heading, so a pinned section
+  never takes the row, and pipes and line breaks in the text are folded. Inside
+  the day it places rows with the code `task.py` and `/briefing` use.
 - **Header `## {Weekday} DD.MM`** (locale weekday name + `DD.MM`, no separators,
   no week suffix). `/archive` and `/briefing` parse exactly this as `^## \S+ DD.MM`
   and derive any date/CW from `DD.MM`, never from the weekday name — `## 2026-05-21 — Thursday`
@@ -234,7 +265,7 @@ Conventions:
 
 Automatic at the start of every session when Task Management is enabled:
 
-1. **Read** `work/log.md` + `work/board.md`.
+1. **Read** the recent slice of the log (`python3 scripts/worklog.py --recent 3`) + `work/board.md`.
 2. **If `log.md` is missing**, create it from `work/templates/week-skeleton.md` —
    never fail on a missing work file.
 3. **Open today's day-block** from `work/templates/day.md`; the header **must** match
@@ -243,8 +274,12 @@ Automatic at the start of every session when Task Management is enabled:
 4. **Regenerate the board** from the dirs (`scripts/gen-board.py`) so its counts
    reflect reality.
 5. **Warn on WIP overflow** — if `doing + review` in `work/tasks/` exceeds
-   `work.max_active`, surface the warning (never block; see WIP cap above).
-6. **Load standing orders** with `scope: always`.
+   `work.max_active` (default 10, 0 = no cap), surface the warning (never block;
+   see WIP cap above).
+6. **Name an overdue archive**: the `> ⚠` line `worklog.py --recent` leads with
+   when a closed period is still in the log (see Rollover detection). Offer
+   `/archive`; never run it unasked.
+7. **Load standing orders** with `scope: always`.
 
 ## When does work become a Board task?
 
@@ -261,7 +296,7 @@ Sub-items of an existing task are checked off in the parent STATUS.md — no own
 Single source: `bridge-config.yaml` (USER layer), `work:` block. Controls:
 - **Logging level** (hybrid/auto/manual) — how aggressively to log
 - **Activity types** — emoji × name list for log entries
-- **Limits** — `max_active` (WIP warning threshold for doing+review in `work/tasks/`; warns, never blocks), daily goals
+- **Limits**: `max_active` (WIP warning threshold for doing+review in `work/tasks/`; warns when exceeded, never blocks; default 10, 0 = no cap), daily goals
 - **Imports** — directory + rules for the universal inbox
 - **Transcript retention**: `transcript_retention_days`, how long the harness keeps session transcripts, so how long a memory fact's session link resolves ([`memory.md`](memory.md) § Retention)
 

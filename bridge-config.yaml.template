@@ -108,7 +108,8 @@ work:
                              # `memory-location.py links` warns when it differs
                              # from the live setting. Raising it keeps more
                              # plaintext on disk (docs/memory.md § Retention).
-  max_active: 5              # max concurrent active tasks (0 = unlimited)
+  max_active: 10             # WIP warning: warns when doing+review in work/tasks/ EXCEEDS it,
+                             # never blocks. Unset = 10 (scripts/gen-board.py WIP_WARN), 0 = no cap.
   max_daily_goals: 3
   import_rules: false        # enable work/import-rules.yaml
   imports_dir: imports       # where /debrief picks up transcripts
@@ -372,6 +373,16 @@ promote:
     #
     # Leave empty to disable auto-scrub — blocklist hits will then be
     # hard-blocks (commit must be adapted via /contribute --adapt before sync).
+
+  local_adaptations: []
+    # CORE files this instance keeps different ON PURPOSE, each with the reason.
+    # A conflict on such a path is still held for a human, but the auto-update
+    # report (scripts/upstream-resolve.py) calls it a declared local adaptation
+    # instead of a change that never reached upstream, so a deliberate
+    # divergence is told apart from a forgotten promotion. fnmatch globs work,
+    # and `*` also matches `/`: `docs/*` covers docs/a/b.md as well.
+    # Example:
+    #   - { path: docs/install.md, reason: "points at this org's internal mirror" }
 
   fallback_blocklist:
     # Used when no upstream-specific list matches. Catches accidental leaks

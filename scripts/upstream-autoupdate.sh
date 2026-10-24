@@ -58,6 +58,9 @@
 # AUTOUPDATE_NOTIFY_CMD (an argv string, e.g. "/path/notify.sh --quiet": run with
 # the notification text on stdin, in addition to Signal; its failure is ignored).
 # AUTOUPDATE_CHECKS=0 disables the check net (an escape hatch, reported as such).
+# AUTOUPDATE_STALE_DAYS (default 2): a skip, or a failed and aborted merge, that
+# has kept upstream out for at least this many days files ONE inbox item
+# (see stale_skip).
 set -uo pipefail
 cd "$(git -C "$(dirname "$0")" rev-parse --show-toplevel)" || exit 1
 
@@ -81,6 +84,18 @@ notify() {  # $1 = message
 }
 report() { mkdir -p work; { echo "# Upstream Auto-Update — $(date '+%F %T')"; echo; printf '%s\n' "$@"; } > "$REPORT"; }
 is_int() { case "$1" in ''|*[!0-9]*) return 1;; *) return 0;; esac; }
+
+INBOX_KEY="upstream-autoupdate-checks"
+RULES_KEY="upstream-autoupdate-rules"
+STALE_KEY="upstream-autoupdate-stale"
+# inbox: argv for scripts/inbox.py. A missing or failing inbox never fails the run
+# (there is no `set -e`; nothing here aborts on it), but the status tells which:
+# 0 = done, 2 = no inbox present, anything else = the inbox failed. A caller that
+# reports "filed an item" checks it.
+inbox() {
+  [ -f scripts/inbox.py ] || return 2
+  python3 scripts/inbox.py "$@" >/dev/null 2>&1
+}
 
 # mirror_core_branch — fast-forward the mirror's CORE branch to $UPSTREAM_REF.
 #
@@ -151,6 +166,7 @@ if [ "$behind" -eq 0 ]; then
   # The call is idempotent (it checks ancestry and no-ops when already current),
   # so running it here costs nothing on a genuinely quiet day.
   mirror_line=$(mirror_core_branch)
+  inbox close --key "$STALE_KEY" --note "the branch carries $UPSTREAM_REF again"
   report "- ✓ up to date (0 behind \`$UPSTREAM_REF\`)" "$mirror_line"
   echo "autoupdate: up to date"
   echo "autoupdate: mirror — ${mirror_line#- }"
@@ -163,10 +179,11 @@ risk=$(python3 scripts/bridge-divergence-check.py --upstream "$UPSTREAM_REF" --j
 is_int "$risk" || risk="?"
 
 # resolve_plan — ask scripts/upstream-resolve.py which conflicts a machine may decide.
-# Sets take_theirs and take_ours (paths, newline-separated) and held (one
-# "path (reason)" per unresolved file, '; '-joined). Any failure sets reason
-# instead: fail closed.
-take_theirs=""; take_ours=""; held=""
+# Sets take_theirs and take_ours (paths, newline-separated), held (one
+# "path (reason)" per unresolved file, '; '-joined) and held_adapted / held_plain
+# (how many held files are, or are not, declared local adaptations). Any failure
+# sets reason instead: fail closed.
+take_theirs=""; take_ours=""; held=""; held_adapted=0; held_plain=0
 resolve_plan() {
   local plan
   plan=$(python3 scripts/upstream-resolve.py --theirs "$UPSTREAM_REF" 2>/tmp/ob-autoupdate-resolve.log) \
@@ -181,9 +198,20 @@ for t in json.load(sys.stdin)["take_ours"]: print(t["path"])') \
 u=json.load(sys.stdin)["unresolved"]
 def one(x):
     shas = ", ".join(c.split()[0] for c in x.get("local_commits") or [])
-    return "%s (%s%s)" % (x["path"], x["reason"], ": " + shas if shas else "")
+    why = x["reason"]
+    if "local_adaptation" in x and "declared local adaptation" not in why:
+        why += ", a declared local adaptation"
+    return "%s (%s%s)" % (x["path"], why, ": " + shas if shas else "")
 print("; ".join(one(x) for x in u))') \
     || { reason="conflict resolver output unreadable, failing closed"; return; }
+  read -r held_adapted held_plain < <(printf '%s' "$plan" | python3 -c 'import sys,json
+u=json.load(sys.stdin)["unresolved"]
+a=sum(1 for x in u if "local_adaptation" in x)
+print(a, len(u) - a)') \
+    || { reason="conflict resolver output unreadable, failing closed"; return; }
+  if ! is_int "$held_adapted" || ! is_int "$held_plain"; then
+    reason="conflict resolver output unreadable, failing closed"; return
+  fi
 }
 
 # ---- the local check net ----
@@ -255,13 +283,6 @@ print(json.dumps({"all": parts}))
 PY
 }
 
-INBOX_KEY="upstream-autoupdate-checks"
-RULES_KEY="upstream-autoupdate-rules"
-inbox() {  # argv for scripts/inbox.py; a missing or failing inbox never fails the run
-  [ -f scripts/inbox.py ] || return 0
-  python3 scripts/inbox.py "$@" >/dev/null 2>&1 || true
-}
-
 # ---- GUARDS (fail closed) ----
 reason=""
 branch=$(git branch --show-current 2>/dev/null || echo "")
@@ -302,10 +323,53 @@ if [ -z "$reason" ]; then
   esac
 fi
 
+# stale_skip: how long this skip has kept upstream out, and ONE inbox item once
+# that reaches AUTOUPDATE_STALE_DAYS. A skip is the job working as designed, but
+# a skip every morning is a merge nobody does: measured on a live instance, six
+# of nine runs skipped and nothing told anyone. The age is that of the oldest
+# upstream commit the branch lacks on upstream's first-parent line (the time
+# upstream first had something this branch has not), not the merge base's: after
+# a quiet week upstream, the merge base is old on the first day of a conflict.
+# Pinned like probe_json: refs/heads/<branch> and the moving $UPSTREAM_REF, and
+# keyed, so a repeat skip adds no second item. Sets stale_line for the report.
+stale_line=""
+stale_skip() {
+  local days="${AUTOUPDATE_STALE_DAYS:-2}" oldest age
+  is_int "$days" || days=2
+  case "$branch" in user/*) ;; *) return 0 ;; esac
+  oldest=$(git log --first-parent --reverse --format=%ct "HEAD..$UPSTREAM_REF" 2>/dev/null | head -1)
+  is_int "$oldest" || return 0
+  age=$(( ($(date +%s) - oldest) / 86400 ))
+  [ "$age" -ge "$days" ] || return 0
+  local rc
+  inbox add --from upstream-autoupdate --kind finding --urgency today \
+    --summary "Upstream auto-update has been skipping for $age day(s)" \
+    --detail "The daily auto-update has not merged $UPSTREAM_REF into $branch for $age day(s); $behind commit(s) wait. Last reason: $reason. Resolve it and merge by hand (\`git merge $UPSTREAM_REF\`), see work/upstream-status.md. The item closes once $UPSTREAM_REF is an ancestor of $branch." \
+    --key "$STALE_KEY" --closes-when-json "$(probe_json 1)"
+  rc=$?
+  stale_line="- ⏳ upstream has waited $age day(s) for this branch (threshold $days)"
+  case "$rc" in
+    0) stale_line="$stale_line: filed an inbox item" ;;
+    2) stale_line="$stale_line: no inbox present, nothing filed" ;;
+    *) stale_line="$stale_line: the inbox failed (exit $rc), nothing filed" ;;
+  esac
+}
+
 if [ -n "$reason" ]; then
+  stale_skip
+  # Advice per kind of held file: a plain local edit is promoted or dropped, a
+  # declared adaptation is merged by hand and never promoted. A run held only by
+  # adaptations gets no /promote advice at all.
+  promote_line=""; adapt_line=""
+  if [ "$held_plain" -gt 0 ]; then
+    each="each held file"; [ "$held_adapted" -gt 0 ] && each="each other held file"
+    promote_line="- $each: \`/promote\` the local change, or drop it in favour of upstream; the next run merges the rest"
+  fi
+  [ "$held_adapted" -gt 0 ] && \
+    adapt_line="- a declared local adaptation (\`promote.local_adaptations\`) is kept different on purpose: merge upstream's change into it by hand, do not promote it"
   report "- ⚠ auto-update SKIPPED: $reason" \
          "- $behind commit(s) behind \`$UPSTREAM_REF\` · sentinel conflict-risk: $risk" \
-         "${held:+- each held file: \`/promote\` the local change, or drop it in favour of upstream; the next run merges the rest}"
+         ${promote_line:+"$promote_line"} ${adapt_line:+"$adapt_line"} ${stale_line:+"$stale_line"}
   notify "⚠ open-bridge auto-update SKIPPED: $reason ($behind behind). Manual merge needed."
   echo "autoupdate: skipped — $reason"; exit 0
 fi
@@ -446,6 +510,7 @@ if [ "$merged" = 1 ] && [ -z "$checks_line" ]; then
 fi
 
 if [ "$merged" = 1 ]; then
+  inbox close --key "$STALE_KEY" --note "the auto-update merged $UPSTREAM_REF again"
   after=$(git rev-parse --short HEAD)
   mirror_line=$(mirror_core_branch)
   resolved_line=""
@@ -459,7 +524,13 @@ if [ "$merged" = 1 ]; then
   echo "autoupdate: mirror — ${mirror_line#- }"
 else
   git merge --abort 2>/dev/null || true
-  report "- 🔴 auto-update merge FAILED and was aborted — $behind behind, manual merge needed"
+  # The guards passed and git merge still refused (an untracked file in the way,
+  # a hook-free failure merge-tree cannot predict). It fails every morning just
+  # as a skip does, so it surfaces the same way once it lasts.
+  reason="the merge failed and was aborted (see /tmp/ob-autoupdate-merge.log)"
+  stale_skip
+  report "- 🔴 auto-update merge FAILED and was aborted — $behind behind, manual merge needed" \
+         ${stale_line:+"$stale_line"}
   notify "🔴 open-bridge auto-update merge FAILED (aborted). Manual merge needed."
   echo "autoupdate: merge failed, aborted"; exit 1
 fi

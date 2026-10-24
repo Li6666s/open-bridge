@@ -177,11 +177,28 @@ genericization/promote sweep classifies the file correctly:
 
 ### 11 — Behavioural gate
 
-`kind ∈ {skill, agent, standing-order}` ⇒ an **explicit per-file `[y]`** at
-**first** materialize (shown in the preview, with what it changes). config /
-rule files **batch-confirm**. `--yes` is honoured **only** for non-behavioural
-files; a behavioural file with `--yes` and no TTY is **skipped + reported**,
-never auto-applied.
+`kind ∈ {skill, agent, standing-order}` ⇒ an **explicit `[y]`** when a file
+arrives for the **first** time (shown in the preview, with what it changes).
+The gate asks once per **unit**: a skill folder `skills/<name>/` is one unit,
+an agent or standing-order file is its own. All or none: a declined or
+unanswered unit writes none of its changed files, updates to files already in
+the lock included, so no skill is left with a SKILL.md that routes to a
+missing `references/` file. config / rule files **batch-confirm**. `--yes` is
+honoured **only** for non-behavioural files; with `--yes` or no TTY a gated
+unit is **withheld + reported** (`WITHHELD skills/<name>/`, count `withheld=`),
+never auto-applied. Its lock entries stay as they were, so the next run and
+`status` see it again.
+
+The one answer covers the whole unit. A file upstream removed from a withheld
+folder is not pruned (Step 14 keeps it and its lock entry), since the unchanged
+SKILL.md may still route to it. A file the consumer already has inside the
+unit (`user-owned`, `on_conflict: prompt`) is listed as "overwrites your file"
+and settled by the same `[y]`, with no second per-file question. The one
+exception is `on_conflict: skip`: the manifest declared that the consumer's own
+file is kept, so an accepted unit keeps it. A local edit held in a unit keeps
+its 3-way base while the pin moves on: the base is the version whose hash its
+lock entry still carries, looked up in the cache history when the pinned blob
+differs, so the upstream change merges once the unit is confirmed.
 
 > `diff` and `--dry-run` STOP HERE. Everything above is read-only.
 
@@ -320,8 +337,12 @@ Read-only health, no writes:
 - Provenance per file: `git -C <cache> log -1 <src>` and
   `git -C <cache> blame <src>` for "who shipped this line".
 - Bucketed counts: `{clean · locally-modified · upstream-ahead · conflict ·
-  orphan · CORE-refused}`. `orphan` = in lock, gone from the cache's plan
-  (an upcoming prune); `locally-modified` = Step 6(d) candidates.
+  orphan · pending-confirm · CORE-refused}`. `orphan` = in lock, gone from the
+  cache's plan (an upcoming prune); `locally-modified` = Step 6(d) candidates;
+  `upstream-ahead` includes files the consumer does not have yet (`--json`
+  used to report them under a separate `clean-new` key);
+  `pending-confirm` = files the next sync holds at the Step 11 gate, listed
+  under `withheld` by unit. A withheld file is never missing from the counts.
 
 ## `remove <name>` and `--keep-files`
 
