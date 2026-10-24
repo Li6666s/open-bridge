@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!--
-  html-canvas SHELL — copy this file, then drop section blocks (references/sections.md)
+  html-canvas SHELL: copy this file, then drop section blocks (references/sections.md)
   into <main>. It already ships the three first-class controls every Bridge HTML
   deliverable gets: LIGHT/DARK (button + key T), DE/EN (button + key L), and PRINT.
   Single-file, offline, zero external dependencies, native UTF-8.
@@ -13,7 +13,7 @@
 -->
 <!-- Set lang to the deliverable's DEFAULT language (de|en). The default here is
      lang="en"; for a German-default deliverable change it to lang="de" AND flip the
-     language-swap CSS defaults below — the pre-paint, the lang controller, and the
+     language-swap CSS defaults below. The pre-paint, the lang controller, and the
      "|| 'en'" last-resort fallback all follow this attribute. -->
 <html lang="en" class="">
 <head>
@@ -21,7 +21,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{TITLE}}</title>
 
-<!-- PRE-PAINT (before the stylesheet) — no flash of wrong theme/language.
+<!-- PRE-PAINT (before the stylesheet): no flash of wrong theme/language.
      Theme uses the .dark class on <html> (DESIGN.md convention, matches design-to-css.py).
      Default is light; honor a saved choice, else the OS preference. -->
 <script>
@@ -50,7 +50,8 @@
   --primary:CanvasText; --primary-hover:CanvasText; --secondary:LinkText; --accent:LinkText;
   --accent-subtle:Canvas; --accent-line:GrayText;
   --surface:Canvas; --raised:Canvas; --surface-subtle:Canvas; --surface-muted:Canvas;
-  --ink:CanvasText; --on-surface:CanvasText; --muted:GrayText; --ink-faint:GrayText; --on-primary:Canvas;
+  --ink:CanvasText; --on-surface:CanvasText; --on-primary:Canvas;
+  --muted:color-mix(in srgb,CanvasText 72%,Canvas); --ink-faint:color-mix(in srgb,CanvasText 62%,Canvas);
   --line:GrayText; --line-subtle:GrayText; --line-strong:CanvasText;
   --ok:CanvasText; --warn:CanvasText; --danger:CanvasText; --info:LinkText;
   --font-sans:system-ui,-apple-system,"Segoe UI",sans-serif;
@@ -116,24 +117,25 @@ h4{font-size:var(--fs-h4,17px);font-weight:var(--fw-h4,600);line-height:var(--lh
 p{max-width:70ch}
 a{color:var(--accent-text);text-decoration:none}
 a:hover{text-decoration:underline}
-code,kbd{font-family:var(--font-mono);font-size:.92em}
+code,kbd{font-family:var(--font-mono);font-size:.92em;font-variant-ligatures:none}
 code{background:var(--surface-muted);padding:1px 6px;border-radius:var(--radius-sm)}
 kbd{border:1px solid var(--line);border-radius:var(--radius-sm);padding:1px 6px;background:var(--raised)}
 :focus-visible{outline:2px solid var(--secondary);outline-offset:2px;border-radius:var(--radius-sm)}
 .vh{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
 
-/* ─── DE/EN swap — pure CSS, no JS touches text nodes ─── */
-/* Block-level pairs swap as blocks; inline elements (span/tspan + bare a/b/em/strong/code…)
-   stay inline. The :root[data-lang="de"] rules are specificity (0,3,0); the inline overrides
-   use :is()+attr to reach (0,3,1) so they win — without this, DE inline spans inside a heading
-   or paragraph would each stack on their own line (it renders fine in EN, so it hides easily).
-   English is the default (matches lang="en" above); flip both if you default to German. */
-[data-de]{display:none}
-[data-en]{display:block}
-:is(span,tspan,a,b,em,strong,code,kbd,i,small,mark)[data-en]{display:inline}
-:root[data-lang="de"] [data-en]{display:none}
-:root[data-lang="de"] [data-de]{display:block}
-:root[data-lang="de"] :is(span,tspan,a,b,em,strong,code,kbd,i,small,mark)[data-de]{display:inline}
+/* ─── DE/EN swap: pure CSS, no JS touches text nodes ─── */
+/* Only the INACTIVE language is hidden. The active one keeps whatever display its
+   element has (li stays list-item, td table-cell, span inline, a flex card stays flex),
+   so there is no per-tag override list. The hiding rules are (0,4,0): they beat
+   any rule of lower specificity that sets display on a pair. An id rule, or a
+   rule of four classes or attributes placed after them, still wins, so keep
+   display off such selectors.
+   An element carrying BOTH attributes (data-de="Start" data-en="Start", or the
+   empty form) is the same in both languages and is never hidden.
+   English is the default (matches lang="en" above); flip both rules if you default
+   to German. Without a data-lang attribute (JS off) the default language shows. */
+:root:not([data-lang="de"]) [data-de]:not([data-en]){display:none}
+:root[data-lang="de"] [data-en]:not([data-de]){display:none}
 
 /* ─── Topbar (theme · lang · print) ─── */
 .topbar{max-width:1100px;margin:18px auto 0;padding:0 24px;display:flex;justify-content:flex-end;gap:8px}
@@ -143,6 +145,10 @@ kbd{border:1px solid var(--line);border-radius:var(--radius-sm);padding:1px 6px;
   padding:6px 11px;cursor:pointer;
 }
 .topbar button:hover{background:var(--accent-subtle)}
+/* 44 px targets where a finger is the pointer; a mouse keeps the compact bar */
+@media (pointer:coarse){
+  .topbar button{min-height:44px;min-width:44px}
+}
 
 /* ─── Footer ─── */
 footer.canvas-foot{max-width:1100px;margin:48px auto 32px;padding:16px 24px 0;border-top:1px solid var(--line-subtle);font-size:12px;color:var(--muted)}
@@ -162,9 +168,9 @@ footer.canvas-foot code{background:none;padding:0}
 <body>
 
 <div class="topbar">
-  <button id="langToggle" title="DE/EN (L)">DE</button>
-  <button id="printBtn" title="Print as PDF" onclick="window.print()">&#10515; PDF</button>
-  <button id="themeToggle" title="Light/Dark (T)">&#9680; Dark</button>
+  <button id="langToggle" data-aria-de="EN: zu Englisch wechseln (L)" data-aria-en="DE: switch to German (L)">DE</button>
+  <button id="printBtn" data-aria-de="Als PDF drucken" data-aria-en="Print as PDF" onclick="window.print()">⤓ PDF</button>
+  <button id="themeToggle"><span class="tt-glyph" aria-hidden="true">◐</span> <span data-de>Dunkel</span><span data-en>Dark</span></button>
 </div>
 
 <main class="wrap">
@@ -182,13 +188,35 @@ footer.canvas-foot code{background:none;padding:0}
   <span data-de>Single-File, offline, keine externen Dependencies</span><span data-en>single-file, offline, no external dependencies</span>
 </footer>
 
-<!-- ─── Controllers — theme (.dark class) + lang (data-lang). Structural twins. ─── -->
+<!-- ─── Controllers: theme (.dark class) + lang (data-lang). Structural twins. ─── -->
 <script>
+/* Labels for assistive tech are attributes, so the CSS swap cannot reach them.
+   Any element with data-aria-de / data-aria-en gets aria-label and title in the
+   active language. The lang controller calls this on every switch; call it
+   yourself after adding such an element at runtime. `scope` itself counts too,
+   so hcApplyAria(button) relabels that button. */
+window.hcApplyAria=function(scope){
+  var l=document.documentElement.getAttribute('data-lang')==='de'?'de':'en';
+  var sel='[data-aria-de],[data-aria-en]', root=scope||document, els=[].slice.call(root.querySelectorAll(sel));
+  if(scope&&scope.matches&&scope.matches(sel)) els.unshift(scope);
+  els.forEach(function(el){
+    var v=el.getAttribute('data-aria-'+l)||el.getAttribute('data-aria-'+(l==='de'?'en':'de'));
+    if(v){el.setAttribute('aria-label',v);el.setAttribute('title',v);}
+  });
+};
 (function(){
   var root=document.documentElement, KEY='html-canvas-theme', btn=document.getElementById('themeToggle');
   function dark(){return root.classList.contains('dark');}
-  function render(){ if(btn){btn.innerHTML=dark()?'&#9728; Light':'&#9680; Dark';
-    btn.setAttribute('aria-label',dark()?'Switch to light theme':'Switch to dark theme');} }
+  /* the button label is the existing DE/EN span pair plus a glyph, set with textContent only */
+  function render(){ if(!btn) return;
+    var d=dark(), de=btn.querySelector('[data-de]'), en=btn.querySelector('[data-en]'), g=btn.querySelector('.tt-glyph');
+    if(g) g.textContent=d?'☀':'◐';
+    if(de) de.textContent=d?'Hell':'Dunkel';
+    if(en) en.textContent=d?'Light':'Dark';
+    /* the accessible name starts with the visible word (WCAG 2.5.3, label in name) */
+    btn.setAttribute('data-aria-de',d?'Hell: zum hellen Design wechseln (T)':'Dunkel: zum dunklen Design wechseln (T)');
+    btn.setAttribute('data-aria-en',d?'Light: switch to light theme (T)':'Dark: switch to dark theme (T)');
+    window.hcApplyAria(btn); }
   function apply(d){ root.classList.toggle('dark',d); try{localStorage.setItem(KEY,d?'dark':'light');}catch(e){} render(); }
   render();
   if(btn) btn.addEventListener('click',function(){apply(!dark());});
@@ -198,15 +226,15 @@ footer.canvas-foot code{background:none;padding:0}
     var t=e.target||{}; if(t.isContentEditable||/^(input|textarea|select)$/i.test(t.tagName||'')) return;
     apply(!dark());
   });
+  /* following the OS is not a choice: it is never written to storage (theme contract) */
   try{ matchMedia('(prefers-color-scheme: dark)').addEventListener('change',function(e){
-    try{ if(localStorage.getItem(KEY)) return; }catch(_){} apply(e.matches); }); }catch(e){}
+    try{ if(localStorage.getItem(KEY)) return; }catch(_){} root.classList.toggle('dark',e.matches); render(); }); }catch(e){}
   window.addEventListener('storage',function(e){ if(e.key===KEY){ root.classList.toggle('dark',e.newValue==='dark'); render(); } });
 })();
 (function(){
   var root=document.documentElement, KEY='html-canvas-lang', btn=document.getElementById('langToggle');
   function cur(){return root.getAttribute('data-lang')==='de'?'de':'en';}
-  function render(){ if(btn){btn.textContent=cur()==='en'?'DE':'EN';
-    btn.setAttribute('aria-label',cur()==='en'?'Zu Deutsch wechseln':'Switch to English');} }
+  function render(){ if(btn){btn.textContent=cur()==='en'?'DE':'EN';} window.hcApplyAria(); }
   function apply(l){ root.setAttribute('data-lang',l); root.setAttribute('lang',l); try{localStorage.setItem(KEY,l);}catch(e){} render(); }
   render();
   if(btn) btn.addEventListener('click',function(){apply(cur()==='en'?'de':'en');});
