@@ -558,6 +558,17 @@ def test_with_tasks_keeps_a_task_row_with_inbox_count():
     assert resting[0]["why"] == ["quiet for 4 days"]
 
 
+def test_an_inbox_row_keeps_its_own_area_unless_its_task_has_one():
+    v = m.parse_view({"view": {"buckets": [{"id": "do", "items": [
+        {"title": "sink", "sources": ["inbox"], "inbox_id": "1", "area": "Home"},
+        {"title": "fix", "sources": ["inbox"], "inbox_id": "2", "area": "Home", "task": "alpha"},
+        {"title": "bare", "sources": ["inbox"], "inbox_id": "3"}]}]}, "sections": []}, True, NOW)
+    rows = {r["inbox_id"]: r for r in m.with_tasks(v, [tinfo("alpha")])["buckets"][0]["rows"]}
+    assert (rows["1"]["area"], rows["1"]["area_names"]) == ("Home", ["Home"])
+    assert rows["2"]["area"] == "Area"                     # the task's area wins
+    assert (rows["3"]["area"], rows["3"]["area_names"]) == (None, [])
+
+
 def test_with_tasks_does_not_add_a_listed_task_twice():
     v = view(buckets=[{"id": "do", "title": "Do", "rows": [row("task:alpha", ["tasks"], task="alpha")]}])
     out = m.with_tasks(v, [tinfo("alpha")])
@@ -1528,6 +1539,16 @@ def test_urgency_priority_note(world):
     world.runner.calls.clear()
     world.act("note", key="ref:example/repo#12", text="Sam looks at it")     # no place of its own: the log
     assert writes(world) == [K(world, "log", "--", "repo", "Fix the example issue (example/repo#12) · Sam looks at it")]
+
+
+def test_area_gives_an_inbox_item_a_configured_area_or_takes_it_back(world):
+    world.app.cfg = dataclasses.replace(world.app.cfg, areas=("Bridge", "Home"))
+    world.runner.calls.clear()
+    world.act("area", key=f"inbox:{YES_ID}", value="Bridge")
+    world.act("area", key=f"inbox:{YES_ID}")
+    assert writes(world) == [I(world, "area", YES_ID, "Bridge"), I(world, "area", YES_ID, "--clear")]
+    refused(world, "invalid_argument", "area", key=f"inbox:{YES_ID}", value="Mars")
+    refused(world, "not_applicable", "area", key="task:other-task", value="Bridge")   # a task's area is its own
 
 
 def test_task_close_closes_through_task_py_with_the_reason(world):

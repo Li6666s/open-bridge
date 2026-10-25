@@ -82,7 +82,8 @@ URGENCIES = ("now", "today", "later")
 #: on it and closes it. An item with neither a probe nor a closer is the one that stays open for
 #: ever, which is what the inbox exists to prevent (2026-10-07: 51 of 62 items had no way out).
 CLOSERS = ("probe", "reporter", "person", "bot")
-VERBS = ("seen", "note", "approve", "reject", "drop", "defer", "close", "executed", "failed", "urgency", "reopen")
+VERBS = ("seen", "note", "approve", "reject", "drop", "defer", "close", "executed", "failed", "urgency", "reopen",
+         "area")
 ACTIVE_STATES = ("open", "approved", "waiting")
 #: Why a person dropped an item. `family` and `source` leave a mute rule behind.
 DROP_REASONS = ("once", "duplicate", "family", "source")
@@ -272,6 +273,12 @@ class Item:
             set_by = [e.data.get("value") for e in self.events
                       if e.verb == "urgency" and e.data.get("value") in URGENCIES]
             return set_by[-1] if set_by else self.data.get("urgency")
+        if key == "area":
+            # The same for the area (a workspace name); an empty value takes it back. An item linked to a
+            # task shows that task's area wherever it is drawn, this one only counts for an item without.
+            set_to = [e.data.get("value") for e in self.events if e.verb == "area"]
+            value = set_to[-1] if set_to else self.data.get("area")
+            return str(value).strip() or None if value is not None else None
         if key in ("kind", "gate", "task", "source", "created", "key",
                    "action", "closes_when", "detail", "due", "closer"):
             return self.data.get("from" if key == "source" else key)
@@ -347,7 +354,7 @@ class Item:
     def as_dict(self) -> dict:
         deferral = self.deferral or {}
         return {"id": self.id, "state": self.state, **{k: v for k, v in self.data.items()
-                                                      if k != "schema_version"}, "urgency": self.urgency,
+                                                      if k != "schema_version"}, "urgency": self.urgency, "area": self.area,
                 **({"deferred_until": deferral["until"]} if deferral.get("until") else {}),
                 **({"waiting_on": deferral["on"]} if deferral.get("on") else {})}
 
@@ -408,6 +415,7 @@ class Inbox:
         # each see an approved item before the other's `executed` event arrived
         # through git, and a non-idempotent action (open an issue) would run twice.
         self.runner = _slug(runner, 30) if runner else None
+        self.last_new: str | None = None      # the id the last add() created, None when it was a repeat
         # work/inbox → repository root: probes and actions resolve relative paths there
         self.base = self.root.parent.parent
 
@@ -502,7 +510,7 @@ class Inbox:
     def add(self, *, source: str, kind: str, summary: str, task: str | None = None,
             gate: str = "your-yes", urgency: str = "today", detail: str | None = None,
             action: dict | None = None, closes_when: dict | None = None, key: str | None = None,
-            due: str | None = None, closer: str | None = None) -> str:
+            due: str | None = None, closer: str | None = None, area: str | None = None) -> str:
         if kind not in KINDS:
             raise ValueError(f"kind must be one of {KINDS}")
         if gate not in GATES:
@@ -518,6 +526,7 @@ class Inbox:
         _check_action(action)
         if due is not None:
             _parse_when(due)            # raises ValueError on a date nobody can read
+        self.last_new = None
         if key:
             # A repeat of an open item is that item. A DROPPED key stays dropped:
             # a person said "do not tell me about this", and the next run of the
@@ -545,7 +554,8 @@ class Inbox:
         data = {"schema_version": SCHEMA_VERSION, "created": now.isoformat(timespec="minutes"),
                 "from": source, "kind": kind, "summary": summary.strip(), "urgency": urgency, "gate": gate}
         for name, value in (("task", task), ("due", due), ("detail", detail), ("key", key),
-                            ("action", action), ("closes_when", closes_when), ("closer", closer)):
+                            ("action", action), ("closes_when", closes_when), ("closer", closer),
+                            ("area", str(area).strip() if area else None)):
             if value:
                 data[name] = value
         if kind in ("finding", "question") and not closes_when and not closer:
@@ -559,6 +569,8 @@ class Inbox:
         if rule is not None:
             # filed and dropped at once: the noise stays countable and a reopen brings it back
             self.event(item_id, "drop", by=MUTE_ACTOR, reason="muted", rule=rule["id"])
+        else:
+            self.last_new = item_id     # a new open item, not a repeat (main() places only those)
         return item_id
 
     def event(self, item_id: str, verb: str, *, by: str | None = None, **data) -> None:
@@ -593,6 +605,13 @@ class Inbox:
         if state in ("done", "dropped"):
             raise ValueError(f"{item_id} is closed ({state}); its urgency no longer matters")
         self.event(item_id, "urgency", value=value)
+
+    def set_area(self, item_id: str, value: str, *, by: str | None = None, why: str | None = None) -> None:
+        """Give an open item its area (a workspace name), or take it back with an empty value."""
+        state = self.get(item_id).state
+        if state in ("done", "dropped"):
+            raise ValueError(f"{item_id} is closed ({state}); its area no longer matters")
+        self.event(item_id, "area", by=by, value=str(value or "").strip(), why=why)
 
     def reject(self, item_id: str, note: str | None = None) -> None:
         self.event(item_id, "reject", text=note)
@@ -889,6 +908,8 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument("--kind", required=True, choices=KINDS)
     a.add_argument("--summary", required=True)
     a.add_argument("--task")
+    a.add_argument("--area", help="the workspace the item belongs to (a name from workplace.workspaces); "
+                                  "an item with a task shows the task's area")
     a.add_argument("--gate", default="your-yes", choices=GATES)
     a.add_argument("--urgency", default="today", choices=URGENCIES)
     a.add_argument("--due", help="YYYY-MM-DD or YYYY-MM-DDTHH:MM: when it happens or must be done")
@@ -932,6 +953,10 @@ def build_parser() -> argparse.ArgumentParser:
     ur = sub.add_parser("urgency", help="re-prioritise an open item")
     ur.add_argument("id")
     ur.add_argument("value", choices=URGENCIES)
+    ar = sub.add_parser("area", help="give an open item its area (a workspace name), or --clear it")
+    ar.add_argument("id")
+    ar.add_argument("value", nargs="?")
+    ar.add_argument("--clear", action="store_true")
     nt = sub.add_parser("note")
     nt.add_argument("id")
     nt.add_argument("text")
@@ -1024,6 +1049,40 @@ def _settings(root: Path) -> dict:
     return block if isinstance(block, dict) else {}
 
 
+def _place_later(root: Path, item_id: str) -> None:
+    """Start `workplace.py place` for a new item, detached: a filer (a watcher, a hook) must never wait
+    on a model, and a router that fails or is not configured leaves the item as it was, without an area."""
+    argv = [sys.executable, str(ROOT / "scripts" / "workplace.py"), "--root", str(root),
+            "place", "--pending", "--quiet"]
+    try:
+        # --pending: a burst of new items (a watcher filing twenty) still makes one placer and one router call
+        subprocess.Popen(argv, cwd=str(root), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, start_new_session=True)
+    except OSError as exc:
+        _warn(f"{item_id}: could not start placing it in an area ({exc})")
+
+
+def area_name(root: Path, value: str | None) -> str | None:
+    """The workspace name an area means (name or alias, whatever its case), as the task areas resolve. Without
+    configured workspaces the value stands as written; one that names none of them raises ValueError."""
+    want = str(value or "").strip()
+    if not want:
+        return None
+    path = root / "bridge-config.yaml"
+    try:
+        data = (yaml.safe_load(path.read_text(encoding="utf-8")) or {}) if path.is_file() else {}
+    except (OSError, yaml.YAMLError):
+        data = {}
+    spaces = [ws for ws in ((data.get("workplace") or {}) if isinstance(data, dict) else {}).get("workspaces") or ()
+              if isinstance(ws, dict) and isinstance(ws.get("name"), str) and ws["name"].strip()]
+    if not spaces:
+        return want
+    for ws in spaces:
+        if want.casefold() in [str(n).strip().casefold() for n in [ws["name"], *(ws.get("aliases") or [])] if n]:
+            return ws["name"].strip()
+    raise ValueError(f"{want!r} is no area here (workplace.workspaces: {', '.join(w['name'] for w in spaces)})")
+
+
 def _runner(root: Path) -> str | None:
     return _settings(root).get("runner")
 
@@ -1044,10 +1103,18 @@ def main(argv=None) -> int:
             box.event(item.id, "seen", summary=args.summary)
             print(f"quiet {item.id} {closed.by} {closed.at}")
         elif args.cmd == "add":
+            try:
+                args.area = area_name(args.root, args.area)
+            except ValueError as exc:
+                # a filer runs unattended: an unknown area is warned about and left out, never a lost item
+                _warn(f"{exc}; filed without an area")
+                args.area = None
             print(box.add(source=args.source, kind=args.kind, summary=args.summary, task=args.task,
                           gate=args.gate, urgency=args.urgency, detail=args.detail, key=args.key, due=args.due,
                           action=_json_arg(args.action_json), closes_when=_json_arg(args.closes_when_json),
-                          closer=args.closer))
+                          closer=args.closer, area=args.area), flush=True)
+            if box.last_new and not args.task and not args.area and _settings(args.root).get("place_on_add") is True:
+                _place_later(args.root, box.last_new)
         elif args.cmd == "list":
             items = box.items() if args.all else box.open_items()
             if args.json:
@@ -1105,6 +1172,10 @@ def main(argv=None) -> int:
         elif args.cmd == "urgency":
             box.set_urgency(box.resolve(args.id), args.value)
             (args.root / "work" / "inbox.md").write_text(box.render(), encoding="utf-8")
+        elif args.cmd == "area":
+            if args.clear == bool((args.value or "").strip()):
+                raise ValueError("give an area or --clear, not both and not neither")
+            box.set_area(box.resolve(args.id), "" if args.clear else area_name(args.root, args.value))
         elif args.cmd == "note":
             box.note(box.resolve(args.id), args.text)
         elif args.cmd == "check":

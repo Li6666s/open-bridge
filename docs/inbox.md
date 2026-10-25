@@ -39,13 +39,13 @@ work/inbox.md                      GENERATED view (python3 scripts/inbox.py rend
 ```
 
 `item.yaml` carries `schema_version`, `created`, `from`, `kind`, `summary`,
-`urgency`, `gate` and optionally `task`, `due`, `detail`, `key`, `action`
+`urgency`, `gate` and optionally `task`, `area`, `due`, `detail`, `key`, `action`
 (`argv` and `label`, no shell) and `closes_when`. Schema:
 [`work/templates/_schema.inbox-item.yaml`](../work/templates/_schema.inbox-item.yaml),
 annotated example: [`work/templates/inbox-item.yaml`](../work/templates/inbox-item.yaml).
 
 Every change is a **new event file**, never an edit. Verbs: `seen`, `note`,
-`approve`, `reject`, `drop`, `defer`, `urgency`, `close`, `executed`, `failed`, `reopen`. Two machines
+`approve`, `reject`, `drop`, `defer`, `urgency`, `area`, `close`, `executed`, `failed`, `reopen`. Two machines
 writing the same inbox through git therefore never touch the same file, and an
 item id ends in a random tail, so two machines filing the same thing in the same
 minute still create two folders. This is the property the task folders already have, and
@@ -56,6 +56,26 @@ Kinds: `decision`, `question`, `finding`, `draft`, `result`, `idea`. An `idea`
 waits on nobody: it ranks after every other kind and a briefing section can list
 ideas apart (`kinds: [idea]`) or leave them out (`skip_kinds: [idea]`). Urgency: `now`,
 `today`, `later`.
+
+**Area.** An item linked to a task belongs to that task's area. One without a task may
+carry an `area` of its own: the name of a workspace in `workplace.workspaces`
+([`workplace.md`](workplace.md)), given with `add --area`, changed with `inbox.py area`
+(the last `area` event wins, `--clear` takes it back). A name or alias in any case is stored
+as the workspace's name; `area` refuses one that names no workspace, `add` warns and files
+the item without it. The cockpit counts the item under that area instead of "No area", its
+detail page has a picker to put it right, and a tab started for it opens in that workspace.
+
+With `inbox.place_on_add: true` in `bridge-config.yaml`, an item filed through the CLI
+(`inbox.py add`) with neither a task nor an area is placed by the router: `add` starts
+`workplace.py place --pending` detached, so the filer never waits. That waits two seconds
+for a burst to arrive, takes a lock so only one placer runs, and asks the configured
+`workplace.router` once about every open item without a task or an area, each item once
+per run; the answer is written as an `area` event by `router` with its reason. An item a
+person gave an area meanwhile, or one that closed, is left as it is. Without a router, or
+when it fails or names no configured workspace, the item stays without an area. Code that
+files through the `Inbox` class (the briefing's own items, which mostly name a task) places
+nothing; `workplace.py place --unplaced` catches up on every open item that has none yet
+(`--dry-run` shows the answer and writes nothing).
 
 ## States
 
@@ -182,6 +202,7 @@ python3 scripts/inbox.py reopen <id> [--note "why"]           # take a close, dr
 python3 scripts/inbox.py close --key <key> [--note "why"]     # every live item filed under that key
 python3 scripts/inbox.py defer <id> --until 2026-10-08
 python3 scripts/inbox.py urgency <id> now|today|later       # re-rank; the latest urgency event wins
+python3 scripts/inbox.py area <id> <workspace> | --clear    # the area of an item without a task
 python3 scripts/inbox.py note <id> "Sam will answer on Monday"
 python3 scripts/inbox.py check                             # close what the live source says is done
 python3 scripts/inbox.py run [--dry-run]                   # execute what a person released
@@ -191,7 +212,7 @@ python3 scripts/inbox.py sync [--no-push]
 ```
 
 `--by` (or `$BRIDGE_ACTOR`, default the host name) sets who an event is
-attributed to. `add` takes `--due`, `--detail`, `--key`, `--urgency` (default
+attributed to. `add` takes `--area`, `--due`, `--detail`, `--key`, `--urgency` (default
 `today`) and `--gate` (default `your-yes`). Items are `from` a machine and job
 (`homebox/issue-radar`), not a person.
 
