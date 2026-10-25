@@ -7,11 +7,18 @@ import { html, useEffect, useState } from '../vendor/htm-preact-3.1.1.module.js'
 import { T } from '../text.js'
 import { Prose } from './prose.js'
 import { Btn, Chip, Icon, PrioChip, Spinner, StateLine } from './parts.js'
-import { actionRow, ghSortRows, pageItemActs, rowActionKey } from '../logic.js'
-import { RowBar } from './day.js'
+import { actionRow, ghSortRows, itemRow, pageItemActs, rowActionKey } from '../logic.js'
+import { OriginTag, RowBar } from './day.js'
 import { RowSteps } from './pages.js'
 import { rowClickOpens } from './overlays.js'
 import { Card } from './settings.js'
+
+/** The chip of the task or stream a board row syncs with: the server's work kind of that place first (a closed task,
+ *  an ended stream), the board's stream flag only for an older server */
+export function ghPlaceChip(it, g, t) {
+  const wk = ['task', 'stream', 'done_task', 'done_stream'].includes(it?.work_kind) ? it.work_kind : g.stream ? 'stream' : 'task'
+  return wk === 'stream' ? t.gh.streamChip(g.task) : wk === 'task' ? t.gh.taskChip(g.task) : `${t.kind[wk]} ${g.task}`
+}
 
 export const GH_REF = /^[\w.-]+\/[\w.-]+#\d+$/
 const BOARD_STATES = ['new', 'ready', 'in_progress', 'review', 'blocked']
@@ -272,13 +279,14 @@ function GhRow({ it, page, section, s, c, byKey }) {
     <div class="ghl-main">
       <p class="ghl-title">${g.title || it.title}</p>
       <p class="ghl-meta">
+        <${OriginTag} row=${itemRow(it)} origin=${it.origin ?? { category: 'github', word_key: null, detail: g.repo ?? null, raw: null, ref: null, via_cockpit: false }} />
         ${g.number ? html`<span class="mono muted" title=${g.repo ?? ''}>${repoName}#${g.number}</span>` : null}
         ${g.type === 'draft' ? html`<span class="ghl-chip ghl-chip-draft" title=${t.gh.draftCardTitle}>${t.gh.draftCard}</span>` : null}
         <${PrioChip} priority=${g.priority} />
         ${g.status || g.state ? html`<span class=${`ghl-state tk-${token}`}><span class="ghl-dot"></span>${g.status || t.gh.state[g.state] || g.state}</span>` : null}
         ${(g.labels ?? []).map(l => html`<span key=${l} class="gh-label">${l}</span>`)}
         ${(g.prs ?? []).map(p => html`<span key=${p.n} class="ghl-chip">PR #${p.n}${p.draft ? ` · ${t.gh.draft}` : ''}</span>`)}
-        ${g.task ? html`<span class="ghl-chip ghl-chip-task" title=${t.gh.taskChipTitle}>${g.stream ? t.gh.streamChip(g.task) : t.gh.taskChip(g.task)}</span>` : null}
+        ${g.task ? html`<span class="ghl-chip ghl-chip-task" title=${t.gh.taskChipTitle}>${ghPlaceChip(it, g, t)}</span>` : null}
         ${g.untasked ? html`<span class="ghl-chip ghl-chip-untasked" title=${t.gh.untaskedChipTitle}>${t.gh.untaskedChip}</span>` : null}
         ${it.tab ? html`<${Chip} token=${it.tab.live ? 'success' : 'on-surface-muted'}>${t.gh.agentChip(t.state?.[it.tab.state] ?? it.tab.state)}<//>` : null}
         ${g.quiet ? html`<span class="ghl-chip ghl-chip-quiet">${t.gh.quietChip(g.quiet)}</span>` : null}

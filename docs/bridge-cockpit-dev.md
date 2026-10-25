@@ -61,6 +61,7 @@ layout now").
 | `scripts/lib/bridge_cockpit/config.py` | reads `cockpit` (formerly `briefing.web`) from `bridge-config.yaml`; a key it leaves out takes its default |
 | `scripts/lib/bridge_cockpit/runner.py` | the one place that starts a subprocess: an allowlist of programs and exact argv shapes (the Bridge's scripts, the quick chat, the A2A calls, the codex and Haiku judges, and organize: `organize.argv_ok`, one `claude -p` without tools, settings or session, prompt at most 24000 characters), timeouts, clean env |
 | `scripts/lib/bridge_cockpit/collector.py` | collect pipeline (quick, full, delta), and `build_model`: the JSON the page gets |
+| `scripts/lib/bridge_cockpit/origin.py` | where a work row comes from and whether it is a task or a stream: `classify_from` (an inbox item's free `from`), `classify_row` (a row), `work_kind`, `known_from_root` (the skills, declared runs, machines and work slugs of the tree, cached 30 s); pure, never raises |
 | `scripts/lib/bridge_cockpit/model.py` | pure domain functions, first ported from the retired briefing card's `logic.ts` (buckets, layout, tab matching) |
 | `scripts/lib/bridge_cockpit/actions.py` | `Actions`: the argument checks (`validate`), `execute`, the audit line, `finish`; it re-exports every name of `actions_base.py` |
 | `scripts/lib/bridge_cockpit/actions_base.py` | the verb table `SPEC`, the patterns and word lists, `ActionError`, `Ctx` |
@@ -296,6 +297,47 @@ holds, so a change of state shows on the band at once.
 `collector.py` `row_out` (per row) or `build_model` (top level), then use it in
 the view under `views/` that draws it. Add it to the matching `row()` in `mock.js` so mock mode keeps
 the real shape, and assert it in a model test.
+
+### Where a row comes from: one rule for every renderer
+
+The page never parses a source. `collector.row_out`, `collector.page_origin` (page items), `details.inbox_detail`
+and `details.task_detail` hand every row an `origin` from `origin.classify_row`:
+`{category, word_key, detail, raw, ref, via_cockpit}`, `category` one of `origin.CATEGORIES`, `raw` the text as
+written (or None), `word_key` a board's name (`tracker`) or the kind of the task or stream (`work`). Beside it
+goes `work_kind` (`task`, `stream`, `done_task`, `done_stream`) for the task or stream the row is or is about, and
+`about_kind` for a board row a task or stream syncs. `stream` and `closable` keep their old meaning for the settle
+flow. The raw inputs travel as `origin_raw`, `inbox_kind`, `origin_provider` and `origin_section_kind` from
+`briefing.py` and `briefing_view.py` (the contract test lists them in `READS`); `cockpit.origin_map` stays on the
+server. Jev gets none of it (`jev.ROW_FIELDS` is unchanged).
+
+The rules, in order: the person's map, `bridge-cockpit`, a `tab:`/`tab-` name, an agent tool, a session suffix,
+`github`/a GitHub URL/`owner/repo#n`, a leading `bridge/`, an open task or stream slug, a declared run or machine,
+an agent tool by its longer name, the `<host>/<job>` shape (only a known host leaves the detail), a skill folder, a
+closed slug, a script of the Bridge (`Known.scripts`: `scripts/*.py`, `skills/*/scripts/*.py`) or a bot ending
+(`origin.BOT_SUFFIXES`), else `other` with its text. A task's origin is `bridge` only for none or `task.py`'s
+"Ad-hoc <date>", GitHub only when the ref or URL comes first, else `other` with the text. An inbox row with no
+`from` is `other` with no detail; `OriginTag` draws it as "Other source · unknown", so it never draws nothing. A
+row the cockpit filed (`--from bridge-cockpit`, key `briefing:<p>:<section>:<id>`, `web:<row key>` or
+`web:ref:<owner/repo#n>`) takes the origin of the section or board row it came from, `via_cockpit: true`. A board
+row goes by its provider first, so GitLab is never called GitHub. A closed STATUS.md is read past a leading
+`# yaml-language-server` line (`origin.front_block`, `was_stream`; `daybook.week_done` and `work_find` agree), so an
+ended stream is never a closed task. Names of one instance never stand in the rules: the tree and the map name
+them.
+
+Every renderer of a work row draws `KindTag` and then `OriginTag` (both in `views/day.js`): `RowMeta` (the Due list,
+`HomeRowCard`, `DeskParts`, the overview), `HiddenList`, `RowPanel`'s list, `InfoRow` in
+`views/pages.js` (By source, the Jev list, through `logic.itemRow`), `GhRow` (the origin; its chip names the task,
+stream, closed task or ended stream it syncs with, `ghPlaceChip`), `PlanList` in `jev/page.js` (a plan entry the
+model holds no row for reads the work page's own item), the file's `Cover`, inbox drawer, `Walk` queue and
+`FindResults` (the hit's `work_kind`) in `views/dossier.js`, `Hero`, `After` and `FocusWalk` in `views/focus.js`,
+`RowDetail`, `MetaList` (the "Source" row beside "Sources"), `TaskDetail` (its head word and its entries list),
+`NextUp` and `DetailColumn` in `views/detail.js`, `WalkBar` in `views/parts.js` (the later entries too), the
+`ItemDrawer` head and bodies (`ItemTaskCard`, `TaskBody`'s related items), `InfoDrawer` and `HistoryDrawer` (Task
+or Stream from the history line's `work_kind`) in `views/overlays.js`, `RowLine` in `views/list.js`, `StageCard`,
+the inspector (work page items) and `FeedLine` in `views/stage.js`, `ReturnCard` and the week tile in
+`views/home.js`, and `ReviewBody` in `views/check.js`. A new renderer of a work row
+draws both: the frontend test "the kind stands first on every row" fails on a view file without them. After the
+change run `python3 scripts/build-cockpit-demo.py --write` so the demo mirror follows.
 
 ### New page text
 

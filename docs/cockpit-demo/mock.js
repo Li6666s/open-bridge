@@ -186,6 +186,9 @@ function row(over) {
 
 const A = (id, primary = false, dim = false) => ({ id, primary, dim })
 
+/** Where a row comes from, in the shape the server sends (lib/bridge_cockpit/origin.py classify_row) */
+const O = (category, detail = null, raw = null, extra = {}) => ({ category, word_key: null, detail, raw, ref: null, via_cockpit: false, ...extra })
+
 // the model an agent tab starts with: what bridge-config.yaml would say, and the state block the server builds from it
 const LAUNCH_CONFIG = {
   enabled: true, manual: true, auto: true, effort: true, default_model: 'sonnet', default_effort: null, max_model: 'opus',
@@ -381,6 +384,7 @@ export function buildState(now = Date.now(), opts = {}) {
   const rows = {
     review: row({
       key: 'inbox:20261009-0900-review-demo-a1b2', bucket: 'do', section: 'now', title: 'Review the demo report',
+      origin: O('skill', 'briefing/morning', 'briefing/morning'), work_kind: 'task', inbox_kind: 'decision',
       why: ['due tomorrow', 'only you'], sources: ['inbox'], inbox_id: '20261009-0900-review-demo-a1b2', gate: 'only-you',
       task: 'demo-task', urgency: 'today', area: 'Demo', area_names: ['Demo'], task_type: 'feature', due: isoIn(1, now),
       inbox_state: 'open', inbox_key: 'demo-review', mark: { label: 'Demo', color: 'blue' }, is_new: true,
@@ -388,6 +392,7 @@ export function buildState(now = Date.now(), opts = {}) {
     }),
     release: row({
       key: 'task:alpha-release', bucket: 'do', section: 'now', title: 'Prepare the alpha release notes',
+      origin: O('bridge', null, 'Ad-hoc 2026-10-02'), work_kind: 'task',
       why: ['tab asks for permission'], sources: ['tasks'], task: 'alpha-release', priority: 'P0', urgency: 'now', status: 'doing',
       area: 'Ops', area_names: ['Ops'], task_type: 'ops', mark: { label: 'Ops', color: 'red' },
       tab: { ref: 'surface:7', state: 'needs-you', live: true, waiting: true },
@@ -395,12 +400,14 @@ export function buildState(now = Date.now(), opts = {}) {
     }),
     labels: row({
       key: 'inbox:20261009-0910-tidy-labels-c3d4', bucket: 'delegate', section: 'give', title: 'Tidy the issue labels on the demo board',
+      origin: O('bot', 'issue-radar', 'homebox/issue-radar', { ref: 'example/repo#3' }), inbox_kind: 'finding',
       why: ['needs your yes'], sources: ['inbox'], inbox_id: '20261009-0910-tidy-labels-c3d4', gate: 'your-yes', has_action: true,
       priority: 'P2', area: 'Demo', area_names: ['Demo'], inbox_state: 'open', inbox_key: 'tidy-labels',
       actions: [A('do', true), A('advise')], selectable: true,
     }),
     docs: row({
       key: 'inbox:20261009-0915-update-docs-e5f6', bucket: 'delegate', section: 'give', title: 'Update the setup docs after the config change',
+      origin: O('session', 'claude', 'claude'), inbox_kind: 'decision',
       why: ['needs your yes', `due ${isoIn(-3, now).slice(8)}.${isoIn(-3, now).slice(5, 7)}`, 'changed since 08:40'], due: isoIn(-3, now),
       sources: ['inbox'], inbox_id: '20261009-0915-update-docs-e5f6', gate: 'your-yes',
       has_action: true, area: 'Docs', area_names: ['Docs'], inbox_state: 'open', inbox_key: 'update-docs',
@@ -408,12 +415,14 @@ export function buildState(now = Date.now(), opts = {}) {
     }),
     sweep: row({
       key: 'inbox:20261009-0920-sweep-logs-0a0b', bucket: 'plan', section: 'give', title: 'Sweep old log files in the scratch folder',
+      origin: O('bot', 'nightly-sweep', 'homebox/nightly-sweep'), inbox_kind: 'result',
       why: ['may run alone'], sources: ['inbox'], inbox_id: '20261009-0920-sweep-logs-0a0b', gate: 'free', has_action: true,
       area: 'Ops', area_names: ['Ops'], inbox_state: 'approved', inbox_key: 'sweep-logs',
       actions: [A('approved', false, true)],
     }),
     demo: row({
       key: 'task:demo-task', bucket: 'tasks', section: 'work', title: 'Write the onboarding guide for the demo project',
+      origin: O('bridge', null, 'Ad-hoc 2026-10-01'), work_kind: 'task',
       why: ['1 in the inbox'], sources: ['tasks'], task: 'demo-task', priority: 'P1', area: 'Demo', area_names: ['Demo'], status: 'doing',
       next: { what: 'Review the demo report', from: 'inbox', since: isoIn(-2, now), key: 'inbox:20261009-0900-review-demo-a1b2' },
       task_type: 'feature', actions: [A('do', true), A('advise')], selectable: true, closable: true,
@@ -426,6 +435,7 @@ export function buildState(now = Date.now(), opts = {}) {
     }),
     quiet: row({
       key: 'task:quiet-docs', bucket: 'tasks', section: 'work', title: 'Tidy the old setup notes',
+      origin: O('skill', 'debrief', 'debrief 2026-09-02 weekly'), work_kind: 'task',
       sources: ['tasks'], task: 'quiet-docs', priority: 'P3', area: 'Docs', area_names: ['Docs'], closable: true,
       actions: [A('do', true), A('advise')],
       review: { verdict: 'stale', reason: 'No log row, commit or note for 34 days and nothing blocks it.', confidence: 'high',
@@ -434,6 +444,7 @@ export function buildState(now = Date.now(), opts = {}) {
     }),
     waits: row({
       key: 'task:vendor-reply', bucket: 'tasks', section: 'work', title: 'Settle the invoice format with the vendor',
+      origin: O('bridge', null, null), work_kind: 'task',
       sources: ['tasks'], task: 'vendor-reply', priority: 'P2', area: 'Demo', area_names: ['Demo'], closable: true,
       actions: [A('do', true), A('advise')],
       review: { verdict: 'waiting', reason: 'The vendor has not answered the question from 02.10 yet (example/repo#9 open).',
@@ -443,50 +454,79 @@ export function buildState(now = Date.now(), opts = {}) {
     }),
     flaky: row({
       key: 'ref:example/repo#12', bucket: 'plan', section: 'track', title: 'Fix the flaky test in example/repo#12',
+      origin: O('github', 'example/repo', null, { ref: 'example/repo#12' }), work_kind: null,
       why: ['assigned to you', 'quiet for 3 days'], sources: ['github'], ref: 'example/repo#12', priority: 'P2',
       url: 'https://example.org/repo/issues/12', link: { kind: 'web', href: 'https://example.org/repo/issues/12' },
       mark: { label: 'Demo', color: 'blue' }, actions: [A('ask')],
     }),
     index: row({
       key: 'task:docs-refresh', bucket: 'tasks', section: 'work', title: 'Refresh the docs index', sources: ['tasks'],
+      origin: O('work', 'team-onboarding', 'inbox 20261001-0900-index-b2c3 (2026-10-01, team-onboarding): Refresh the docs index', { word_key: 'stream' }), work_kind: 'task',
       task: 'docs-refresh', priority: 'P2', area: 'Docs', area_names: ['Docs'], task_type: 'docs', status: 'doing',
       next: { what: 'Check the links of the new index page', from: 'status', since: isoIn(-3, now), key: null },
       tab: { ref: 'surface:8', state: 'working', live: true, waiting: false }, actions: [A('to_tab', true)],
     }),
     cleanup: row({
       key: 'task:old-cleanup', bucket: 'tasks', section: 'work', title: 'Clean up the old example fixtures', sources: ['tasks'],
+      origin: O('session', 'codex', 'inbox 20260930-1000-fixtures-d4e5 (2026-09-30, codex): Clean up the old example fixtures'), work_kind: 'task',
       task: 'old-cleanup', priority: 'P3', area: 'Ops', area_names: ['Ops'], status: 'review', actions: [A('do', true), A('advise')], selectable: true,
     }),
     vendor: row({
       key: 'inbox:20261008-1400-vendor-reply-9f9f', bucket: 'waiting', section: 'later', title: 'Waiting for the reply on the license question',
+      origin: O('person', 'alex', 'alex'), inbox_kind: 'question',
       why: ['asked 2 days ago'], sources: ['inbox'], inbox_id: '20261008-1400-vendor-reply-9f9f', gate: 'only-you', area: 'Demo',
       area_names: ['Demo'], inbox_state: 'open', inbox_key: 'license-reply', actions: [A('follow_up')],
     }),
     idea: row({
       key: 'task:report-dark-mode', bucket: 'resting', section: 'later', title: 'Idea: dark mode for the weekly report',
+      origin: O('other', 'team-notes', 'team-notes'), work_kind: 'task',
       why: ['quiet for 12 days'], sources: ['tasks'], task: 'report-dark-mode', priority: 'P3', area: 'Docs', area_names: ['Docs'],
       actions: [A('do', true), A('advise')], selectable: true,
+    }),
+    // a stream, a report about it from its own tab, a GitLab issue, a row the cockpit filed from a board row
+    onboarding: row({
+      key: 'task:team-onboarding', bucket: 'tasks', section: 'work', title: 'Onboard the new team members', sources: ['tasks'],
+      task: 'team-onboarding', priority: 'P2', area: 'Demo', area_names: ['Demo'], status: 'doing', stream: true, work_kind: 'stream',
+      origin: O('bridge', null, 'Ad-hoc 2026-09-15'), actions: [A('do', true), A('advise')], selectable: true,
+    }),
+    onboardingNote: row({
+      key: 'inbox:20261009-0930-onboarding-note-b1c2', bucket: 'plan', section: 'later', title: 'Accounts for two new members are ready',
+      sources: ['inbox'], inbox_id: '20261009-0930-onboarding-note-b1c2', gate: 'free', task: 'team-onboarding', area: 'Demo',
+      area_names: ['Demo'], inbox_state: 'open', inbox_key: 'tab-team-onboarding-accounts', work_kind: 'stream', inbox_kind: 'result',
+      origin: O('session', 'team-onboarding', 'tab:team-onboarding'), actions: [A('done', true)],
+    }),
+    gitlab: row({
+      key: 'item:grp/app#3', bucket: 'plan', section: 'track', title: 'Update the deploy notes', sources: ['gitlab'], ref: 'grp/app#3',
+      url: 'https://example.org/grp/app/-/issues/3', link: { kind: 'web', href: 'https://example.org/grp/app/-/issues/3' },
+      origin: O('tracker', 'grp/app', null, { word_key: 'GitLab', ref: 'grp/app#3' }), actions: [A('ask')],
+    }),
+    filed: row({
+      key: 'inbox:20261009-0940-filed-board-c2d3', bucket: 'plan', section: 'later', title: 'Board: Add a config switch for the report',
+      sources: ['inbox'], inbox_id: '20261009-0940-filed-board-c2d3', gate: 'free', inbox_state: 'open', inbox_kind: 'decision',
+      inbox_key: 'briefing:morning:mine:example/repo#15',
+      origin: O('github', 'example/repo', 'bridge-cockpit', { ref: 'example/repo#15', via_cockpit: true }), actions: [A('done', true)],
     }),
   }
   const sec = (id, list, compact) => ({ id, total: list.length, rows: list, compact: compact.map(r => r.key) })
   const sections = empty ? [sec('now', [], []), sec('give', [], []), sec('work', [], []), sec('track', [], []), sec('later', [], [])] : [
     sec('now', [rows.review, rows.release], [rows.review, rows.release]),
     sec('give', [rows.labels, rows.docs, rows.sweep], [rows.labels, rows.docs, rows.sweep]),
-    sec('work', [rows.demo, rows.index, rows.cleanup], [rows.demo, rows.index]),
-    sec('track', [rows.flaky], []),
-    sec('later', [rows.vendor, rows.idea], []),
+    sec('work', [rows.demo, rows.index, rows.cleanup, rows.onboarding], [rows.demo, rows.index]),
+    sec('track', [rows.flaky, rows.gitlab], []),
+    sec('later', [rows.vendor, rows.idea, rows.onboardingNote, rows.filed], []),
   ]
   const numbers = {}
   let n = 0
   for (const s of sections) for (const r of s.rows) { n += 1; r.number = n; numbers[r.key] = n }
   const hidden = empty ? [] : [row({
     key: 'title:Renew the test certificate', bucket: 'plan', section: 'later', title: 'Renew the test certificate', sources: ['calendar'],
+    origin: O('calendar', 'Calendar'), work_kind: null,
     hidden_until: isoIn(5, now), actions: [A('ask')],
   })]
 
   const item = (index, over) => ({
     index, title: '', detail: '', when: '', tone: null, link: null, task: null, ask: false, mark: null,
-    priority: null, state: null, lines: [], meter: null, starting: false, tab: null, ...over,
+    priority: null, state: null, lines: [], meter: null, starting: false, tab: null, origin: null, work_kind: null, about_kind: null, ...over,
   })
   const pages = empty ? [] : [
     {
@@ -587,6 +627,19 @@ export function buildState(now = Date.now(), opts = {}) {
     },
   ]
 
+  // where each page item comes from and what it is, as the collector adds them (collector.page_origin)
+  const SECTION_ORIGIN = { command: sec => O('bot', sec.title), tracker: (sec, it) => O('github', it.gh?.repo ?? null),
+    tasks: () => O('bridge'), calendar: sec => O('calendar', sec.title) }
+  for (const pg of pages) {
+    for (const sec of pg.sections) {
+      for (const it of sec.items) {
+        if (!it.origin && SECTION_ORIGIN[sec.kind]) it.origin = SECTION_ORIGIN[sec.kind](sec, it)
+        if (it.work_kind == null && (it.task || it.gh?.task)) it.work_kind = it.gh?.stream ? 'stream' : 'task'
+        if (it.about_kind == null && it.gh?.task) it.about_kind = it.gh.stream ? 'stream' : 'task'
+      }
+    }
+  }
+
   // what the waiting tabs ask, as the tab poll reads it off their screens (asks.py): a dialog with three
   // options, a yes or no question, a summary with a draft typed in the tab; every other tab asks nothing.
   // Only tabs the poll reads carry one: needs-you, and waiting ones that are not filed (model.is_waiting),
@@ -637,6 +690,10 @@ export function buildState(now = Date.now(), opts = {}) {
       sections, numbers, hidden,
       approvable: empty ? [] : [rows.labels.key, rows.docs.key],
       task_rows: empty ? [] : [rows.quiet, rows.waits],
+      // the tasks closed this week (daybook.week_done): a closed task and an ended stream
+      week: empty ? { count: 0, since: null, items: [] } : { count: 2, since: isoIn(-4, now), items: [
+        { slug: 'release-checklist', title: 'Write the release checklist', closed: isoIn(-1, now), work_kind: 'done_task' },
+        { slug: 'pilot-customer', title: 'Pilot with the first customer', closed: isoIn(-2, now), work_kind: 'done_stream' }] },
       review: empty ? { running: null, error: null, last: null, keys: [] } : {
         running: null, error: null, keys: [rows.demo.key, rows.quiet.key, rows.waits.key],
         last: { reviewed_at: new Date(now - 20 * MIN).toISOString().slice(0, 19), reviewed: 3, to_close: 1, cost_ct: 2.22,
@@ -742,13 +799,15 @@ function inboxDetail(id, state) {
     item: {
       summary: r?.title ?? 'Example item', detail: 'Invented example detail.\nThe item came from a demo check and carries no real data.',
       kind: hasAction ? 'approval' : 'todo', gate: r?.gate ?? 'only-you', urgency: r?.urgency ?? null, state: r?.inbox_state ?? 'open',
-      task: r?.task ?? null, due: r?.due ?? null, key: r?.inbox_key ?? 'example', from: 'demo-check', created: '2026-10-09T09:00:00',
+      task: r?.task ?? null, due: r?.due ?? null, key: r?.inbox_key ?? 'example', from: r?.origin?.raw ?? 'demo-check', created: '2026-10-09T09:00:00',
       action_display: hasAction ? 'python3 scripts/example-tool.py --apply demo' : null, has_closes_when: hasAction,
     },
     events: [
-      { verb: 'add', by: 'demo-check', at: '2026-10-09T09:00:00' },
+      { verb: 'add', by: r?.origin?.raw ?? 'demo-check', at: '2026-10-09T09:00:00' },
       { verb: 'note', by: 'web', at: '2026-10-09T09:05:00', note: 'looked at it, fine' },
     ],
+    // who filed it, as the server names it (details.py inbox_detail, origin.py)
+    origin: r?.origin ?? O('other', 'demo-check', 'demo-check'),
   }
 }
 
@@ -782,8 +841,8 @@ function findFiles(q, state) {
   const words = [...new Set(String(q ?? '').toLowerCase().split(/\s+/).filter(Boolean))].slice(0, 8)
   const rows = (state?.model?.sections ?? []).flatMap(x => x.rows ?? []).filter(r => r.task && !r.inbox_id)
   const seen = new Set()
-  const files = rows.filter(r => !seen.has(r.task) && seen.add(r.task)).map(r => ({ slug: r.task, kind: 'task', title: r.title,
-    path: `work/tasks/${r.task}`, lines: [`headline: ${r.title}`, ...(r.next?.what ? [`next: ${r.next.what}`] : [])] }))
+  const files = rows.filter(r => !seen.has(r.task) && seen.add(r.task)).map(r => ({ slug: r.task, kind: r.stream ? 'stream' : 'task', title: r.title,
+    path: `work/${r.stream ? 'streams' : 'tasks'}/${r.task}`, lines: [`headline: ${r.title}`, ...(r.next?.what ? [`next: ${r.next.what}`] : [])] }))
   files.push({ ...DONE_FILE, kind: 'done', path: `work/done/${DONE_FILE.month}/${DONE_FILE.slug}` })
   const groups = []
   for (const f of files) {
@@ -792,7 +851,7 @@ function findFiles(q, state) {
       .filter(h => words.some(w => h.text.toLowerCase().includes(w)))
     const all = `${name} ${hits.map(h => h.text).join(' ')}`.toLowerCase()
     if (!words.length || !words.every(w => all.includes(w))) continue
-    groups.push({ slug: f.slug, kind: f.kind, path: f.path, title: f.title, rank: words.every(w => name.includes(w)) ? 0 : 1,
+    groups.push({ slug: f.slug, kind: f.kind, work_kind: f.kind === 'done' ? 'done_task' : f.kind, path: f.path, title: f.title, rank: words.every(w => name.includes(w)) ? 0 : 1,
       count: hits.length, hits })
   }
   groups.sort((a, b) => a.rank - b.rank || (a.kind === 'done') - (b.kind === 'done') || b.count - a.count)
@@ -806,10 +865,19 @@ function taskDetail(slug, state) {
   // the task's own row, not an inbox item that names the task
   const row = rows.find(r => r?.task === slug && !r.inbox_id && !r.inbox) ?? rows.find(r => r?.task === slug) ?? {}
   const done = slug === DONE_FILE.slug
+  // what the server sends (details.py task_detail): the four kinds by the folder, the origin as origin.py names it,
+  // and the open inbox items that name the task, each with who filed it
+  const workKind = done ? 'done_task' : row.work_kind ?? (row.stream ? 'stream' : 'task')
+  const folder = done ? `work/done/${DONE_FILE.month}` : workKind === 'stream' ? 'work/streams' : 'work/tasks'
+  const raw = row.origin?.raw ?? 'team call on 2026-09-30'
+  const inbox = (state?.model?.sections ?? []).flatMap(x => x.rows ?? []).filter(r => r.inbox_id && r.task === slug)
+    .map(r => ({ id: r.inbox_id, summary: r.title, state: r.inbox_state ?? 'open', urgency: r.urgency ?? null, gate: r.gate ?? null,
+      from: r.origin?.raw ?? null, kind: r.inbox_kind ?? null, origin: r.origin ?? null }))
   return {
-    ok: true, slug, kind: done ? 'done' : 'task', path: done ? `work/done/${DONE_FILE.month}/${slug}/STATUS.md` : `work/tasks/${slug}/STATUS.md`,
+    ok: true, slug, kind: done ? 'done' : workKind === 'stream' ? 'stream' : 'task', work_kind: workKind,
+    origin: row.origin ?? O('other', raw, raw), inbox, path: `${folder}/${slug}/STATUS.md`,
     front: { type: row.task_type ?? 'feature', status: done ? 'done' : row.state ?? 'doing', priority: row.priority ?? 'P1', created: '2026-10-01',
-      last_updated: '2026-10-08', headline: done ? DONE_FILE.title : row.title ?? 'Onboarding guide for the demo project', origin: 'team call on 2026-09-30',
+      last_updated: '2026-10-08', headline: done ? DONE_FILE.title : row.title ?? 'Onboarding guide for the demo project', origin: raw,
       blocked_by: null },
     sections: [
       { heading: 'Goal', text: 'A new team member sets up the demo project in under an hour, with every step written down.', truncated: false },

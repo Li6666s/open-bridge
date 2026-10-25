@@ -6,12 +6,13 @@ import { html, useEffect, useRef, useState } from '../vendor/htm-preact-3.1.1.mo
 import {
   duration, indexRows, sessionCounts, short, stateToken, workerTone, homeContinue, inProject, meterPace, tabOfTask,
   countInProject, focusPick, nextEvent, untilText, STAGE, stageDust, stageSpots, speechError, pulseSpeed,
-  MAX_STATIONS, situation, situationText, parseVerdict, tickerStatusItems, homeRowQueue, greetingText, dayLabel, tabStateKey
+  MAX_STATIONS, situation, situationText, parseVerdict, tickerStatusItems, homeRowQueue, greetingText, dayLabel, tabStateKey,
+  itemRow, workPageOf,
 } from '../logic.js'
 import { flash } from '../motion.js'
 import { T, language } from '../text.js'
 import { ChatThread, Thinking, useQuickLive } from './chat.js'
-import { KindTag, RowBar } from './day.js'
+import { KindTag, OriginTag, RowBar } from './day.js'
 import {
   DayBars, PinStar, ReturnCard, ReturnChip, jumpToTab, openWhole, pageParts, pageTitleOf, pct, returnsOf, shownTiles,
 } from './home.js'
@@ -139,11 +140,13 @@ export function FeedLine({ e, s, c }) {
   const row = e.key ? byKey.get(e.key) : null
   const tone = { new: 'info', urgent: 'warning', gone: 'success', tabAsks: 'warning', answer: 'success', lost: 'danger', alarm: 'danger' }[e.kind] ?? 'muted'
   const go = e.ref ? () => jumpToTab(s, c, e.ref) : e.page ? () => c.setPage(e.page) : row ? el => openWhole(c, row, el) : null
+  // a work row's event names what the row is and where it comes from, after the event word
+  const tags = row ? html` <span class="entry-tags"><${KindTag} row=${row} s=${s} /><${OriginTag} row=${row} /></span>` : null
   const clock = new Date(e.at).toLocaleTimeString(language() === 'de' ? 'de-DE' : 'en-GB', { hour: '2-digit', minute: '2-digit' })
   return html`<li class=${`feed-line tk-${tone}`}>
     <span class="feed-time mono">${clock}</span><span class="stage-dot" aria-hidden="true"></span>
-    ${go ? html`<button type="button" class="feed-text" onClick=${ev => go(ev.currentTarget)}><b>${h.feed[e.kind] ?? e.kind}</b> ${short(e.title, 70)}</button>`
-      : html`<span class="feed-text"><b>${h.feed[e.kind] ?? e.kind}</b> ${short(e.title, 70)}</span>`}
+    ${go ? html`<button type="button" class="feed-text" onClick=${ev => go(ev.currentTarget)}><b>${h.feed[e.kind] ?? e.kind}</b>${tags} ${short(e.title, 70)}</button>`
+      : html`<span class="feed-text"><b>${h.feed[e.kind] ?? e.kind}</b>${tags} ${short(e.title, 70)}</span>`}
   </li>`
 }
 
@@ -170,7 +173,7 @@ function StageCard({ s, c, tabs, onWeigh }) {
     <span class=${`stage-dot tk-${dot(r)}`} aria-hidden="true"></span>
     <button type="button" class="stage-row-main" onClick=${e => openWhole(c, r, e.currentTarget, queue)} title=${h.openRow(short(r.title, 60))}>
       <span class="stage-row-title">${fresh.has(r.key) ? html`<span class="new-tag">${h.isNew}</span>` : null}${r.priority ? html`<em class=${`tk-${dot(r)}`}>${r.priority} </em>` : null}${short(r.title, lead ? 120 : 80)}</span>
-      <span class="stage-row-sub"><${KindTag} row=${r} s=${s} />${sub(r) ? html` ${sub(r)}` : null}</span>
+      <span class="stage-row-sub"><${KindTag} row=${r} s=${s} /><${OriginTag} row=${r} />${sub(r) ? html` ${sub(r)}` : null}</span>
       <${ReturnChip} s=${s} rowKey=${r.key} />
     </button>
     ${lead ? html`<span class="stage-pill">${h.focusTitle}</span>` : null}
@@ -252,7 +255,7 @@ function StageInspector({ x, st, s, c, tabs, onClose }) {
     const queue = homeRowQueue(rows.slice(0, 8))
     body = html`${head(h.waitingNow, String(rows.length))}
       ${rows.slice(0, 8).map((r, i) => html`<${InspectRow} key=${r.key} tone=${r.urgency === 'now' ? 'danger' : r.urgency === 'today' ? 'warning' : 'info'}
-        title=${short(r.title, i ? 90 : 140)} sub=${r.area || r.mark?.label || ''} onClick=${e => openWhole(c, r, e.currentTarget, queue)}>${i === 0 ? acts(r) : null}<//>`)}
+        title=${short(r.title, i ? 90 : 140)} sub=${html`<${KindTag} row=${r} s=${s} /><${OriginTag} row=${r} />${r.area || r.mark?.label ? html` ${r.area || r.mark?.label}` : null}`} onClick=${e => openWhole(c, r, e.currentTarget, queue)}>${i === 0 ? acts(r) : null}<//>`)}
       ${!rows.length ? html`<p class="stage-row-sub">${h.focusEmpty}</p>` : null}
       ${foot(h.openPage(briefingTitle(s)), () => c.setPage('briefing'))}`
   } else if (x.id === 'c:returns') {
@@ -296,17 +299,21 @@ function StageInspector({ x, st, s, c, tabs, onClose }) {
   } else if (x.id === 'c:done') {
     const week = s.model?.week ?? { count: 0, items: [] }
     body = html`${head(h.doneTitle, String(week.count))}
-      ${week.items.map(i => html`<${InspectRow} key=${i.slug} tone="success" title=${i.title} sub=${i.slug}
+      ${week.items.map(i => html`<${InspectRow} key=${i.slug} tone="success" title=${i.title}
+        sub=${html`<${KindTag} row=${{ key: `task:${i.slug}`, task: i.slug, work_kind: i.work_kind ?? 'done' }} s=${s} /> ${i.slug}`}
         side=${i.closed.slice(5).split('-').reverse().join('.')} />`)}`
   } else if (x.page) {
     const p = x.page
     const secs = (p.sections ?? []).filter(sec => (sec.items ?? []).length)
+    // the work page's items are work rows: they carry their kind and their source like every other work row
+    const work = p.group === 'work' || p.id === workPageOf(s.model?.pages)?.id
     body = html`${head(p.title, String(p.badge?.n ?? 0))}
       <div class="inspect-parts">${(p.sections ?? []).filter(sec => (sec.total ?? sec.count ?? 0) > 0).map(sec => html`<span key=${sec.id} class="chip">
         ${sec.title} <span class="mono">${sec.total ?? sec.count}</span></span>`)}</div>
       ${secs.flatMap(sec => sec.items.slice(0, 4).map(it => ({ it, sec }))).slice(0, 8).map(({ it, sec }) => html`<${InspectRow}
         key=${`${sec.id}/${it.index}`} tone=${it.tone === 'bad' ? 'danger' : it.tone === 'warn' ? 'warning' : 'info'}
-        title=${short(it.title, 90)} sub=${[sec.title, it.when].filter(Boolean).join(' · ')} onClick=${() => c.openInfo(it, p.id, sec.id)} />`)}
+        title=${short(it.title, 90)} sub=${work ? html`<${KindTag} row=${itemRow(it)} s=${s} /><${OriginTag} row=${itemRow(it)} /> ${[sec.title, it.when].filter(Boolean).join(' · ')}`
+          : [sec.title, it.when].filter(Boolean).join(' · ')} onClick=${() => c.openInfo(it, p.id, sec.id)} />`)}
       ${foot(h.openPage(p.title), () => c.setPage(p.id))}`
   }
   return html`<section class="stage-card inspect" aria-labelledby="stage-card-title">${body}</section>`

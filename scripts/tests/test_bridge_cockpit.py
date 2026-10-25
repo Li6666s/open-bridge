@@ -443,7 +443,10 @@ def test_parse_pages():
     assert s["items"][0] == {"title": "T", "detail": "open", "when": "09:30", "tone": "warn", "url": "https://x.test",
                              "task": "alpha", "ask": True, "mark": None, "priority": None, "state": None, "lines": [], "meter": None,
                              "group": None, "icon": None, "tags": None, "account": None, "inbox": None,
-                             "actions": None, "row_id": None, "flags": None, "who": None, "gh": None, "cal": None, "due_at": None, "at": None, "id": None, "actionable": False}
+                             "actions": None, "row_id": None, "flags": None, "who": None, "gh": None, "cal": None, "due_at": None, "at": None, "id": None, "actionable": False,
+                             # where it comes from, raw (origin.py classifies it in the collector)
+                             "origin_raw": None, "origin_provider": None, "origin_section_kind": None, "inbox_key": None,
+                             "about_task": None, "about_kind": None}
     assert s["as_of"] is None and s["empty"] == "nothing"
     assert s["boards"] is None and s["metrics"] is None and s["stale"] is None and s["cal_figures"] is None
     assert pages[0]["overview"] is False
@@ -1410,6 +1413,8 @@ def test_runs_on_puts_off_an_item_with_what_it_waits_on_and_quiets_a_task(world)
     assert writes(world)[0] == K(world, "wait", "demo-task", "--until", TOMORROW, "--json")
     undo = [it["undo"] for e in world.app.history.state() for it in e["items"] if it["kind"] == "task"][0]
     assert undo == {"verb": "task_running", "args": {"slug": "demo-task"}}
+    # the history names a task as a task (and a stream as a stream), not only as "task"
+    assert [it.get("work_kind") for e in world.app.history.state() for it in e["items"] if it["kind"] == "task"][0] == "task"
     world.runner.calls.clear()
     world.act(undo["verb"], **undo["args"])                                # running again: the undo
     assert writes(world)[0] == K(world, "wait", "demo-task", "--clear", "--json")
@@ -2552,7 +2557,12 @@ def test_task_detail_names_its_next_step_and_open_inbox_items(world):
     status, _, body = world.request("GET", "/api/task?slug=demo-task", headers=world.cookie)
     data = json.loads(body)
     assert status == 200 and data["front"]["next"] == "Call Ana"
-    assert data["inbox"] == [{"id": YES_ID, "summary": "Tidy labels", "state": "open", "urgency": "later", "gate": "your-yes"}]
+    # who filed each one and what it is (none in this listing), and the origin the page names (origin.py)
+    assert data["inbox"] == [{"id": YES_ID, "summary": "Tidy labels", "state": "open", "urgency": "later", "gate": "your-yes",
+                              "from": None, "kind": None,
+                              # no source written down: a neutral other, still named on the page
+                              "origin": {"category": "other", "word_key": None, "detail": None, "raw": None, "ref": None,
+                                         "via_cockpit": False}}]
     # an inbox item can outlive its task: a closed task is read from work/done/<month>/, the newest month first
     for month, word in (("2026-09", "older"), ("2026-10", "newer")):
         done = world.root / "work" / "done" / month / "gone-task"
