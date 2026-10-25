@@ -9,13 +9,13 @@
 
 import { html, render } from './vendor/htm-preact-3.1.1.module.js'
 import { createApi } from './api.js'
-import { AGENTS_PAGE, App, CHAT_PAGE, CHECK_PAGE, SETTINGS_PAGE, START_PAGE, WORKERS_PAGE, pageOrder, quickLive } from './components.js'
+import { AGENTS_PAGE, App, CHAT_PAGE, CHECK_PAGE, SETTINGS_PAGE, START_PAGE, WORKERS_PAGE, agentsLanding, chatAreaActions, chatAsWorkspaces, pageOrder, quickLive } from './components.js'
 import {
   CONN_GRACE_MS, DAY, pushNoteState, actionFailNote, replyRefusal, attentionTabs, createFailNote, createLoaders, displayedRows, errorText, freshMore, indexRows, invalidateDetails,
   isTypingTarget, isoDate, themeOverride, modalKeyAllowed, createWithBusy, createToastTimers, letterShortcut, planBusy, toastLinger, reviewHome, nextMonday, parseShortcut, planShortcut, railShown, rowByNumber, short, startRefusal,
   upsertRecord, addFeed, feedEvents, workPageOf, withLaunch, routesToFetch, newerTicker, tickerRemember,
   applyQuickLive, quickLiveSnapshot, whenShown, pruneAnswered, organizeGroups, organizeTicks, roomsOf, askContext,
-  listedChats, tabWalkView, walkRefs, inProject, AREA_PAGES, areaScope, scopeKeep, scopeRow, escapeStep, keyScope, fileOpen, scopedFileQueue, TOUR_VERSION, tourIndex, tourOffered, tourSteps, queueLiveKeys, queueView, dayQueue, workViewOf,
+  tabWalkView, walkRefs, inProject, AREA_PAGES, areaScope, scopeKeep, scopeRow, escapeStep, keyScope, fileOpen, scopedFileQueue, TOUR_VERSION, tourIndex, tourOffered, tourSteps, queueLiveKeys, queueView, dayQueue, workViewOf,
   focusIndex, homeChosen, homeListParts, homeQueue, homeView, openStream, mergePages, commandSearch, workViewWrites, focusStep,
 } from './logic.js'
 import { T, language, setControl, setLanguage } from './text.js'
@@ -148,6 +148,8 @@ const store = createStore({
     dossierOpen: null, suggest: null,
     settingsSection: load('bridge-cockpit.settingsSection', 'start'),
     busy: {}, snapshotText: null, openMsg: null, tabView: null, room: null, quickConv: null, agentPeer: null, agentConv: null, agentMode: 'question', agentsListHidden: load('bridge-cockpit.agentsList', 'shown') === 'hidden',
+    // the area the Chat as cmux shows, its work or the A2A agents (views/nav.js chatAreaOf); kept in this browser
+    chatArea: load('bridge-cockpit.chatArea', 'work') === 'a2a' ? 'a2a' : 'work',
     railHidden: load('bridge-cockpit.rail', 'shown') === 'hidden',
     // keyboard shortcuts wait until switched on in the settings (this browser only): a stray letter acts on nothing
     shortcuts: load('bridge-cockpit.shortcuts', 'off') === 'on',
@@ -320,6 +322,7 @@ function offerTour() {
 function fixPage() {
   const s = store.get()
   if (s.model && s.ui.page === CHECK_PAGE && !pageOrder(s).includes(CHECK_PAGE)) ctl.openReview()   // the check moved onto a page
+  else if (s.ui.page === AGENTS_PAGE && chatAsWorkspaces(s)) ctl.setPage(AGENTS_PAGE)   // as cmux the agents live in the Chat
   else if (s.model && !pageOrder(s).includes(s.ui.page)) setUi({ page: 'briefing' })
 }
 
@@ -381,7 +384,8 @@ const handlers = {
     for (const c of a?.convs ?? []) {
       const was = before.find(b => b.id === c.id)
       const last = c.turns?.[c.turns.length - 1]
-      const inView = ui.page === AGENTS_PAGE && !ui.tabView && ui.agentConv === c.id
+      const page = agentsLanding(store.get())
+      const inView = ui.page === page.page && (!page.chatArea || ui.chatArea === page.chatArea) && !ui.tabView && ui.agentConv === c.id
       if (was?.running && !c.running && (last?.a || last?.waiting) && !inView) {
         pushNote({ text: T().agentAnswered(c.peer, last.waiting), tone: last.waiting ? 'info' : 'ok', action: 'agent', conv: c.id }, { linger: 20000 })
       }
@@ -656,6 +660,8 @@ function clearRoutes(launch) {
 }
 
 const ctl = {
+  // the Chat's areas and the ways to an agent: setChatArea, pickAgent, openAgentConv, pageFor, pickRoom, walkFrom, walkTab
+  ...chatAreaActions({ get: () => store.get(), setUi, save }),
   act,
   reply,
   ask,
@@ -735,6 +741,8 @@ const ctl = {
   jevRun: (force, cacheOnly) => api.post('/api/jev/run', { force: !!force, ...(cacheOnly ? { cache_only: true } : {}) }),   // Jev tab, scripts/web/jev/page.js
   setPage(id) {
     const s = store.get()
+    // as cmux the agents have no page: their way (the band, a card, a stored page) opens the Chat on its A2A area
+    id = ctl.pageFor(id)
     // a page of group day has no tab: a tile or link to it opens Today, where its sections stand
     if ((s.model?.pages ?? []).some(p => p.id === id && p.group === 'day')) id = 'briefing'
     // the work page and the Jev tab are views of the work tab where a page of group work exists
@@ -808,21 +816,15 @@ const ctl = {
     ctl.loadHistory()
     return r
   },
-  pickAgent: peer => {
-    const a = store.get().agents ?? {}
-    const latest = listedChats(a.convs, a.keep_hours, Date.now()).filter(x => x.peer === peer)
-      .sort((a, b) => (b.last_ms ?? 0) - (a.last_ms ?? 0))[0]
-    setUi({ agentPeer: peer, agentConv: latest?.id ?? null })
+  // one agent, from wherever it is named (the start page's agents): its latest conversation where agents stand
+  openAgent: peer => {
+    ctl.pickAgent(peer)
+    ctl.setPage(AGENTS_PAGE)
   },
   newAgentChat: peer => setUi({ agentPeer: peer, agentConv: null }),
   pickAgentConv: conv => {
     const c = (store.get().agents?.convs ?? []).find(x => x.id === conv)
     setUi({ agentConv: conv, agentPeer: c?.peer ?? store.get().ui.agentPeer })
-  },
-  openAgentConv: conv => {
-    const c = (store.get().agents?.convs ?? []).find(x => x.id === conv)
-    save('bridge-cockpit.page', AGENTS_PAGE)
-    setUi({ page: AGENTS_PAGE, tabView: null, agentConv: conv, agentPeer: c?.peer ?? null })
   },
   setAgentMode: mode => setUi({ agentMode: mode }),
   // the list of agents beside the conversation folds away for more room; kept in this browser
@@ -875,11 +877,8 @@ const ctl = {
   // the walk through the tabs that want you (logic.js tabWalkView): Work through starts it on the first,
   // a tab picked in the sidebar starts it there; the open tab's bar goes on without taking a new order
   // the walk through the tabs that want you, of the area only when one is chosen
-  startWalk: () => {
-    const refs = walkRefs(areaScope(store.get()).tabs?.tabs)
-    if (refs.length) setUi({ room: { kind: 'tab', id: refs[0] }, tabWalk: refs })
-  },
-  walkTab: (ref, { focus = false } = {}) => { if (ref) setUi({ room: { kind: 'tab', id: ref }, walkFocus: focus }) },
+  // (pickRoom, walkFrom and walkTab stand in views/nav.js chatAreaActions: a room shows on the Chat's Work area)
+  startWalk: () => ctl.walkFrom(walkRefs(areaScope(store.get()).tabs?.tabs)),
   walkFocused: () => setUi({ walkFocus: false }),
   // the focus of the start page moves to this entry of its queue (views/focus.js, logic.js focusIndex)
   focusWalk: (id, i) => setUi({ focusAt: { id, i } }),
@@ -1033,8 +1032,7 @@ const ctl = {
     if (to?.view) setUi({ workView: to.view, ...(to.view === 'dossier' ? { dossierOpen: null } : {}) })
     ctl.setPage(to?.page ?? 'briefing')
     if (to?.walk) {
-      const refs = walkRefs((store.get().tabs?.tabs ?? []).filter(t => inProject(t, area)))
-      if (refs.length) setUi({ room: { kind: 'tab', id: refs[0] }, tabWalk: refs })
+      ctl.walkFrom(walkRefs((store.get().tabs?.tabs ?? []).filter(t => inProject(t, area))))
     }
   },
   // days: 7, 30 or 90; without it the range asked for last
@@ -1069,8 +1067,6 @@ const ctl = {
   // the chat as a tab of its own: the open conversation goes along, the window closes
   chatAsTab: () => { save('bridge-cockpit.page', CHAT_PAGE); setUi({ page: CHAT_PAGE, tabView: null, pageDetail: false }) },
   pickQuick: conv => setUi({ quickConv: conv }),
-  // the chat as cmux: what the right side shows ({ kind: 'ws' | 'tab' | 'chat' | 'agent' | 'bridge', id })
-  pickRoom: room => setUi(room?.kind === 'tab' ? { room, tabWalk: walkRefs(store.get().tabs?.tabs) } : { room }),
   newQuick: () => setUi({ quickConv: null }),
   // what a chat_tab start from the chat answered (inbox item and launch outcome), for its status line; the last few
   noteSent: rec => setUi(ui => ({ sent: [...(ui.sent ?? []).slice(-4), rec] })),

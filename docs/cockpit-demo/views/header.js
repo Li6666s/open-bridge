@@ -6,9 +6,10 @@ import { html, useEffect, useLayoutEffect, useRef, useState } from '../vendor/ht
 import { agentLoad, aiWaiting, attentionTabs, canTab, tabsButtonCount, etaSeconds, pageWarnings, sessionCounts, short, railShown, workPageOf } from '../logic.js'
 import { T } from '../text.js'
 import {
-  AGENTS_PAGE, CHAT_PAGE, CHECK_PAGE, JEV_PAGE, SESSIONS_PAGE, SETTINGS_PAGE, START_PAGE, WORKERS_PAGE, briefingTitle, morePages,
-  pageOrder, reviewHomeOf,
+  AGENTS_PAGE, CHAT_PAGE, CHECK_PAGE, JEV_PAGE, SESSIONS_PAGE, SETTINGS_PAGE, START_PAGE, WORKERS_PAGE, briefingTitle, chatAsWorkspaces,
+  morePages, pageOrder, reviewHomeOf,
 } from './nav.js'
+import { AgentMark, agentBadge } from './agents.js'
 import { usePopover } from './pages.js'
 import { Btn, Dot, Spinner, StateLine, useRoving, useTween } from './parts.js'
 
@@ -113,6 +114,18 @@ function CommandBox({ c }) {
 
 /** A quick chat that makes the chat tab spin: a file's suggested next step is not one (its file shows it, no list does) */
 export const chatRunning = x => !!x.running && x.place !== 'suggest'
+
+/** What the Chat tab signals: 'quick' while a quick chat answers, else as cmux what the agents signal (the
+ *  agents are an area inside the Chat there, agents.js agentBadge); null for nothing. Classic: the Agents tab wears theirs */
+export function chatTabSignal(s) {
+  if ((s.quick?.convs ?? []).some(chatRunning)) return 'quick'
+  return chatAsWorkspaces(s) ? agentBadge(s) : null
+}
+
+/** The mark of chatTabSignal on the Chat tab */
+export function ChatTabMark({ kind }) {
+  return kind === 'quick' ? html`<${Spinner} />` : html`<${AgentMark} kind=${kind} />`
+}
 
 export function Header({ s, c }) {
   const t = T()
@@ -232,6 +245,7 @@ export function PageBar({ s, c }) {
   const toClose = s.model?.review?.last?.to_close ?? 0
   // the Sessions tab shows the number the Sessions station shows, the running agents stand in its tooltip
   const sess = sessionCounts(s.sessions?.sessions)
+  const agentsInChat = chatAsWorkspaces(s)
   return html`<nav class="pagebar" aria-label=${t.pagesLabel} ref=${navRef}>
     <div class="pagebar-tabs" role="tablist" ref=${tabsRef} onKeyDown=${keys.onKeyDown}>
       ${box ? html`<${TabMarker} box=${box} />` : null}
@@ -243,9 +257,8 @@ export function PageBar({ s, c }) {
         ? html`<span class="pbadge is-quiet" title=${sess.agents ? t.home.agentsLine(sess.agents) : undefined}><span class="mono">${sess.sessions}</span></span>` : null)}
       ${s.workers?.status === 'none' ? null : tab(WORKERS_PAGE, t.workersTab, s.workers?.data?.stats?.with_findings
         ? html`<span class="pbadge" title=${t.home.workersFindings(s.workers.data.stats.with_findings)}><${Dot} token="warning" /><span class="mono">${s.workers.data.stats.with_findings}</span></span>` : null)}
-      ${tab(CHAT_PAGE, t.chatTab, (s.quick?.convs ?? []).some(chatRunning) ? html`<${Spinner} />` : null)}
-      ${(s.agents?.peers ?? []).length ? tab(AGENTS_PAGE, t.agentsTab, (s.agents?.convs ?? []).some(x => x.running) ? html`<${Spinner} />`
-        : (s.agents?.convs ?? []).some(x => x.turns?.[x.turns.length - 1]?.waiting) ? html`<${Dot} token="warning" />` : null) : null}
+      ${tab(CHAT_PAGE, t.chatTab, html`<${ChatTabMark} kind=${chatTabSignal(s)} />`)}
+      ${(s.agents?.peers ?? []).length && !agentsInChat ? tab(AGENTS_PAGE, t.agentsTab, html`<${AgentMark} kind=${agentBadge(s)} />`) : null}
       ${reviewHomeOf(s) ? null : tab(CHECK_PAGE, t.reviewTab, s.model?.review?.running ? html`<${Spinner} />`
         : toClose > 0 ? html`<span class="pbadge"><span class="mono">${toClose}</span></span>` : null)}
       ${s.jev?.enabled && !workPageOf(s.model?.pages)?.jev ? tab(JEV_PAGE, 'Jev', s.jev.ready ? null : html`<${Dot} token="warning" />`) : null}
