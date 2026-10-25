@@ -586,6 +586,9 @@ SCRIPTS_CORE_ALLOWLIST = frozenset({
     "scripts/lib/bridge_cockpit/triage.py",
     "scripts/triage.py",
     "scripts/tests/test_triage.py",
+    "scripts/work-find.py",                               # the search over work/ (files view, chat sessions)
+    "scripts/lib/work_find.py",
+    "scripts/tests/test_bridge_cockpit_find.py",
     "scripts/tests/test_bridge_cockpit_triage.py",
     "scripts/tests/test_bridge_cockpit_ticker.py",
     "scripts/tests/test_bridge_cockpit_guide.py",
@@ -624,6 +627,7 @@ SCRIPTS_CORE_ALLOWLIST = frozenset({
     "scripts/web/views/dates.js",
     "scripts/web/views/day.js",
     "scripts/web/views/detail.js",
+    "scripts/web/views/dossier.js",
     "scripts/web/views/focus.js",
     "scripts/web/views/github.js",
     "scripts/web/views/header.js",

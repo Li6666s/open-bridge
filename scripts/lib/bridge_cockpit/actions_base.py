@@ -19,6 +19,7 @@ ACTIVE_INBOX_STATES = ("open", "approved", "waiting", "deferred")
 ROW_KEY_RE = re.compile(r"^(inbox|task|ref|title|item):(?!(?:.*/)?\.\.(?:/|\Z)).{1,240}\Z")
 INBOX_ID_RE = re.compile(r"^[0-9]{8}-[0-9]{4}-[a-z0-9][a-z0-9-]{0,119}\Z")
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,79}\Z")
+RUN_ID_RE = re.compile(r"wf_[A-Za-z0-9-]{1,64}")   # a workflow run (sessions.py read_run)
 SESSION_ID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 # a tab is the terminal driver's own name for it (surface:3 in cmux, %3 in tmux), passed as one argv word
 TAB_REF_RE = re.compile(r"^[A-Za-z0-9%][A-Za-z0-9:%_.@/-]{0,63}\Z")
@@ -41,6 +42,11 @@ HANDOFF_MAX = 3500
 HANDOFF_ORDER_MAX = 3000
 # what the page shows right now, sent along with a free quick question (quick.py): refused above this, never cut
 CONTEXT_MAX = 6000
+# where a free quick question may stand outside the chat lists, the newest replacing the last: the start page's core,
+# the files view's suggested next step
+QUICK_PLACES = ("core", "suggest")
+# a task's next step as STATUS.md keeps it (task.py next): one line
+STEP_MAX = 300
 # how the chat's route chip came to its choice (logic.js routeOf, views/chat.js)
 ROUTE_BY = ("prefix", "words", "default", "flipped", "forced")
 
@@ -104,6 +110,8 @@ SPEC: dict[str, dict[str, tuple[str, bool]]] = {
     "home_tiles": {"ids": ("tile_ids", True), "seen": ("tile_ids", False)},
     "pin": {"key": ("key", True), "on": ("bool", True)},
     "return_forget": {"key": ("key", True)},
+    # the files view: a workflow run's result checked, so it no longer waits in its task's file
+    "run_seen": {"id": ("run_id", True)},
     "start_control": {},
     "snapshot_list": {},
     "ask_via_tab": {"relay_id": ("relay_id", True)},
@@ -117,6 +125,8 @@ SPEC: dict[str, dict[str, tuple[str, bool]]] = {
     "inbox_reopen": {"id": ("inbox_id", True), "note": ("text", False)},
     "runs_on": {"keys": ("keys", True), "until": ("date", True), "on": ("text", False)},
     "task_running": {"slug": ("slug", True)},
+    # the files view takes over a suggested next step: next: {what} with a dated note (task.py next)
+    "task_set_next": {"key": ("key", True), "text": ("line", True)},
     # taking a to_task back: the task it made closes as declined, the inbox item opens again
     "to_task_undo": {"id": ("inbox_id", True), "slug": ("slug", True)},
     "to_task": {"key": ("key", True), "status": ("reopen_as", False)},
@@ -158,7 +168,7 @@ TILE_ID_RE = re.compile(r"^[A-Za-z0-9@][A-Za-z0-9:._@/-]{0,79}\Z")   # a tile or
 READ_ONLY_VERBS = frozenset({"snapshot_list", "organize_propose"})
 # only stores with their own locks (store.py, launch.py, ticker.py, guide.py): they never wait for a write that runs
 LOCAL_VERBS = frozenset({"pin", "hide", "home_tiles", "ticker_settings", "ticker_settings_reset", "launch_settings",
-                         "launch_settings_reset", "session_link", "guide_read", "guide_settings", "guide_settings_reset",
+                         "launch_settings_reset", "session_link", "run_seen", "guide_read", "guide_settings", "guide_settings_reset",
                          "tour_done", "tour_reset"})
 # the layout snapshot writes nothing of the Bridge: one at a time on a lock of its own, never the write lock
 LAYOUT_VERBS = frozenset({"snapshot"})

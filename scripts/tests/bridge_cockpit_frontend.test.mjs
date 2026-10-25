@@ -1358,10 +1358,10 @@ test('the work tab opens on what is due and switches to by source and by Jev', (
   assert.equal(logic.workPageOf([{ id: 'ops' }, work]), work)
   assert.equal(logic.workPageOf([{ id: 'ops' }]), null)
   const ready = { enabled: true, ready: true }
-  assert.deepEqual(logic.workViews(work, ready), ['due', 'area', 'jev'])
-  assert.deepEqual(logic.workViews(work, { enabled: false }), ['due', 'area'])
-  assert.deepEqual(logic.workViews({ ...work, jev: false }, ready), ['due', 'area'])
-  assert.deepEqual(logic.workViews(null, ready), ['due'])
+  assert.deepEqual(logic.workViews(work, ready), ['due', 'area', 'jev', 'dossier'])
+  assert.deepEqual(logic.workViews(work, { enabled: false }), ['due', 'area', 'dossier'])
+  assert.deepEqual(logic.workViews({ ...work, jev: false }, ready), ['due', 'area', 'dossier'])
+  assert.deepEqual(logic.workViews(null, ready), ['due', 'dossier'])
   // a remembered view the tab cannot show falls back to what is due, the default
   assert.equal(logic.workViewOf('jev', work, ready), 'jev')
   assert.equal(logic.workViewOf('jev', work, { enabled: false }), 'due')
@@ -3094,7 +3094,7 @@ test('mock parity: every server route has a well-formed mock answer, unless it i
     const inbox = st.model.sections.flatMap(s => s.rows).find(r => r.inbox_id)
     const query = {
       '/api/page': `page=${page.id}&section=${page.sections[0].id}`, '/api/tab/screen': `ref=${encodeURIComponent(st.tabs.tabs[0].ref)}`,
-      '/api/task': 'slug=demo-task', '/api/inbox': `id=${inbox.inbox_id}`, '/api/github': `ref=${encodeURIComponent('example/repo#12')}`,
+      '/api/task': 'slug=demo-task', '/api/find': 'q=demo', '/api/inbox': `id=${inbox.inbox_id}`, '/api/github': `ref=${encodeURIComponent('example/repo#12')}`,
       '/api/graph/node': `id=${encodeURIComponent(node)}`,
     }
     const body = {
@@ -5170,4 +5170,378 @@ test('the demo opens a task with its own front, not one fixed page (review C12)'
   assert.equal(b.data.front.headline, tasks[1].title)
   assert.notEqual(a.data.front.headline, b.data.front.headline)
   for (const [res, r] of [[a, tasks[0]], [b, tasks[1]]]) if (r.priority) assert.equal(res.data.front.priority, r.priority)
+})
+
+// ---------------------------------------------------------------- the files view: one queue for every walk
+
+test('one queue function: the focus scope keeps the start page queue as it was, P0 and P1 tasks only', () => {
+  const tabs = [{ ref: 'ask', name: 'ask', state: 'needs-you' }, { ref: 'run', name: 'run', state: 'working' }]
+  const model = { sections: [
+    { id: 'now', rows: [{ key: 'n1', title: 'Answer' }] },
+    { id: 'work', rows: [{ key: 't0', title: 'Urgent', task: 'u', priority: 'P0', status: 'doing' },
+      { key: 't1', title: 'Later', task: 'l', priority: 'P2', status: 'doing' }] },
+  ] }
+  const parts = logic.homeListParts(tabs, model, {})
+  assert.deepEqual(logic.queueOf(parts, { scope: 'focus' }), logic.homeQueue(parts))
+  assert.deepEqual(logic.queueOf(parts).map(x => x.id), ['ask', 'n1', 't0'], 'focus is the default scope')
+})
+
+const fileTask = (slug, priority, extra = {}) => ({ key: `task:${slug}`, title: `Task ${slug}`, task: slug, priority, status: 'doing', ...extra })
+
+test('the files queue: a tab that asks, a result that waits, an inbox item, then doing and review tasks of every priority', () => {
+  const model = {
+    sections: [
+      { id: 'now', rows: [{ key: 'inbox:1', title: 'Answer the vendor', inbox_id: '1', task: 'gamma' }, { key: 'inbox:9', title: 'Loose', inbox_id: '9' }] },
+      { id: 'give', rows: [] },
+      { id: 'work', rows: [fileTask('alpha', 'P0'), fileTask('beta', 'P2'), fileTask('gamma', 'P3', { status: 'review' }),
+        fileTask('delta', 'P1'), fileTask('parked', 'P1', { status: 'backlog' })] },
+      { id: 'later', rows: [fileTask('resting', 'P0', { bucket: 'resting' }), { key: 'inbox:2', title: 'x', inbox_id: '2', task: 'resting' }] },
+    ],
+    returns: [{ key: 'task:beta', item: 'beta', stage: 'result', at_ms: 1 }, { key: 'task:alpha', item: 'alpha', stage: 'working', at_ms: 1 }],
+  }
+  const tabs = [{ ref: 's:1', state: 'needs-you', slug: 'delta' }, { ref: 's:2', state: 'needs-you' },
+    { ref: 's:3', state: 'needs-you', slug: 'resting' }, { ref: 's:4', state: 'needs-you', slug: 'alpha', is_control: true }]
+  const q = logic.queueOf(logic.dossierParts(tabs, model, 10), { scope: 'dossier' })
+  assert.deepEqual(q.map(x => [x.slug, x.reason]), [['delta', 'tab'], ['beta', 'result'], ['gamma', 'inbox'], ['alpha', 'task']])
+  assert.deepEqual(q.map(x => x.id), ['task:delta', 'task:beta', 'task:gamma', 'task:alpha'], 'one entry per file, by its task key')
+  assert.equal(q[0].tab.ref, 's:1')
+  assert.equal(q[1].result.key, 'task:beta')
+  assert.equal(q[2].item.key, 'inbox:1')
+  assert.equal(q[3].row.key, 'task:alpha')
+  // backlog, blocked and resting files stay out, and so does what has no file (a loose inbox item, a tab without a task)
+  assert.ok(!q.some(x => ['parked', 'resting'].includes(x.slug)))
+  assert.deepEqual(logic.queueOf(logic.dossierParts([], {}, 10), { scope: 'dossier' }), [])
+})
+
+test('acceptance: a P2 task in status doing stands in the files queue, the focus keeps leaving it out', () => {
+  const model = { sections: [{ id: 'now', rows: [] }, { id: 'work', rows: [fileTask('invoice-onboarding', 'P2')] }] }
+  const files = logic.queueOf(logic.dossierParts([], model, 0), { scope: 'dossier' })
+  assert.deepEqual(files.map(x => x.slug), ['invoice-onboarding'])
+  assert.deepEqual(logic.queueOf(logic.homeListParts([], model, {}), { scope: 'focus' }), [])
+})
+
+test('the files queue opens a file only for a task doing or in review: a row without a status opens none', () => {
+  // a profile section of backlog tasks, or a briefing that names a task closed since: the row has no status
+  const model = { sections: [
+    { id: 'now', rows: [fileTask('unknown', 'P1', { status: null }), { key: 'inbox:1', title: 'x', inbox_id: '1', task: 'unknown' }] },
+    { id: 'work', rows: [fileTask('closed', 'P0', { status: undefined }), fileTask('open', 'P3')] },
+  ] }
+  const tabs = [{ ref: 's:1', state: 'needs-you', slug: 'closed' }]
+  assert.deepEqual(logic.queueOf(logic.dossierParts(tabs, model, 0), { scope: 'dossier' }).map(x => x.slug), ['open'])
+})
+
+test('a tab, a result or an inbox item opens the file of a doing task wherever its row stands, never a resting one', () => {
+  // a doing task that waits on someone else stands in later; a tab that asks about it still leads the queue
+  const model = { sections: [
+    { id: 'now', rows: [{ key: 'inbox:1', title: 'Answer', inbox_id: '1', task: 'hidden' }] },
+    { id: 'work', rows: [fileTask('own', 'P2')] },
+    { id: 'later', rows: [fileTask('other', 'P2', { bucket: 'waiting' }), fileTask('stuck', 'P1', { bucket: 'resting' }),
+      fileTask('hidden', 'P2', { bucket: 'waiting' }), fileTask('quiet', 'P2', { bucket: 'waiting' })] },
+  ] }
+  const tabs = [{ ref: 's:1', state: 'needs-you', slug: 'other' }, { ref: 's:2', state: 'needs-you', slug: 'stuck' }]
+  const q = logic.queueOf(logic.dossierParts(tabs, model, 0), { scope: 'dossier' })
+  assert.deepEqual(q.map(x => [x.slug, x.reason]), [['other', 'tab'], ['hidden', 'inbox'], ['own', 'task']])
+  assert.equal(q[0].row.key, 'task:other')
+})
+
+test('a file is its task row, not a board item that names the same task', () => {
+  const board = { key: 'gh:1', title: 'Board item of x', task: 'x', status: 'doing', priority: 'P1' }
+  const model = { sections: [{ id: 'work', rows: [fileTask('x', 'P1'), board] }] }
+  const q = logic.queueOf(logic.dossierParts([], model, 0), { scope: 'dossier' })
+  assert.deepEqual(q.map(x => [x.slug, x.id, x.row.title]), [['x', 'task:x', 'Task x']])
+  // the board item alone still opens the file of its task
+  const only = logic.queueOf(logic.dossierParts([], { sections: [{ id: 'work', rows: [board] }] }, 0), { scope: 'dossier' })
+  assert.deepEqual(only.map(x => [x.slug, x.id]), [['x', 'gh:1']])
+})
+
+test('n and p walk the files view the way its bar does, the one files queue', () => {
+  const app = read('app.js')
+  const body = app.match(/\/\/ n \/ p in the files view[\s\S]*?\n  \}/)[0]
+  assert.match(body, /workViewOf\(s\.ui\.workView, workPageOf\(s\.model\?\.pages\), s\.jev\) === 'dossier'/)
+  assert.match(body, /fileQueue\(s\.tabs\?\.tabs \?\? \[\], s\.model, s\.now \|\| Date\.now\(\), s\.sessions\?\.runs\)/)
+  assert.match(body, /focusIndex\(queue, s\.ui\.dossierAt\) \+ \(key === 'n' \? 1 : -1\)/)
+  assert.match(body, /ctl\.dossierWalk\(queue\[to\]\.id, to\)/)
+})
+
+test('the page view is measured on every page and view change, and once at boot after the first model', () => {
+  const app = read('app.js')
+  assert.match(app.match(/setPage\(id[^)]*\) \{[\s\S]*?\n  \},/)[0], /pageSeen\(id\)/)
+  assert.match(app, /setWorkView: v => \{[^\n]*pageSeen\('briefing'\)/)
+  // at boot the remembered view and the start view need the model and the home settings: measured once they came
+  const boot = app.match(/async function boot\(\) \{[\s\S]*?\n\}/)[0]
+  assert.doesNotMatch(boot, /pageSeen\(/)
+  const apply = app.match(/function applyState\(payload\) \{[\s\S]*?\n\}/)[0]
+  assert.match(apply, /if \(!bootSeen && payload\.model\) pageSeen\(store\.get\(\)\.ui\.page\)/)
+  // a page measured with the model at hand (fixPage moving the page) is the first one: no second line
+  assert.match(app.match(/function pageSeen\(page\) \{[\s\S]*?\n\}/)[0], /if \(s\.model\) bootSeen = true/)
+  assert.match(read('api.js'), /seen[\s\S]{0,80}\/api\/seen/)
+})
+
+test('the next step of a file says where it comes from and since when', () => {
+  const row = fileTask('alpha', 'P2', { next: { what: 'Merge it', from: 'status', since: '2026-10-07', key: null } })
+  assert.deepEqual(logic.dossierStep({ reason: 'task', row }), { what: 'Merge it', from: 'status', since: '2026-10-07' })
+  assert.deepEqual(logic.dossierStep({ reason: 'tab', row, tab: { name: 'alpha tab', since_ms: 5 } }), { what: 'alpha tab', from: 'tab', since: 5 })
+  assert.deepEqual(logic.dossierStep({ reason: 'result', row, result: { title: 'Run', at_ms: 7, result: { text: 'All green' } } }),
+    { what: 'All green', from: 'result', since: 7 })
+  // an inbox item: the server's oldest item with its date where it names one, else the item itself
+  const inboxNext = { what: 'Answer', from: 'inbox', since: '2026-10-08T09:00', key: 'inbox:1' }
+  assert.deepEqual(logic.dossierStep({ reason: 'inbox', row: { ...row, next: inboxNext }, item: { key: 'inbox:1', title: 'Answer' } }),
+    { what: 'Answer', from: 'inbox', since: '2026-10-08T09:00' })
+  assert.deepEqual(logic.dossierStep({ reason: 'inbox', row, item: { key: 'inbox:3', title: 'Other' } }), { what: 'Other', from: 'inbox', since: null })
+  // the queue met a younger item of the task first: the step is still the oldest one, with its date
+  assert.deepEqual(logic.dossierStep({ reason: 'inbox', row: { ...row, next: inboxNext }, item: { key: 'inbox:3', title: 'Younger' } }),
+    { what: 'Answer', from: 'inbox', since: '2026-10-08T09:00' })
+  // nothing names a next step: none is made up
+  assert.equal(logic.dossierStep({ reason: 'task', row: fileTask('beta', 'P3') }), null)
+})
+
+test('the age of a step in whole days, from a date, a date and time, or milliseconds', () => {
+  const now = new Date(2026, 9, 9, 12, 0, 0).getTime()
+  assert.equal(logic.stepAge('2026-10-07', now), 2)
+  assert.equal(logic.stepAge('2026-10-09T09:00', now), 0)
+  assert.equal(logic.stepAge(now - 3 * 86400000, now), 3)
+  assert.equal(logic.stepAge(null, now), null)
+  assert.equal(logic.stepAge('not a date', now), null)
+})
+
+test('the work tab offers the files view beside the others, never as its default', () => {
+  const work = { id: 'work', group: 'work', jev: true }
+  const ready = { enabled: true, ready: true }
+  assert.deepEqual(logic.workViews(work, ready), ['due', 'area', 'jev', 'dossier'])
+  assert.deepEqual(logic.workViews(null, ready), ['due', 'dossier'])
+  assert.equal(logic.workViewOf('dossier', null, ready), 'dossier')
+  assert.equal(logic.workViewOf(undefined, work, ready), 'due')
+})
+
+// ---------------------------------------------------------------- the files view: find, ask a file, next step (E2)
+
+test('files: ?words in the command box is a search, everything else stays a code', () => {
+  assert.equal(logic.commandSearch('?gateway september'), 'gateway september')
+  assert.equal(logic.commandSearch('  ?  invoice  '), 'invoice')
+  assert.equal(logic.commandSearch('?'), '')
+  for (const code of ['1a 3b', '2a', 'gateway', '', null]) assert.equal(logic.commandSearch(code), null)
+  // a code still parses as before
+  assert.ok(logic.parseShortcut('1a 3b'))
+})
+
+test('files: the api searches with the words in the query string, encoded', async () => {
+  const got = []
+  const a = api.createApi({ get: async p => { got.push(p); return { ok: true } }, post: async () => ({ ok: true }), events: () => ({}) })
+  await a.find('a&b=c ?x')
+  // a closed copy of a slug by its folder
+  await a.task('weekly-report', 'work/done/2026-09/weekly-report')
+  await a.task('weekly-report')
+  assert.deepEqual(got, ['/api/find?q=a%26b%3Dc%20%3Fx', '/api/task?slug=weekly-report&path=work%2Fdone%2F2026-09%2Fweekly-report',
+    '/api/task?slug=weekly-report'])
+})
+
+test('files: the facts of a file come from its task detail, the row filling what the detail lacks', () => {
+  const data = { kind: 'done', path: 'work/done/2026-09/invoice-onboarding/STATUS.md',
+    front: { status: 'done', priority: 'P2', type: 'admin', headline: 'Onboard the invoice vendor', next: null } }
+  const f = logic.fileFacts('invoice-onboarding', data, null)
+  assert.deepEqual(f, { slug: 'invoice-onboarding', kind: 'done', path: 'work/done/2026-09/invoice-onboarding', title: 'Onboard the invoice vendor',
+    status: 'done', priority: 'P2', type: 'admin', headline: 'Onboard the invoice vendor', next: null })
+  const row = { title: 'Row title', status: 'doing', priority: 'P1', task_type: 'feature', next: { what: 'Call the vendor' } }
+  const g = logic.fileFacts('x', null, row)
+  assert.equal(g.title, 'Row title')
+  assert.equal(g.next, 'Call the vendor')
+  assert.equal(g.kind, 'task')
+  assert.equal(g.path, 'work/tasks/x')
+})
+
+test('files: a question in a file carries where it lies and its cover as data, in the page language', () => {
+  const f = { slug: 'invoice-onboarding', kind: 'task', path: 'work/tasks/invoice-onboarding', title: 'Onboard the invoice vendor',
+    status: 'doing', priority: 'P2', type: 'admin', headline: 'Onboard the invoice vendor', next: 'Call the vendor' }
+  const en = logic.fileContext(f, 'en')
+  for (const part of ['invoice-onboarding', 'work/tasks/invoice-onboarding/', 'doing', 'P2', 'Call the vendor']) assert.ok(en.includes(part), part)
+  assert.ok(en.includes(text.TABLES.en.dossier.ctx.read('work/tasks/invoice-onboarding')))
+  assert.ok(logic.fileContext(f, 'de').includes(text.TABLES.de.dossier.ctx.next))
+  assert.ok(en.length <= logic.CONTEXT_MAX)
+  // a very long cover is cut to what the server takes, never refused
+  assert.ok(logic.fileContext({ ...f, headline: 'x'.repeat(9000) }, 'en').length <= logic.CONTEXT_MAX)
+})
+
+test('files: a question about the results carries the list of found files, best first, within the limit', () => {
+  const hit = (path, line) => ({ path, line, text: `gateway at ${line}` })
+  const res = { query: 'gateway', total: 3, groups: [
+    { slug: 'invoice-onboarding', kind: 'task', path: 'work/tasks/invoice-onboarding', title: 'Onboard', rank: 1, count: 2,
+      hits: [hit('work/tasks/invoice-onboarding/STATUS.md', 3), hit('work/tasks/invoice-onboarding/notes.md', 1)] },
+    { slug: null, kind: 'log', path: 'work/log.md', title: 'work/log.md', rank: 2, count: 1, hits: [hit('work/log.md', 9)] }] }
+  const ctx = logic.findContext(res, 'en')
+  assert.ok(ctx.startsWith(text.TABLES.en.dossier.ctx.results('gateway')))
+  assert.ok(ctx.indexOf('invoice-onboarding') < ctx.indexOf('work/log.md'))
+  assert.ok(ctx.includes('work/tasks/invoice-onboarding/STATUS.md:3: gateway at 3'))
+  const many = { ...res, total: 400, groups: Array.from({ length: 400 }, (_, i) => ({ ...res.groups[0], slug: `file-${i}` })) }
+  const cut = logic.findContext(many, 'en')
+  assert.ok(cut.length <= logic.CONTEXT_MAX && cut.includes(text.TABLES.en.dossier.ctx.more(1).split('1')[0].trim()))
+  assert.equal(logic.findContext(null, 'en'), '')
+})
+
+test('files: a suggested step is the first line of the answer, plain, one line, at most 300 characters', () => {
+  assert.equal(logic.suggestedStep('\n\n- **Call the vendor** about the 422\nBecause ...'), 'Call the vendor about the 422')
+  assert.equal(logic.suggestedStep('1. "Write the summary"'), 'Write the summary')
+  assert.equal(logic.suggestedStep('Next step: Send the draft'), 'Send the draft')
+  assert.equal(logic.suggestedStep('   '), null)
+  assert.equal(logic.suggestedStep(null), null)
+  assert.equal(logic.suggestedStep('y'.repeat(400)).length, 300)
+})
+
+test('files: the command box searches before it parses codes, and a suggestion stays out of the chat lists', () => {
+  const app = read('app.js')
+  const run = app.slice(app.indexOf('async runCommand(text)'))
+  assert.ok(run.indexOf('commandSearch(text)') >= 0 && run.indexOf('commandSearch(text)') < run.indexOf('parseShortcut(text)'))
+  // the search opens the files view for this visit only: the saved work view stays what it was
+  const search = run.slice(0, run.indexOf('parseShortcut(text)'))
+  assert.doesNotMatch(search, /setWorkView|save\(/)
+  assert.match(search, /ctl\.openFiles\(\)/)   // which sets workView 'dossier' and saves nothing (test below)
+  // an answer for words no longer asked is dropped; a suggestion asks in its own place; only a click writes it
+  assert.match(app, /if \(store\.get\(\)\.find\?\.q !== words\) return/)
+  assert.match(app, /place: 'suggest'/)
+  assert.match(app, /act\('task_set_next', \{ key, text \}\)/)
+  const convs = [{ id: 'a', place: 'core', running: true }, { id: 'b', place: 'suggest', running: true }, { id: 'c', running: true }]
+  assert.deepEqual(logic.listedChats(convs, 24, Date.now()).map(x => x.id), ['c'])
+  // nor does it make the chat tab spin or the ask button light up
+  const header = read('views/header.js')
+  assert.equal((header.match(/\(s\.quick\?\.convs \?\? \[\]\)\.some\(chatRunning\)/g) ?? []).length, 2)
+  assert.doesNotMatch(header, /\(s\.quick\?\.convs \?\? \[\]\)\.some\(x => x\.running\)/)
+})
+
+// ---------------------------------------------------------------- the files view: workflow runs and results (E3)
+
+test('a workflow run bound to a task: a finished one not yet checked waits as its result, a running or checked one does not', () => {
+  const model = { sections: [{ id: 'work', rows: [fileTask('alpha', 'P2'), fileTask('beta', 'P3'), fileTask('gamma', 'P1'),
+    fileTask('parked', 'P1', { status: 'backlog' })] }], returns: [] }
+  const runs = [
+    { id: 'wf_a', task: 'beta', name: 'plan-beta', status: 'completed', seen: false, ended_ms: 5, summary: 'Plan it' },
+    { id: 'wf_b', task: 'gamma', name: 'g', status: 'running', seen: false, ended_ms: null },
+    { id: 'wf_c', task: 'alpha', name: 'a', status: 'completed', seen: true, ended_ms: 4 },
+    { id: 'wf_d', task: 'parked', name: 'p', status: 'completed', seen: false, ended_ms: 3 },
+    { id: 'wf_e', task: 'alpha', name: 'k', status: 'killed', seen: false, ended_ms: 3 },
+  ]
+  const q = logic.fileQueue([], model, 10, runs)
+  assert.deepEqual(q.map(x => [x.slug, x.reason]), [['beta', 'result'], ['alpha', 'task'], ['gamma', 'task']])
+  assert.equal(q[0].result.key, 'wf:wf_a')
+  assert.equal(q[0].result.kind, 'run')
+  assert.deepEqual(logic.dossierStep(q[0]), { what: 'plan-beta', from: 'run', since: 5 })
+  // a start's result still comes first: it is the person's own hand-over
+  const both = logic.fileQueue([], { ...model, returns: [{ key: 'task:alpha', item: 'alpha', stage: 'result', at_ms: 1 }] }, 10, runs)
+  assert.deepEqual(both.map(x => [x.slug, x.reason]).slice(0, 2), [['alpha', 'result'], ['beta', 'result']])
+  // without runs the queue is as before
+  assert.deepEqual(logic.fileQueue([], model, 10).map(x => x.reason), ['task', 'task', 'task'])
+})
+
+test('the results of a file: the starts of its task and of its inbox items, and its workflow runs', () => {
+  const model = {
+    sections: [{ id: 'now', rows: [{ key: 'inbox:1', inbox_id: '1', task: 'alpha', title: 'x' }] }, { id: 'work', rows: [fileTask('alpha', 'P2')] }],
+    returns: [{ key: 'task:alpha', item: 'alpha', stage: 'result', at_ms: 1, title: 'A' }, { key: 'inbox:1', item: '1', stage: 'done', at_ms: 2 },
+      { key: 'task:beta', item: 'beta', stage: 'result', at_ms: 1 }],
+  }
+  const runs = [{ id: 'wf_a', task: 'alpha', status: 'completed', seen: false }, { id: 'wf_b', task: 'beta', status: 'completed', seen: false },
+    { id: 'wf_c', task: 'alpha', status: 'running', seen: false }]
+  const r = logic.fileResults('alpha', model, [], 10, runs)
+  assert.deepEqual(r.returns.map(x => [x.key, x.live]), [['task:alpha', 'result'], ['inbox:1', 'done']])
+  assert.deepEqual(r.runs.map(x => x.id), ['wf_a', 'wf_c'])
+  assert.equal(r.waiting, 2, 'a result and a finished run not yet checked')
+  assert.deepEqual(logic.fileResults('none', model, [], 10, runs), { returns: [], runs: [], waiting: 0 })
+})
+
+test('every walk of the files view reads the workflow runs of the sessions state', () => {
+  const app = read('app.js')
+  assert.equal((app.match(/fileQueue\(s\.tabs\?\.tabs \?\? \[\], s\.model, s\.now \|\| Date\.now\(\), s\.sessions\?\.runs\)/g) ?? []).length, 2)
+  assert.match(read('views/dossier.js'), /fileQueue\(s\.tabs\?\.tabs \?\? \[\], s\.model, s\.now \|\| Date\.now\(\), s\.sessions\?\.runs\)/)
+  assert.match(read('api.js'), /file=\$\{encodeURIComponent\(file\)\}/)
+})
+
+test('cockpit.work_view names the view by its word: due, source, jev, files; anything else names none', () => {
+  assert.equal(logic.workViewId('due'), 'due')
+  assert.equal(logic.workViewId('source'), 'area')
+  assert.equal(logic.workViewId('jev'), 'jev')
+  assert.equal(logic.workViewId('files'), 'dossier')
+  for (const x of ['dossier', 'area', '', null, undefined, 3]) assert.equal(logic.workViewId(x), null, String(x))
+})
+
+test('the config sets the view the work tab opens on; a click on the switch holds until the config changes', () => {
+  // an older server sends no view: the remembered one, and nothing is kept as seen
+  assert.deepEqual(logic.workViewStart('area', null, undefined), { view: 'area', seen: null })
+  assert.deepEqual(logic.workViewStart(null, null, undefined), { view: 'due', seen: null })
+  // the default on a browser that never saw a config: the remembered view stays, so nobody sees a change
+  assert.deepEqual(logic.workViewStart('area', null, 'due'), { view: 'area', seen: 'due' })
+  assert.deepEqual(logic.workViewStart(null, null, 'due'), { view: 'due', seen: 'due' })
+  // the config switched to files: the tab opens on it, the remembered view gives way once
+  assert.deepEqual(logic.workViewStart('due', null, 'files'), { view: 'dossier', seen: 'files' })
+  assert.deepEqual(logic.workViewStart('area', 'due', 'files'), { view: 'dossier', seen: 'files' })
+  // seen before: a click on the switch since then holds
+  assert.deepEqual(logic.workViewStart('due', 'files', 'files'), { view: 'due', seen: 'files' })
+  assert.deepEqual(logic.workViewStart(null, 'files', 'files'), { view: 'dossier', seen: 'files' })
+  // switched back: the old default again
+  assert.deepEqual(logic.workViewStart('dossier', 'files', 'due'), { view: 'due', seen: 'due' })
+  // a word the page does not know counts as no config
+  assert.deepEqual(logic.workViewStart('area', 'due', 'tiles'), { view: 'area', seen: 'due' })
+})
+
+test('the first state sets the work view from the config once a visit, before the page view is measured', () => {
+  const app = read('app.js')
+  assert.match(app, /work: payload\.work \?\? s\.work/)
+  const fn = app.match(/function workDefault\(\) \{[\s\S]*?\n\}/)[0]
+  assert.match(fn, /workTab: load\('bridge-cockpit\.workTab', null\), workTabSeen: load\('bridge-cockpit\.workTabSeen', null\)/)
+  assert.match(fn, /workViewWrites\(stored, s\.work\?\.view\)/)
+  assert.match(fn, /save\(`bridge-cockpit\.\$\{k\}`, v\)/)
+  const apply = app.match(/function applyState\(payload\) \{[\s\S]*?\n\}/)[0]
+  assert.ok(apply.indexOf('workDefault()') > 0 && apply.indexOf('workDefault()') < apply.indexOf('pageSeen('), 'set before the measure')
+  // before fixPage: a remembered check that moved onto a page opens it in By source (openReview), and that
+  // view, the one shown, is the one measured; the config's view would otherwise replace it unmeasured
+  assert.ok(apply.indexOf('workDefault()') < apply.indexOf('fixPage()'), 'set before the check is reopened')
+})
+
+test('a visit keeps the two remembered words of the work view: the config wins once, a click holds after it', () => {
+  // a browser's storage across visits, the way workDefault reads and writes it
+  const visit = (stored, configured) => {
+    const { view, writes } = logic.workViewWrites(stored, configured)
+    Object.assign(stored, writes)
+    return { view, writes }
+  }
+  const stored = {}
+  // the default config on a fresh browser: the old default, only the seen word is kept
+  assert.deepEqual(visit(stored, 'due'), { view: 'due', writes: { workTabSeen: 'due', workTab: 'due' } })
+  // a click on By source, then a visit with the config unchanged: the click holds, nothing written
+  stored.workTab = 'area'
+  assert.deepEqual(visit(stored, 'due'), { view: 'area', writes: {} })
+  // the config switched to files: the files view once, both words kept
+  assert.deepEqual(visit(stored, 'files'), { view: 'dossier', writes: { workTabSeen: 'files', workTab: 'dossier' } })
+  // a click on Due after it holds on the next visit, the config the same
+  stored.workTab = 'due'
+  assert.deepEqual(visit(stored, 'files'), { view: 'due', writes: {} })
+  assert.deepEqual(stored, { workTab: 'due', workTabSeen: 'files' })
+  // an older server without the config: the remembered view, nothing written
+  assert.deepEqual(visit(stored, undefined), { view: 'due', writes: {} })
+  // the app reads and writes through it
+  const fn = read('app.js').match(/function workDefault\(\) \{[\s\S]*?\n\}/)[0]
+  assert.match(fn, /workViewWrites\(/)
+})
+
+test('n and p walk the focus; past the last step n leads into the files view only with cockpit.focus_to_files', () => {
+  const q = [{ id: 'a' }, { id: 'b' }]
+  assert.deepEqual(logic.focusStep(q, null, 'n', false), { to: 1 })
+  assert.deepEqual(logic.focusStep(q, { id: 'b', i: 1 }, 'p', false), { to: 0 })
+  assert.equal(logic.focusStep(q, { id: 'b', i: 1 }, 'n', false), null)
+  assert.deepEqual(logic.focusStep(q, { id: 'b', i: 1 }, 'n', true), { files: true })
+  assert.equal(logic.focusStep(q, null, 'p', true), null, 'p before the first step goes nowhere')
+  // one step only: n goes on into the files view at once
+  assert.deepEqual(logic.focusStep([{ id: 'a' }], null, 'n', true), { files: true })
+  // the step held by its id moved: n goes on from where it stands now
+  assert.deepEqual(logic.focusStep(q, { id: 'a', i: 1 }, 'n', true), { to: 1 })
+})
+
+test('with cockpit.focus_to_files, n on the last step of the focus leads on into the files view', () => {
+  const app = read('app.js')
+  const body = app.match(/\/\/ n \/ p on the start page in the focus view[\s\S]*?\n  \}/)[0]
+  assert.match(body, /focusStep\(queue, s\.ui\.focusAt, key, !!s\.work\?\.focus_to_files\)/)
+  assert.match(body, /step\?\.files \? ctl\.openFiles\(\)/)
+  // the search of the command box opens the files view the same way, for this visit only
+  assert.match(app.match(/openFiles\(\) \{[\s\S]*?\n  \},/)[0], /setUi\(\{ workView: 'dossier', dossierOpen: null \}\)/)
+  assert.doesNotMatch(app.match(/openFiles\(\) \{[\s\S]*?\n  \},/)[0], /save\('bridge-cockpit\.workTab'/)
+})
+
+test('the demo takes the two work switches from its address: ?work=files and ?focus_to_files=1', () => {
+  assert.match(read('app.js'), /work: params\.get\('work'\), focusToFiles: params\.get\('focus_to_files'\) === '1'/)
 })

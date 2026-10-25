@@ -36,6 +36,7 @@ from typing import Any, Callable
 
 from . import VERSION
 from . import details
+from .. import work_find
 from . import model as m
 from .actions import ActionError, Actions
 from .collector import Collector
@@ -88,9 +89,15 @@ SCREEN_LINES = 400          # the tab view reads this much of a tab's scrollback
 SCREEN_TIMEOUT = 4
 GITHUB_REF_RE = re.compile(r"^[\w.-]{1,100}/[\w.-]{1,100}#\d{1,9}\Z")
 GITHUB_DETAIL_TIMEOUT = 40
+FIND_TIMEOUT = 30      # the search over work/ (scripts/work-find.py); rg answers in well under a second
 SCREEN_MAX = 120_000
 SCREEN_CACHE_MS = 1000      # several pages on one tab share one read of its screen within this window
 SCREEN_HASH_RE = re.compile(r"^[0-9a-f]{1,64}\Z")
+# a page or view the files view measures (/api/seen). A page id comes from a profile as free text, or is one of
+# the cockpit's own @ pages: any word up to 64 characters, never a path, a space or a control character. A view
+# is one of the cockpit's own ids
+SEEN_PAGE_RE = re.compile(r"^[^\s/\\\x00-\x1f\x7f]{1,64}\Z")
+SEEN_RE = re.compile(r"^@?[a-z0-9][a-z0-9_-]{0,63}\Z")
 CAPS_TTL_S = 300
 CAPS_RETRY_S = 15      # a failed read is tried again this soon, the last good answer standing meanwhile
 CAPS_TIMEOUT = 20
@@ -392,9 +399,14 @@ class App:
                 "driver": {"caps": self.driver_caps()}, "home": self.store.home(),
                 "sessions": self.sessions_state(), "quick": self.quick.state(), "quick_live": self.quick.live_state(), "agents": self.agents.state(), "triage": self.triage.state(), "jev": jev.status(self) if jev else dict(JEV_OFF),
                 "launch": self.launch_model.state(), "ticker": self.ticker.state(), "guide": self.guide.state(),
-                "tour": self.tour_state(),
+                "tour": self.tour_state(), "work": self.work_state(),
                 "rooms": {"layout": self.cfg.chat_layout, "root": str(self.root), "control": self.cfg.control,
                           "bridges": self.bridges.state()}}
+
+    def work_state(self) -> dict:
+        """The work tab as the config sets it: the view it opens on (cockpit.work_view) and whether the start
+        page's focus leads on into the files view (cockpit.focus_to_files)"""
+        return {"view": getattr(self.cfg, "work_view", "due"), "focus_to_files": bool(getattr(self.cfg, "focus_to_files", False))}
 
     def tour_state(self) -> dict:
         """The first-run tour: whether a first visit offers it (cockpit.tour) and how it ended, if it did"""
@@ -402,6 +414,16 @@ class App:
 
     def task_open(self, slug: str) -> bool:
         return bool(slug) and (self.root / "work" / "tasks" / slug / "STATUS.md").is_file()
+
+    def open_slugs(self) -> set:
+        """The open tasks and streams by slug: what a workflow run can belong to (sessions.run_task)"""
+        out = set()
+        for kind in ("tasks", "streams"):
+            try:
+                out |= {p.parent.name for p in (self.root / "work" / kind).glob("*/STATUS.md") if details.SLUG_RE.match(p.parent.name)}
+            except OSError:
+                pass
+        return out
 
     def link_tab_sessions(self) -> bool:
         """A session in a task tab (BRIDGE_TAB_SLUG names an open task) is linked to that task by itself;
@@ -422,7 +444,10 @@ class App:
         sids = {x.get("sid") for x in live}
         kept = [{"sid": sid, **v, "live": sid in sids} for sid, v in links.items() if self.task_open(v.get("task", ""))]
         kept.sort(key=lambda v: -v.get("at_ms", 0))
-        return {"at_ms": self.tabs.at_ms, "sessions": live, "links": kept}
+        # the workflow runs bound to an open task (sessions.run_task), each with whether it was checked
+        seen, slugs = self.store.runs_seen(), self.open_slugs()
+        runs = [{**r, "seen": r["id"] in seen} for r in self.sessions.run_state() if r["task"] in slugs]
+        return {"at_ms": self.tabs.at_ms, "sessions": live, "links": kept, "runs": self.scrub_tree(runs)}
 
     def on_tabs(self, alerts: list[dict]) -> None:
         state = self.tabs_state()
@@ -444,7 +469,9 @@ class App:
         try:
             relay = frozenset(h["session"] for h in self.relay.heartbeats(self.clock()))
             changed = self.sessions.refresh(self.tabs.tab_list(), self.clock(), self.tabs.control_ref(), relay)
-            if self.link_tab_sessions() or changed:
+            linked = self.link_tab_sessions()
+            ran = self.sessions.refresh_runs(self.clock(), self.open_slugs(), self.store.session_links(), self.root)
+            if linked or changed or ran:
                 self.broadcast("sessions", self.sessions_state())
         except Exception as exc:  # noqa: BLE001 - the sessions page is an extra, never a reason for the tabs to stop
             self.log_error(f"sessions: {exc!r}")
@@ -847,11 +874,40 @@ class Handler(BaseHTTPRequestHandler):
             if not details.SLUG_RE.match(slug):
                 self.send_error_json("invalid_argument", "not a task slug", "slug")
                 return
-            result = details.task_detail(app.root, slug, app.inbox_listing())
+            # path: one folder of the slug (a closed copy the search found), else the open one first
+            folder = one("path") or None
+            if folder is not None and (len(folder) > 200 or folder.split("/")[-1] != slug):
+                self.send_error_json("invalid_argument", "not a folder of this task", "path")
+                return
+            # file: one file of the folder, as the listing names it (the files view reads it in place)
+            rel = one("file") or None
+            if rel is not None and (len(rel) > 300 or not details.FILE_RE.match(rel)):
+                self.send_error_json("invalid_argument", "not a file of this task", "file")
+                return
+            result = details.task_file(app.root, slug, rel, folder) if rel is not None \
+                else details.task_detail(app.root, slug, app.inbox_listing(), folder)
             if result is None:
-                self.send_error_json("not_found", "no such task")
+                self.send_error_json("not_found", "no such file" if rel is not None else "no such task")
             else:
                 self.send_json(200, app.scrub_tree(result))
+        elif path == "/api/find":
+            # the files view's search over every task, stream, closed task, the log and its archive
+            # (scripts/work-find.py, logic in lib/work_find.py), read only: the words go as one argv word after --
+            try:
+                q, _ = work_find.check_query(one("q"))
+            except ValueError as exc:
+                self.send_error_json("invalid_argument", str(exc), "q")
+                return
+            argv = [app.runner.python, app.runner.script("scripts/work-find.py"), "--root", str(app.root), "--json", "--", q]
+            run = app.run(argv, FIND_TIMEOUT)
+            try:
+                data = json.loads(run.out.strip().splitlines()[-1]) if run.ok else None
+            except (ValueError, IndexError):
+                data = None
+            if isinstance(data, dict) and isinstance(data.get("groups"), list):
+                self.send_json(200, app.scrub_tree(data))
+            else:
+                self.send_error_json("unreadable", app.scrub((run.err or run.out or "the search did not answer").strip())[-200:])
         elif path == "/api/inbox":
             item_id = one("id")
             if not details.INBOX_ID_RE.match(item_id):
@@ -1059,6 +1115,18 @@ class Handler(BaseHTTPRequestHandler):
                     raise ActionError(404, "not_found", "no such page is connected", "client")
                 if back:
                     app.on_client_connect()   # a page that comes back sees fresh tabs at once
+                self.send_json(200, {"ok": True})
+            elif path == "/api/seen":
+                # the files view's measure: which page or view was opened, one audit line, nothing else changes
+                for name in body:
+                    if name not in ("page", "view"):
+                        raise ActionError(400, "invalid_argument", "unknown field", str(name)[:40])
+                page, view = body.get("page"), body.get("view")
+                if not isinstance(page, str) or not SEEN_PAGE_RE.match(page):
+                    raise ActionError(400, "invalid_argument", "page must be a page id", "page")
+                if view is not None and (not isinstance(view, str) or not SEEN_RE.match(view)):
+                    raise ActionError(400, "invalid_argument", "view must be a view id", "view")
+                app.actions.audit_line("page_view", page, view=view or "-")
                 self.send_json(200, {"ok": True})
             elif path == "/api/triage/run":
                 app.triage.handle_post(self, body)

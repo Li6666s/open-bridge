@@ -453,12 +453,12 @@ const SIDEBAR_STATE = { waiting: 'waiting', 'needs input': 'needs-you', running:
  *  another Bridge's clone, and the quick chats in the control workspace; then the other Bridges on this
  *  machine that have no workspace, and the A2A agents. A workspace the list does not name (or no list
  *  at all) still shows from its tabs, marked known: false */
-/** The chats a list shows, quick chats and A2A conversations alike: not the start page's core (its panel
- *  shows it, a new one replaces it) and none untouched past keep_hours (the server archives it with its
+/** The chats a list shows, quick chats and A2A conversations alike: none with a place of its own (the start page's
+ *  core and a file's suggested next step: their panels show them, a new one replaces the last) and none untouched past keep_hours (the server archives it with its
  *  next look); one still answering, or an A2A task its owner still holds, always */
 export function listedChats(convs, keepHours, nowMs) {
   const cutoff = keepHours > 0 && Number.isFinite(nowMs) ? nowMs - keepHours * 3600000 : null
-  return (convs ?? []).filter(x => x.place !== 'core' && (x.running || x.turns?.at(-1)?.waiting || cutoff == null
+  return (convs ?? []).filter(x => !x.place && (x.running || x.turns?.at(-1)?.waiting || cutoff == null
     || (x.last_ms ?? x.started_ms) >= cutoff))
 }
 
@@ -1655,14 +1655,45 @@ export function workPageOf(pages) {
 }
 
 /** The views of the work tab: what is due (the four blocks) always, by source where a work page exists,
- *  by Jev where that page asks for an order and Jev is switched on and has its key */
+ *  by Jev where that page asks for an order and Jev is switched on and has its key, and the files (one task
+ *  at a time, views/dossier.js) always, last: an extra view, the default only where cockpit.work_view says so */
 export function workViews(page, jev) {
-  return ['due', ...(page ? ['area'] : []), ...(page?.jev && jev?.enabled && jev?.ready ? ['jev'] : [])]
+  return ['due', ...(page ? ['area'] : []), ...(page?.jev && jev?.enabled && jev?.ready ? ['jev'] : []), 'dossier']
 }
 
 /** The view the work tab shows: the remembered one where it can, else what is due */
 export function workViewOf(view, page, jev) {
   return workViews(page, jev).includes(view) ? view : 'due'
+}
+
+// cockpit.work_view names a view by the word the docs use; the page has its own ids for them
+const WORK_VIEW_IDS = { due: 'due', source: 'area', jev: 'jev', files: 'dossier' }
+
+/** The view id a word of cockpit.work_view names, or null for anything else */
+export function workViewId(word) {
+  return typeof word === 'string' && Object.hasOwn(WORK_VIEW_IDS, word) ? WORK_VIEW_IDS[word] : null
+}
+
+/** The view the work tab opens on at the start of a visit: `remembered` (the last click on its switch, or null),
+ *  `seen` (the config word this browser saw last, or null) and `configured` (the config word the server sends).
+ *  A config that changed since this browser last saw it wins once over the remembered view; after that a click
+ *  holds again. "due" counts as what a browser saw before there was a config, so the default changes nothing.
+ *  Returns { view, seen }, `seen` the word to keep (null: nothing to keep, an older server or an unknown word) */
+export function workViewStart(remembered, seen, configured) {
+  const id = workViewId(configured)
+  if (!id) return { view: remembered ?? 'due', seen: seen ?? null }
+  const changed = configured !== (workViewId(seen) ? seen : 'due')
+  return { view: changed ? id : remembered ?? id, seen: configured }
+}
+
+/** workViewStart over what a browser remembers, `stored` { workTab, workTabSeen } (the last click on the switch,
+ *  the config word seen last). Returns { view, writes }, writes holding only the entries that change */
+export function workViewWrites(stored, configured) {
+  const start = workViewStart(stored?.workTab ?? null, stored?.workTabSeen ?? null, configured)
+  const writes = {}
+  if (start.seen && start.seen !== stored?.workTabSeen) writes.workTabSeen = start.seen
+  if (start.view !== (stored?.workTab ?? null)) writes.workTab = start.view
+  return { view: start.view, writes }
 }
 
 /** The rows of a work page for the order of Jev: `ranked` in Jev's order, `rest` (not sent, or new since)
@@ -2333,14 +2364,122 @@ export function homeListParts(tabs, model, { project = null, pins = [] } = {}) {
     tabOf: key => bound.get(key) ?? null }
 }
 
-/** The queue of the focus view, from the parts of the list: the lead, the tabs that ask, the rows that
- *  wait on you, then the P0 and P1 tasks; what merely runs or rests is not yours to take */
-export function homeQueue(parts) {
+/** The one queue every walk takes, in one order: a tab that asks, a result that waits, an open inbox item,
+ *  then the tasks; what merely runs or rests is not yours to take. `scope` picks whose parts it reads:
+ *  - 'focus' (the start page, homeListParts): its lead first, then the tabs that ask, the rows that wait on
+ *    you, and of the tasks only P0 and P1, as the focus has always shown it;
+ *  - 'dossier' (the files view, dossierParts): one entry per task (a file), at the place of the first reason
+ *    that names it, every priority; a file is {kind: 'dossier', id, slug, row, reason, tab?, result?, item?},
+ *    `row` its task row. A tab, a result or an item opens a file from `files`, a task on its own only from
+ *    `tasks`. Backlog, blocked and resting tasks stand in neither, so no file opens for them */
+export function queueOf(parts, { scope = 'focus' } = {}) {
+  if (scope === 'dossier') {
+    // a file is its task row: the row keyed task:<slug> where one stands, else the first that names the task
+    const bySlug = new Map()
+    for (const r of [...(parts?.files ?? []), ...(parts?.tasks ?? [])]) {
+      if (!bySlug.has(r.task) || (r.key === `task:${r.task}` && bySlug.get(r.task).key !== r.key)) bySlug.set(r.task, r)
+    }
+    const files = new Map()
+    const add = (slug, reason, extra) => {
+      if (!slug || !bySlug.has(slug) || files.has(slug)) return
+      const row = bySlug.get(slug)
+      files.set(slug, { kind: 'dossier', id: row.key, slug, row, reason, ...extra })
+    }
+    for (const t of parts?.asking ?? []) add(t.slug, 'tab', { tab: t })
+    for (const r of parts?.results ?? []) add(r.slug, 'result', { result: r })
+    for (const r of parts?.waiting ?? []) add(r.task, 'inbox', { item: r })
+    for (const r of parts?.tasks ?? []) add(r.task, 'task', {})
+    return [...files.values()]
+  }
   const tab = x => ({ kind: 'tab', id: x.ref, tab: x })
   const row = r => ({ kind: 'row', id: r.key, row: r })
   const lead = parts?.lead ? [parts.lead.kind === 'tab' ? tab(parts.lead.tab) : row(parts.lead.row)] : []
   return [...lead, ...(parts?.asking ?? []).map(tab), ...(parts?.waiting ?? []).map(row),
     ...(parts?.tasks ?? []).filter(r => /^P[01]$/.test(r.priority ?? '')).map(row)]
+}
+
+/** The queue of the focus view, from the parts of the list: the one queue in its focus scope */
+export function homeQueue(parts) {
+  return queueOf(parts, { scope: 'focus' })
+}
+
+const FILE_STATES = ['doing', 'review']
+// a workflow run whose result is there to check: finished, or failed (a killed one was stopped on purpose)
+const RUN_RESULTS = ['completed', 'failed']
+
+/** The task a start of the return channel belongs to: the task of its row, else its own task key */
+const returnSlug = (r, taskOf) => taskOf.get(r.key) ?? (String(r.key ?? '').startsWith('task:') ? r.key.slice(5) : null)
+
+/** The workflow runs whose result waits on you (sessions state `runs`, bound to a task by the server and not
+ *  marked checked), as results of the files queue: {key: wf:<id>, kind: 'run', slug, title, at_ms, result, run} */
+export function runResults(runs) {
+  return (runs ?? []).filter(r => r?.task && !r.seen && RUN_RESULTS.includes(r.status))
+    .map(r => ({ key: `wf:${r.id}`, kind: 'run', slug: r.task, title: r.name, at_ms: r.ended_ms ?? r.at_ms ?? null,
+      result: { text: r.summary || r.answer || null }, run: r }))
+}
+
+/** The parts of the files view (queueOf scope 'dossier'): the tabs that ask about a task, the results that wait
+ *  (the starts of model.returns where they stand now, then the finished workflow runs not yet checked), the open
+ *  inbox items that name a task, and the task rows. A file opens only for a task doing or in review (a row
+ *  without a status, of a backlog section or a task closed since, opens none). `files` are those rows in every
+ *  section but the blocked, quiet or dropped ones (bucket resting, drop): a tab, a result or an item opens them
+ *  wherever they stand, a task waiting on someone else too. `tasks` are those of what waits on you and of the
+ *  work: they stand in the queue on their own. An item put off counts as not open */
+export function dossierParts(tabs, model, nowMs, runs = []) {
+  const sec = id => (model?.sections ?? []).find(x => x.id === id)?.rows ?? []
+  const all = ['now', 'give', 'work', 'track', 'later'].flatMap(sec)
+  const isFile = r => r.task && !r.inbox_id && FILE_STATES.includes(r.status) && !['resting', 'drop'].includes(r.bucket)
+  const files = all.filter(isFile)
+  const tasks = [...sec('now'), ...sec('work')].filter(isFile)
+  const waiting = all.filter(r => r.inbox_id && r.task && r.inbox_state !== 'deferred')
+  const taskOf = new Map(all.filter(r => r.task).map(r => [r.key, r.task]))
+  const results = [...(model?.returns ?? []).filter(r => liveStage(r, tabs, nowMs) === 'result')
+    .map(r => ({ ...r, slug: returnSlug(r, taskOf) })), ...runResults(runs)]
+  const asking = (tabs ?? []).filter(t => !t.is_control && t.state === 'needs-you' && t.slug)
+  return { asking, results, waiting, files, tasks }
+}
+
+/** The files the files view walks, and its keys n and p: the one queue in its files scope */
+export function fileQueue(tabs, model, nowMs, runs = []) {
+  return queueOf(dossierParts(tabs, model, nowMs, runs), { scope: 'dossier' })
+}
+
+/** What a file's Result drawer holds: the starts of the return channel for its task or its inbox items (each
+ *  with where it stands now, `live`), the workflow runs bound to it, and how many of them wait on you (a start
+ *  with its result, a finished run not yet checked) */
+export function fileResults(slug, model, tabs, nowMs, runs = []) {
+  const taskOf = new Map([...indexRows(model).values()].filter(r => r.task).map(r => [r.key, r.task]))
+  const returns = (model?.returns ?? []).filter(r => returnSlug(r, taskOf) === slug).map(r => ({ ...r, live: liveStage(r, tabs, nowMs) }))
+  const mine = (runs ?? []).filter(r => r?.task === slug)
+  const waiting = returns.filter(r => r.live === 'result').length + runResults(mine).length
+  return { returns, runs: mine, waiting }
+}
+
+/** The next step of a file, derived and never stored: the tab's question, the result to check, the oldest open
+ *  inbox item of the task (the server's, with its date; the item that put the file in the queue where the server
+ *  names none), else what STATUS.md names as next (model.py task_next); {what, from, since} or null when nothing
+ *  names one. `since` is ms or an ISO date */
+export function dossierStep(x) {
+  if (x?.reason === 'tab') return { what: x.tab.name, from: 'tab', since: x.tab.since_ms ?? null }
+  // a workflow run: its name, the view words it as a check of its result
+  if (x?.reason === 'result' && x.result.kind === 'run') return { what: x.result.title, from: 'run', since: x.result.at_ms ?? null }
+  if (x?.reason === 'result') return { what: x.result.result?.text || x.result.title, from: 'result', since: x.result.at_ms ?? null }
+  const next = x?.row?.next
+  // the queue meets a task's items in the order of the page, not by age: the server's oldest one names the step
+  if (x?.reason === 'inbox' && (!next || next.from !== 'inbox')) {
+    return { what: x.item.title, from: 'inbox', since: null }
+  }
+  return next?.what ? { what: next.what, from: next.from, since: next.since ?? null } : null
+}
+
+/** How many whole days lie between `since` (ms, an ISO date or date and time, read as local) and now; null
+ *  for no date or one that does not read */
+export function stepAge(since, nowMs) {
+  if (since == null || since === '') return null
+  const ms = typeof since === 'number' ? since : new Date(/^\d{4}-\d{2}-\d{2}$/.test(since) ? `${since}T00:00` : since).getTime()
+  if (!Number.isFinite(ms)) return null
+  const day = d => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x.getTime() }
+  return Math.max(0, Math.round((day(nowMs) - day(ms)) / 86400000))
 }
 
 /** The rows of a start-page list in the order it shows them, as the queue a detail opened there walks
@@ -2360,6 +2499,14 @@ export function focusIndex(queue, at) {
   if (!n || !at) return 0
   const i = queue.findIndex(x => x.id === at.id)
   return i >= 0 ? i : Math.min(Math.max(0, at.i ?? 0), n - 1)
+}
+
+/** Where n or p moves a focus walk from `at`: { to } the step it reaches, { files: true } for n past the last
+ *  step where cockpit.focus_to_files (`toFiles`) leads on into the files view, else null */
+export function focusStep(queue, at, key, toFiles = false) {
+  const to = focusIndex(queue, at) + (key === 'n' ? 1 : -1)
+  if (queue?.[to]) return { to }
+  return key === 'n' && toFiles ? { files: true } : null
 }
 
 /** The one next step of the start page: a tab that asks you, else the first row waiting on you, else the
@@ -2744,6 +2891,77 @@ export function askContext(s, lang = 'de') {
   const { total } = agentLoad(s?.sessions?.sessions, s?.tabs?.tabs)
   const out = [picture, tableOf(lang).situation.load(total.busy, total.subagents, total.workflows)].filter(Boolean).join('\n')
   return out.length <= CONTEXT_MAX ? out : ''
+}
+
+// ---------------------------------------------------------------- the files view: find, ask a file, next step
+
+/** "?words" in the command box is a search of the files (/api/find), never a code: the words ('' for a bare ?),
+ *  null for anything else, so every code parses as it always has */
+export function commandSearch(raw) {
+  const text = String(raw ?? '').trim()
+  return text.startsWith('?') ? text.slice(1).trim() : null
+}
+
+/** The facts of one file for its cover and its questions: what /api/task holds, the row (when the model has one)
+ *  filling what the detail lacks. `path` is the file's folder, `kind` task, stream or done */
+export function fileFacts(slug, data, row) {
+  const f = data?.front ?? {}
+  const kind = data?.kind ?? 'task'
+  const path = typeof data?.path === 'string' ? data.path.replace(/\/STATUS\.md$/, '')
+    : `work/${kind === 'stream' ? 'streams' : 'tasks'}/${slug}`
+  return { slug, kind, path, title: row?.title ?? f.headline ?? slug, status: f.status ?? row?.status ?? null,
+    priority: f.priority ?? row?.priority ?? null, type: f.type ?? row?.task_type ?? null, headline: f.headline ?? null,
+    next: f.next ?? row?.next?.what ?? null }
+}
+
+const filesWords = lang => (TABLES[lang] ?? TABLES.en).dossier
+
+/** What a question asked in a file carries along as data (actions.py ask `context`): where the file lies and its
+ *  cover, and that the answer comes from that folder. Cut to CONTEXT_MAX, never refused */
+export function fileContext(file, lang = 'en') {
+  const d = filesWords(lang)
+  const w = d.ctx
+  const lines = [`${w.file}: ${file.slug} (${d.find.kind[file.kind] ?? file.kind})`, `${w.folder}: ${file.path}/`,
+    file.title ? `${w.title}: ${file.title}` : null, file.status ? `${w.status}: ${file.status}` : null,
+    file.priority ? `${w.priority}: ${file.priority}` : null,
+    file.headline && file.headline !== file.title ? `${w.situation}: ${file.headline}` : null,
+    file.next ? `${w.next}: ${file.next}` : null, w.read(file.path)].filter(Boolean)
+  const out = lines.join('\n')
+  return out.length <= CONTEXT_MAX ? out : out.slice(0, CONTEXT_MAX)
+}
+
+/** What a question about the search results carries along, with no file open: the found files best first, each
+ *  with its first hits, as many as fit in CONTEXT_MAX and the count of those that did not; '' without results */
+export function findContext(result, lang = 'en') {
+  const groups = result?.groups ?? []
+  if (!groups.length) return ''
+  const d = filesWords(lang)
+  let out = d.ctx.results(result.query ?? '')
+  for (let i = 0; i < groups.length; i++) {
+    const g = groups[i]
+    const block = [`- ${g.slug ?? g.path} (${d.find.kind[g.kind] ?? g.kind}): ${g.title} [${g.path}]`,
+      ...(g.hits ?? []).slice(0, 2).map(h => `  ${h.path}:${h.line}: ${h.text}`)].join('\n')
+    const rest = Math.max(result.total ?? groups.length, groups.length) - i
+    const tail = `\n${d.ctx.more(rest)}`
+    if (out.length + 1 + block.length + tail.length > CONTEXT_MAX) return out + tail
+    out += `\n${block}`
+  }
+  const left = (result.total ?? groups.length) - groups.length
+  const tail = left > 0 ? `\n${d.ctx.more(left)}` : ''
+  return out.length + tail.length <= CONTEXT_MAX ? out + tail : out
+}
+
+/** The step a suggestion names: the first line of the answer, without list marks, emphasis, quotes or a leading
+ *  "Next step:" in either language; one line of at most 300 characters (actions.py STEP_MAX), null for none */
+export function suggestedStep(answer) {
+  const first = String(answer ?? '').split('\n').map(x => x.trim()).find(Boolean)
+  if (!first) return null
+  const labels = Object.values(TABLES).map(t => t.dossier.next.toLowerCase())
+  let text = first.replace(/^(?:[-*>#•]+|\d+[.)])\s*/, '').replace(/\*\*|__|`/g, '').trim()
+  const label = labels.find(l => text.toLowerCase().startsWith(`${l}:`))
+  if (label) text = text.slice(label.length + 1).trim()
+  text = text.replace(/^["'“„«]+|["'”“»]+$/g, '').replace(/\s+/g, ' ').trim()
+  return text ? text.slice(0, 300) : null
 }
 
 // ---------------------------------------------------------------- the chat's one input: where Enter goes

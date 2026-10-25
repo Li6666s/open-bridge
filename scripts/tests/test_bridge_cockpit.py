@@ -25,6 +25,7 @@ import datetime as dt
 import http.client
 import json
 import re
+import urllib.parse
 import os
 import socket
 import stat
@@ -78,6 +79,7 @@ def collect_fixture(root: Path) -> dict:
                 {"id": "do", "title": "Do", "items": [
                     {"title": "Review the demo report", "inbox_id": ONLY_ID, "gate": "only-you", "urgency": "today",
                      "task": "demo-task", "sources": ["inbox"], "why": ["due 10.10", "only you"], "has_action": False,
+                     "created": "2026-10-09T09:00",
                      "inbox_state": "open", "inbox_key": "demo-review", "due": "2026-10-10",
                      "mark": {"label": "Demo", "color": "blue"}, "new": True}]},
                 {"id": "plan", "title": "Plan", "items": [
@@ -1433,7 +1435,8 @@ def test_hide_persists_in_state_json(world):
     world.act("hide", key="ref:example/repo#12", until="2026-10-12")
     data = json.loads((world.state / "state.json").read_text())
     assert data == {"v": 1, "hidden": {"ref:example/repo#12": "2026-10-12"}, "dismissed": {}, "team_runs": {},
-                    "home_tiles": None, "home_seen": None, "pins": [], "session_links": {}, "tour": None}
+                    "home_tiles": None, "home_seen": None, "pins": [], "session_links": {}, "tour": None,
+                    "runs_seen": {}}
 
 
 def test_drop_on_an_inbox_item_drops_it_and_on_any_other_row_discards_it_for_good(world):
@@ -2144,6 +2147,7 @@ def test_every_post_path_but_reload_leaves_exactly_one_audit_line_without_texts(
             ("/api/jev/run", {"force": True}, "jev_run"),
             ("/api/jev/rank", {"page": "work", "force": True}, "jev_rank"),
             ("/api/triage/run", {"fresh": True}, "triage"),
+            ("/api/seen", {"page": "briefing", "view": "dossier"}, "page_view"),
         ]
         # every POST path the server knows is in the list above, so a new endpoint cannot skip its line;
         # reload and presence change no record and send nothing on, and presence fires on every tab switch
@@ -2536,6 +2540,16 @@ def test_task_detail_names_its_next_step_and_open_inbox_items(world):
     data = json.loads(world.request("GET", "/api/task?slug=gone-task", headers=world.cookie)[2])
     assert data["kind"] == "done" and data["front"]["headline"] == "newer"
     assert data["path"] == "work/done/2026-10/gone-task/STATUS.md"
+    # one closed copy by its folder (the search finds every copy of a slug); a folder that is not one of its
+    # places is refused or not found, never read
+    q = "/api/task?slug=gone-task&path=" + urllib.parse.quote("work/done/2026-09/gone-task")
+    data = json.loads(world.request("GET", q, headers=world.cookie)[2])
+    assert data["kind"] == "done" and data["front"]["headline"] == "older"
+    assert data["path"] == "work/done/2026-09/gone-task/STATUS.md"
+    for bad in ("work/done/2026-09/demo-task", "work/done/../tasks/gone-task", "work/done/2026-11/gone-task", "/etc/gone-task",
+                "work/tasks/gone-task"):
+        status, _, _ = world.request("GET", "/api/task?slug=gone-task&path=" + urllib.parse.quote(bad), headers=world.cookie)
+        assert status in (400, 404), bad
 
 
 def test_split_front_skips_a_leading_schema_comment():
@@ -7386,3 +7400,452 @@ def test_a_change_inside_one_page_sends_only_that_page(world):
     col.view["headline"] = "Something else entirely"
     col.rebuild()
     assert [ev for ev, _ in sent] == ["view"], "a change outside the pages still sends the whole model"
+
+
+# ---------------------------------------------------------------- the files view: status and the derived next step
+
+def test_parse_tasks_keeps_status_next_and_when_the_task_last_changed():
+    out = m.parse_tasks([{"slug": "a", "label": "A", "status": "review", "next": "Call the vendor", "updated": "2026-10-20"},
+                         {"slug": "b", "label": "B", "next": 7}])
+    assert (out[0]["status"], out[0]["next"], out[0]["updated"]) == ("review", "Call the vendor", "2026-10-20")
+    assert (out[1]["status"], out[1]["next"], out[1]["updated"]) == (None, None, None)
+
+
+def test_task_next_is_derived_from_the_oldest_open_inbox_item_then_the_status_file():
+    t = tinfo("alpha", next="Write the summary", updated="2026-10-20")
+    newer = row("inbox:2", ["inbox"], inbox_id="20261012-0900-b", task="alpha", title="Newer", created="2026-10-12T09:00")
+    older = row("inbox:1", ["inbox"], inbox_id="20261010-0900-a", task="alpha", title="Older", created="2026-10-10T09:00")
+    elsewhere = row("inbox:3", ["inbox"], inbox_id="20261001-0900-c", task="beta", title="Elsewhere", created="2026-10-01T09:00")
+    assert m.task_next(t, [newer, older, elsewhere]) == {"what": "Older", "from": "inbox", "since": "2026-10-10T09:00",
+                                                        "key": "inbox:1"}
+    # without an inbox item: what STATUS.md names as next, dated by its last change
+    assert m.task_next(t, [elsewhere]) == {"what": "Write the summary", "from": "status", "since": "2026-10-20", "key": None}
+    # nothing names a next step: none is made up
+    assert m.task_next(tinfo("alpha"), []) is None
+
+
+def test_task_next_passes_over_an_inbox_item_put_off():
+    t = tinfo("alpha", next="Write the summary", updated="2026-10-20")
+    put_off = row("inbox:1", ["inbox"], inbox_id="20261001-0900-a", task="alpha", title="Put off", created="2026-10-01T09:00",
+                  inbox_state="deferred")
+    waiting = row("inbox:2", ["inbox"], inbox_id="20261005-0900-b", task="alpha", title="Waits for a yes", created="2026-10-05T09:00",
+                  inbox_state="waiting")
+    # an item put off is not open: the next step is what STATUS.md names, as the page reads it (logic.js dossierParts)
+    assert m.task_next(t, [put_off]) == {"what": "Write the summary", "from": "status", "since": "2026-10-20", "key": None}
+    # an item that waits for a yes is still open and still the oldest one
+    assert m.task_next(t, [put_off, waiting])["key"] == "inbox:2"
+
+
+def test_with_tasks_gives_every_task_row_its_status_and_derived_next_step():
+    v = view(buckets=[
+        {"id": "plan", "title": "Plan", "rows": [
+            row("inbox:1", ["inbox"], inbox_id="20261010-0900-a", task="alpha", title="Answer the vendor",
+                created="2026-10-10T09:00")]},
+        {"id": "delegate", "title": "Delegate", "rows": [row("task:gamma", ["tasks"], task="gamma", title="Next of gamma")]}])
+    tasks = [tinfo("alpha", status="doing", priority="P2"), tinfo("beta", status="review", next="Merge it", updated="2026-10-20"),
+             tinfo("gamma", status="doing", next="Next of gamma", updated="2026-10-19")]
+    out = m.with_tasks(v, tasks)
+    rows = {r["key"]: r for b in out["buckets"] for r in b["rows"]}
+    assert rows["task:alpha"]["status"] == "doing"
+    assert rows["task:alpha"]["next"] == {"what": "Answer the vendor", "from": "inbox", "since": "2026-10-10T09:00",
+                                          "key": "inbox:1"}
+    assert rows["task:beta"]["status"] == "review" and rows["task:beta"]["next"]["from"] == "status"
+    # a task the briefing already lists (its next step as the title) carries the same fields
+    assert rows["task:gamma"]["status"] == "doing" and rows["task:gamma"]["next"]["what"] == "Next of gamma"
+    # an inbox row is a part of its task: it carries neither
+    assert rows["inbox:1"]["status"] is None and rows["inbox:1"]["next"] is None
+
+
+def test_parse_view_keeps_when_an_inbox_item_was_filed():
+    raw = {"view": {"buckets": [{"id": "do", "title": "Do", "items": [
+        {"title": "A", "inbox_id": "x1", "created": "2026-10-10T09:00"}, {"title": "B", "inbox_id": "x2", "created": 5}]}]}}
+    rows = m.parse_view(raw, False, NOW)["buckets"][0]["rows"]
+    assert [r["created"] for r in rows] == ["2026-10-10T09:00", None]
+
+
+def test_the_model_rows_carry_status_and_next_step_to_the_page(world):
+    demo = world.row("task:demo-task")
+    assert demo["status"] == "doing"
+    assert demo["next"] == {"what": "Review the demo report", "from": "inbox", "since": "2026-10-09T09:00",
+                            "key": f"inbox:{ONLY_ID}"}
+    other = world.row("task:other-task")
+    assert other["status"] is None and other["next"] is None
+
+
+def test_task_detail_names_the_references_of_its_status_file(world):
+    path = world.root / "work" / "tasks" / "demo-task" / "STATUS.md"
+    text = path.read_text(encoding="utf-8").replace(
+        "origin: invented\n", "origin: invented\nnext:\n  what: Call the vendor\n  who: me\n"
+        "related:\n  - ../other-task/STATUS.md\n  - docs/example.md\n")
+    path.write_text(text, encoding="utf-8")
+    data = json.loads(world.request("GET", "/api/task?slug=demo-task", headers=world.cookie)[2])
+    assert data["related"] == ["../other-task/STATUS.md", "docs/example.md"]
+    # a next step written as a mapping reads as its words, not as a Python dict
+    assert data["front"]["next"] == "Call the vendor"
+
+
+def test_seen_endpoint_leaves_one_page_view_line_and_refuses_bad_input(world):
+    log = world.app.state_dir / "audit.log"
+    before = log.read_text().splitlines() if log.exists() else []
+    status, _, data = world.post("/api/seen", {"page": "briefing", "view": "dossier"})
+    assert status == 200 and json.loads(data)["ok"] is True
+    new = log.read_text().splitlines()[len(before):]
+    assert len(new) == 1 and new[0].split()[1:] == ["page_view", "briefing", "view=dossier"]
+    assert world.post("/api/seen", {"page": "@start"})[0] == 200
+    assert log.read_text().splitlines()[-1].split()[1:] == ["page_view", "@start", "view=-"]
+    assert world.post("/api/seen", {"page": "../x"})[0] == 400
+    assert world.post("/api/seen", {"page": "briefing", "view": "a b"})[0] == 400
+    assert world.post("/api/seen", {"page": "briefing", "x": 1})[0] == 400
+
+
+def test_seen_endpoint_takes_a_profile_page_id_as_written(world):
+    # page ids come from the profiles as free text: capitals and dots measure too, a path or a space never
+    log = world.app.state_dir / "audit.log"
+    assert world.post("/api/seen", {"page": "Weekly.Review"})[0] == 200
+    assert log.read_text().splitlines()[-1].split()[1:] == ["page_view", "Weekly.Review", "view=-"]
+    for bad in ("a/b", "a\\b", "a b", "a\nb", "", "x" * 65):
+        assert world.post("/api/seen", {"page": bad})[0] == 400, bad
+
+
+# ---------------------------------------------------------------- the files view: find, ask a file, next step (E2)
+
+def find_handler(world):
+    """The real search on the test Bridge, as scripts/work-find.py would answer it"""
+    sys.path.insert(0, str(ROOT / "scripts" / "lib"))
+    import work_find
+    return lambda argv: ok(work_find.find(world.root, argv[-1], engine="python"))
+
+
+def test_find_runs_the_search_command_through_the_runner_and_answers_by_file(world):
+    world.runner.handlers["work-find.--json"] = find_handler(world)
+    world.runner.calls.clear()
+    status, _, body = world.request("GET", "/api/find?q=" + urllib.parse.quote("demo; rm -rf /"), headers=world.cookie)
+    assert status == 200
+    argv = world.runner.of("work-find.--json")[0]
+    assert argv[:2] == [PY, str(world.root / "scripts" / "work-find.py")]
+    assert argv[2:] == ["--root", str(world.root), "--json", "--", "demo; rm -rf /"]    # one argv word, no shell
+    assert json.loads(body)["groups"] == []
+    status, _, body = world.request("GET", "/api/find?q=demo", headers=world.cookie)
+    data = json.loads(body)
+    assert status == 200 and data["ok"] is True and data["groups"][0]["slug"] == "demo-task"
+    assert data["groups"][0]["path"] == "work/tasks/demo-task" and data["groups"][0]["rank"] == 0
+
+
+def test_find_refuses_a_bad_query_before_it_runs_anything(world):
+    world.runner.calls.clear()
+    for q in ("", "x", "%0A%0Aab", "a%00b", "y" * 201):
+        status, _, body = world.request("GET", f"/api/find?q={q}", headers=world.cookie)
+        assert status == 400 and json.loads(body)["error"]["field"] == "q", q
+    assert world.runner.of("work-find.--json") == []
+    assert world.request("GET", "/api/find?q=demo")[0] == 401                       # no cookie, no search
+
+
+def test_find_says_so_when_the_search_fails_and_never_shows_the_token(world):
+    world.runner.handlers["work-find.--json"] = lambda argv: fail(f"broke near {world.app.token}")
+    status, _, body = world.request("GET", "/api/find?q=demo", headers=world.cookie)
+    assert status == 502 and json.loads(body)["error"]["code"] == "unreadable"
+    assert world.app.token.encode() not in body
+
+
+def test_asking_a_file_names_it_for_an_open_task_and_never_for_a_closed_one(world):
+    world.runner.handlers["claude.p"] = lambda argv: claude_answer("It waits on the vendor.", 0.001)
+    done = world.root / "work" / "done" / "2026-09" / "gone-task"
+    done.mkdir(parents=True)
+    (done / "STATUS.md").write_text("---\nstatus: done\n---\n", encoding="utf-8")
+    convs = {}
+    for slug in ("demo-task", "gone-task"):
+        status, _, body = free_ask(world, "what is the cause?", context=f"File: work/tasks/{slug}", task=slug)
+        assert status == 202
+        convs[slug] = json.loads(body)["conv"]
+        wait_quick(world)
+    # an open task: the chat is about it (it leaves when the task closes); a closed one: about nothing,
+    # or the settle sweep would take the chat into the archive at once
+    assert world.app.quick.convs[convs["demo-task"]]["about"] == {"kind": "free", "key": "task:demo-task", "task": "demo-task"}
+    assert world.app.quick.convs[convs["gone-task"]]["about"] is None
+    for bad in ("../etc", "Demo", 3):
+        status, _, body = free_ask(world, "x?", task=bad)
+        assert status == 400 and json.loads(body)["error"]["field"] == "task", bad
+    status, _, body = world.post("/api/ask", {"kind": "free", "args": {"text": "hi", "task": "demo-task"}, "via": "control"})
+    assert status == 400 and json.loads(body)["error"]["field"] == "task"
+
+
+def test_a_suggested_step_asks_in_a_place_of_its_own_that_the_next_one_replaces(world):
+    world.runner.handlers["claude.p"] = lambda argv: claude_answer("Call the vendor", 0.001)
+    ask = lambda: json.loads(world.post("/api/ask", {"kind": "free", "args": {"text": "suggest", "task": "demo-task"},
+                                                     "via": "quick", "place": "suggest"})[2])["conv"]
+    first = ask()
+    wait_quick(world)
+    world.clock.advance(1)
+    second = ask()
+    wait_quick(world)
+    convs = {c["id"]: c for c in world.app.quick.state()["convs"]}
+    assert first not in convs and convs[second]["place"] == "suggest"
+    status, _, raw = world.post("/api/ask", {"kind": "overview", "args": {}, "via": "quick", "place": "suggest"})
+    assert status == 400 and json.loads(raw)["error"]["field"] == "place"
+
+
+def test_taking_over_a_next_step_writes_it_through_task_py_and_leaves_an_audit_line(world):
+    world.runner.calls.clear()
+    world.act("task_set_next", key="task:demo-task", text="  Call the vendor; rm -rf /  ")
+    assert writes(world) == [K(world, "next", "demo-task", "--", "Call the vendor; rm -rf /")]
+    line = (world.state / "audit.log").read_text().splitlines()[-1].split()
+    assert line[1:3] == ["task_set_next", "task:demo-task"] and "ok=true" in line
+    assert "Call" not in " ".join(line)                                           # never the text
+    refused(world, "not_applicable", "task_set_next", key=f"inbox:{YES_ID}", text="x")
+    refused(world, "invalid_argument", "task_set_next", key="task:demo-task", text="a\nb")
+    world.runner.handlers["task.next"] = lambda argv: fail("no such task")
+    res = world.act("task_set_next", key="task:demo-task", text="Call")
+    assert res["ok"] is False
+
+
+# ---------------------------------------------------------------- the files view: workflow runs and the folder's files (E3)
+
+def workflow(home: Path, project: str, sid: str, run: str, age_s: float = 60, **data) -> Path:
+    """One wf_*.json of a session, written `age_s` seconds ago"""
+    folder = home / "projects" / project / sid / "workflows"
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / f"{run}.json"
+    path.write_text(json.dumps({"runId": run, "status": "completed", "agentCount": 3, "startTime": 1, "durationMs": 1000,
+                                "workflowName": run, "summary": "", "script": "", **data}), encoding="utf-8")
+    t = time.time() - age_s
+    os.utime(path, (t, t))
+    return path
+
+
+def test_a_workflow_run_binds_to_its_task_only_where_one_task_is_named(world, tmp_path):
+    from lib.bridge_cockpit import sessions as sess
+    slugs = {"demo-task", "other-task", "release-notes", "open-bridge"}
+    bind = lambda text, name="x", place="", sid="s", links=None: sess.run_task(  # noqa: E731
+        text, name, sid, slugs, links or {}, root="/home/me/bridge", place=place)
+    assert bind("read work/tasks/demo-task/STATUS.md first") == ("demo-task", ["named"])
+    assert bind("the key task:other-task") == ("other-task", ["named"])
+    assert bind("see work/streams/release-notes/") == ("release-notes", ["named"])
+    assert bind("", name="demo-task") == ("demo-task", ["named"])
+    # two tasks named: no file, rather than the wrong one
+    assert bind("work/tasks/demo-task/ and work/tasks/other-task/") == (None, [])
+    # a longer slug is not the shorter one, a word in prose is no mention
+    assert bind("work/tasks/demo-task-two/STATUS.md") == (None, [])
+    assert bind("the demo-task is mentioned in passing") == (None, [])
+    # an absolute path names a task only under this Bridge's own root, never under another one
+    assert bind("read /home/me/bridge/work/tasks/demo-task/STATUS.md") == ("demo-task", ["named"])
+    assert bind("read /home/me/other-bridge/work/tasks/demo-task/STATUS.md") == (None, [])
+    assert bind("read ~/other/work/streams/demo-task/") == (None, [])
+    # the session link and the folder only confirm a mention: alone they bind nothing
+    assert bind("", sid="s1", links={"s1": {"task": "other-task"}}) == (None, [])
+    assert bind("", place="wt-release-notes") == (None, [])
+    assert bind("see work/streams/release-notes/", place="wt-release-notes") == ("release-notes", ["named", "place"])
+    # a folder that happens to end in a slug never wins over the task the run names
+    assert bind("work/tasks/demo-task/", place="dev-open-bridge") == ("demo-task", ["named"])
+    # every sign agrees: bound; the session is linked to another task: none
+    assert bind("work/tasks/demo-task/", sid="s1", links={"s1": {"task": "demo-task"}}) == ("demo-task", ["named", "session"])
+    assert bind("work/tasks/demo-task/", sid="s1", links={"s1": {"task": "other-task"}}) == (None, [])
+
+
+def transcript(home: Path, project: str, sid: str, cwd: Path) -> None:
+    """The session file beside a session's folder, whose lines carry the folder it ran in"""
+    folder = home / "projects" / project
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / f"{sid}.jsonl").write_text(json.dumps({"type": "summary"}) + "\n"
+                                        + json.dumps({"type": "user", "cwd": str(cwd)}) + "\n", encoding="utf-8")
+
+
+def test_a_workflow_run_of_another_bridge_never_reaches_this_one(world, tmp_path):
+    """Another instance on the machine with an open task of the same slug: its runs stay its own"""
+    now_ms = time.time() * 1000
+    world.clock.now = now_ms
+    home = claude_home(tmp_path, world.root, now_ms)
+    world.app.sessions.base = home
+    other = tmp_path / "other-bridge"
+    (other / "work" / "tasks" / "demo-task").mkdir(parents=True)
+    (other / "bridge-config.yaml").write_text("identity: {}\n", encoding="utf-8")
+    proj = re.sub(r"[^A-Za-z0-9]", "-", str(other))
+    transcript(home, proj, SID2, other)
+    workflow(home, proj, SID2, "wf_foreign", script="Read work/tasks/demo-task/STATUS.md")
+    workflow(home, proj, SID2, "wf_foreign_abs", script=f"Read {other}/work/tasks/demo-task/STATUS.md")
+    # a run in a folder below the other Bridge is the other Bridge's too
+    sub = other / "tools"
+    sub.mkdir()
+    sub_proj = re.sub(r"[^A-Za-z0-9]", "-", str(sub))
+    transcript(home, sub_proj, SID2, sub)
+    workflow(home, sub_proj, SID2, "wf_foreign_sub", script="work/tasks/demo-task/")
+    # a session whose folder is unknown (no session file) is never read
+    workflow(home, "-somewhere-unknown", SID2, "wf_unknown", script="work/tasks/demo-task/")
+    # a plain repository the Bridge works in (no Bridge of its own) may name a task of this one
+    repo = tmp_path / "plain-repo"
+    repo.mkdir()
+    repo_proj = re.sub(r"[^A-Za-z0-9]", "-", str(repo))
+    transcript(home, repo_proj, SID2, repo)
+    workflow(home, repo_proj, SID2, "wf_repo", script="work/tasks/demo-task/")
+    # a run of this Bridge that names the other Bridge's folder by its absolute path
+    workflow(home, re.sub(r"[^A-Za-z0-9]", "-", str(world.root)), SID2, "wf_here_abs",
+             script=f"compare with {other}/work/tasks/demo-task/STATUS.md")
+    world.app.tabs.poll()
+    assert sorted(r["id"] for r in world.app.sessions_state()["runs"]) == ["wf_repo"]
+
+
+def test_a_workflow_run_in_a_folder_that_ends_in_a_slug_binds_nothing_by_that_alone(world, tmp_path):
+    now_ms = time.time() * 1000
+    world.clock.now = now_ms
+    home = claude_home(tmp_path, world.root, now_ms)
+    world.app.sessions.base = home
+    stream = world.root / "work" / "streams" / "open-bridge"
+    stream.mkdir(parents=True, exist_ok=True)
+    (stream / "STATUS.md").write_text("---\nstatus: doing\n---\n", encoding="utf-8")
+    clone = tmp_path / "dev" / "open-bridge"
+    clone.mkdir(parents=True)
+    proj = re.sub(r"[^A-Za-z0-9]", "-", str(clone))
+    transcript(home, proj, SID2, clone)
+    workflow(home, proj, SID2, "wf_topic", script="refactor the parser")
+    workflow(home, proj, SID2, "wf_demo", script="work/tasks/demo-task/ is the plan")
+    world.app.tabs.poll()
+    runs = {r["id"]: r for r in world.app.sessions_state()["runs"]}
+    assert sorted(runs) == ["wf_demo"] and runs["wf_demo"]["task"] == "demo-task" and runs["wf_demo"]["how"] == ["named"]
+
+
+def test_workflow_runs_of_the_last_week_reach_the_page_bound_to_their_task(world, tmp_path):
+    now_ms = time.time() * 1000
+    world.clock.now = now_ms
+    home = claude_home(tmp_path, world.root, now_ms)
+    world.app.sessions.base = home
+    other = world.root / "work" / "tasks" / "other-task"
+    other.mkdir(parents=True, exist_ok=True)
+    (other / "STATUS.md").write_text("---\nstatus: doing\n---\n", encoding="utf-8")
+    proj = re.sub(r"[^A-Za-z0-9]", "-", str(world.root))
+    workflow(home, proj, SID2, "wf_named", script="Read work/tasks/demo-task/STATUS.md", summary="Plan the demo",
+             durationMs=5000, startTime=int(now_ms - 600_000), result={"final": "All done, see notes.md"})
+    workflow(home, proj, SID2, "wf_both", script="work/tasks/demo-task/ and work/tasks/other-task/")
+    workflow(home, proj, SID2, "wf_none", script="nothing to see")
+    workflow(home, proj, SID2, "wf_old", age_s=8 * 86400, script="work/tasks/demo-task/")
+    workflow(home, proj, SID2, "wf_broken").write_text("{nope", encoding="utf-8")
+    workflow(home, proj, SID2, "wf_running", status="running", args="task:other-task", durationMs=None)
+    world.app.tabs.poll()
+    runs = {r["id"]: r for r in world.app.sessions_state()["runs"]}
+    assert sorted(runs) == ["wf_named", "wf_running"]
+    r = runs["wf_named"]
+    assert r["task"] == "demo-task" and r["name"] == "wf_named" and r["summary"] == "Plan the demo"
+    assert r["status"] == "completed" and r["agents"] == 3 and r["how"] == ["named"] and r["seen"] is False
+    assert r["answer"] == "All done, see notes.md" and r["ended_ms"] == int(now_ms - 600_000) + 5000
+    assert "script" not in r                                            # the prompt never leaves the server
+    assert runs["wf_running"]["task"] == "other-task" and runs["wf_running"]["ended_ms"] is None
+    # a run of a task that closed since drops out
+    (other / "STATUS.md").unlink()
+    assert [x["id"] for x in world.app.sessions_state()["runs"]] == ["wf_named"]
+
+
+def test_a_workflow_run_in_a_worktree_of_this_bridge_is_its_own(world, tmp_path):
+    """A worktree of the Bridge's repository carries a Bridge of its own (the user branch): it is this one"""
+    now_ms = time.time() * 1000
+    world.clock.now = now_ms
+    home = claude_home(tmp_path, world.root, now_ms)
+    world.app.sessions.base = home
+    wt = tmp_path / "bridge-wt-demo-task"
+    (wt / "work" / "tasks").mkdir(parents=True)
+    (wt / "bridge-config.yaml").write_text("identity: {}\n", encoding="utf-8")
+    meta = world.root / ".git" / "worktrees" / "bridge-wt-demo-task"
+    meta.mkdir(parents=True, exist_ok=True)
+    (meta / "gitdir").write_text(f"{wt}/.git\n", encoding="utf-8")
+    (wt / ".git").write_text(f"gitdir: {meta}\n", encoding="utf-8")
+    proj = re.sub(r"[^A-Za-z0-9]", "-", str(wt))
+    transcript(home, proj, SID2, wt)
+    workflow(home, proj, SID2, "wf_wt", script="work/tasks/demo-task/")
+    world.app.tabs.poll()
+    runs = world.app.sessions_state()["runs"]
+    assert [(r["id"], r["task"], r["how"]) for r in runs] == [("wf_wt", "demo-task", ["named", "place"])]
+
+
+def test_a_workflow_run_is_marked_checked_once_and_the_mark_is_kept(world, tmp_path):
+    now_ms = time.time() * 1000
+    world.clock.now = now_ms
+    home = claude_home(tmp_path, world.root, now_ms)
+    world.app.sessions.base = home
+    workflow(home, re.sub(r"[^A-Za-z0-9]", "-", str(world.root)), SID2, "wf_named", script="work/tasks/demo-task/")
+    world.app.tabs.poll()
+    sent = []
+    world.app.broadcast = lambda ev, payload: sent.append((ev, payload))
+    res = world.act("run_seen", id="wf_named")
+    assert res["ok"] is True
+    assert [r["seen"] for r in world.app.sessions_state()["runs"]] == [True]
+    assert any(ev == "sessions" and p["runs"][0]["seen"] for ev, p in sent)
+    line = (world.state / "audit.log").read_text().splitlines()[-1].split()
+    assert line[1:3] == ["run_seen", "wf_named"]
+    assert "wf_named" in json.loads((world.state / "state.json").read_text())["runs_seen"]
+    refused(world, "stale_row", "run_seen", id="wf_nothing")
+    refused(world, "invalid_argument", "run_seen", id="../etc")
+
+
+def test_task_detail_lists_the_files_of_its_folder(world):
+    folder = world.root / "work" / "tasks" / "demo-task"
+    for rel in ("notes.md", "research/a.md", "plan.yaml", "video/x.md", "deliverables/y.md", ".hidden/z.md",
+                "research/deliverables/q.md", "image.png"):
+        (folder / rel).parent.mkdir(parents=True, exist_ok=True)
+        (folder / rel).write_text(f"# {rel}\n", encoding="utf-8")
+    data = json.loads(world.request("GET", "/api/task?slug=demo-task", headers=world.cookie)[2])
+    assert [f["path"] for f in data["files"]] == ["notes.md", "plan.yaml", "research/a.md"]
+    assert data["files"][0]["size"] == len("# notes.md\n")
+    # one of them, to read
+    status, _, raw = world.request("GET", "/api/task?slug=demo-task&file=research/a.md", headers=world.cookie)
+    one = json.loads(raw)
+    assert status == 200 and one["file"] == "research/a.md" and one["text"] == "# research/a.md\n" and one["cut"] is False
+    for bad in ("video/x.md", "image.png", "STATUS.md", "nope.md"):
+        assert world.request("GET", f"/api/task?slug=demo-task&file={bad}", headers=world.cookie)[0] == 404, bad
+    for bad in ("../other-task/STATUS.md", "/etc/passwd", "a\\b.md"):
+        assert world.request("GET", f"/api/task?slug=demo-task&file={urllib.parse.quote(bad)}", headers=world.cookie)[0] == 400, bad
+
+
+def test_every_listed_file_can_be_read_whatever_its_name(world):
+    folder = world.root / "work" / "tasks" / "demo-task"
+    for rel in ("Übergabe.md", "notes (v2).md", "a, b.yaml", "café/plan.md"):
+        (folder / rel).parent.mkdir(parents=True, exist_ok=True)
+        (folder / rel).write_text(f"# {rel}\n", encoding="utf-8")
+    data = json.loads(world.request("GET", "/api/task?slug=demo-task", headers=world.cookie)[2])
+    listed = [f["path"] for f in data["files"]]
+    assert sorted(listed) == sorted(["Übergabe.md", "notes (v2).md", "a, b.yaml", "café/plan.md"])
+    for rel in listed:
+        status, _, raw = world.request("GET", f"/api/task?slug=demo-task&file={urllib.parse.quote(rel)}", headers=world.cookie)
+        assert status == 200 and json.loads(raw)["text"] == f"# {rel}\n", rel
+    for bad in ("..", "./notes.md", "x/../../other-task/STATUS.md", ".hidden.md", "a\x00b.md", "a\nb.md"):
+        assert world.request("GET", f"/api/task?slug=demo-task&file={urllib.parse.quote(bad)}", headers=world.cookie)[0] == 400, bad
+
+
+def test_the_file_list_never_walks_into_hidden_or_dependency_folders(world, monkeypatch):
+    from lib.bridge_cockpit import details
+    folder = world.root / "work" / "tasks" / "demo-task"
+    for rel in ("repo/node_modules/pkg/README.md", "repo/.git/x.md", "a/README.md", "notes.md"):
+        (folder / rel).parent.mkdir(parents=True, exist_ok=True)
+        (folder / rel).write_text("x\n", encoding="utf-8")
+    walked = []
+    real = details.os.walk
+    def spy(top, *a, **k):
+        for entry in real(top, *a, **k):
+            walked.append(Path(entry[0]))
+            yield entry
+    monkeypatch.setattr(details.os, "walk", spy)
+    assert [f["path"] for f in details.folder_files(folder)] == ["a/README.md", "notes.md"]
+    assert not any(p.name in ("node_modules", ".git") for p in walked)
+
+
+def test_a_long_file_is_read_only_up_to_its_cut(world, monkeypatch):
+    from lib.bridge_cockpit import details
+    folder = world.root / "work" / "tasks" / "demo-task"
+    (folder / "long.md").write_text("x" * (details.FILE_TEXT_MAX * 3), encoding="utf-8")
+    one = details.task_file(world.root, "demo-task", "long.md")
+    assert one["cut"] is True and len(one["text"]) == details.FILE_TEXT_MAX
+    (folder / "exact.md").write_text("y" * details.FILE_TEXT_MAX, encoding="utf-8")
+    assert details.task_file(world.root, "demo-task", "exact.md")["cut"] is False
+
+
+def test_a_file_of_a_closed_task_is_read_from_its_folder(world):
+    closed = world.root / "work" / "done" / "2026-01" / "old-task"
+    closed.mkdir(parents=True)
+    (closed / "STATUS.md").write_text("---\nstatus: done\n---\n", encoding="utf-8")
+    (closed / "notes.md").write_text("# kept\n", encoding="utf-8")
+    q = "slug=old-task&path=work/done/2026-01/old-task"
+    data = json.loads(world.request("GET", f"/api/task?{q}", headers=world.cookie)[2])
+    assert data["kind"] == "done" and [f["path"] for f in data["files"]] == ["notes.md"]
+    status, _, raw = world.request("GET", f"/api/task?{q}&file=notes.md", headers=world.cookie)
+    assert status == 200 and json.loads(raw)["text"] == "# kept\n"
+
+
+def test_task_detail_has_no_files_where_its_folder_holds_only_status(world):
+    data = json.loads(world.request("GET", "/api/task?slug=demo-task", headers=world.cookie)[2])
+    assert data["files"] == []

@@ -81,6 +81,8 @@ their defaults:
 | `triage_daily` | `false` | `true`: the triage sorts every task and inbox item once a day by itself (a small model call, a few cents); otherwise only on "sort again" |
 | `chat_layout` | `classic` | `workspaces`: the Chat tab as cmux shows it, see [The chat as cmux](#the-chat-as-cmux) |
 | `chat_keep_hours` | `24` | quick chats and A2A agent conversations untouched this long go to the archive (below); 0 keeps them, then only the limit of 30 applies |
+| `work_view` | `due` | the view the work tab opens on: `due`, `source` (By source), `jev` (By Jev) or `files` (Files), see [The files view](#the-files-view); a view the tab does not offer opens Due. A click on the tab's switch still picks another for this browser, until the key changes |
+| `focus_to_files` | `false` | `true`: when the focus on the start page runs out, its calm card and its last step lead on into the Files view of the work tab rather than to the tasks |
 | `snapshot_minutes` | `60` | while the server runs, save the cmux layout this often, only when it changed; `0` = only on "Save layout now" |
 | `idle_minutes` | `10` | a tab the terminal reports as waiting that has been still this long and whose last words ask nothing (no question mark, no options, nothing typed in its prompt) is done, not waiting: it leaves "waits for you" and counts as "to review" in its area; a tab whose item or task is settled is done at once; it reads the tab's screen, so without a terminal driver that serves screens (or with the questions off) only the settled rule applies and every other tab keeps waiting; an idle tab raises no "waits for an hour" and the decision guide does not read it; `0` = off |
 | `person_name` | none | how Claude and Jev name you; without it they say "the user" |
@@ -186,7 +188,8 @@ happened today" in the middle of the Today page.
 
 A page with `group: work` has no tab either: it folds into the Today tab, which
 then carries that page's title (Work, say) and a switch over its left column
-with three views. **Due** is the four blocks below, and the tab opens on it.
+with three views. **Due** is the four blocks below, and the tab opens on it
+unless `cockpit.work_view` names another view.
 **By source** is the work page itself, its sections as labels. **By Jev** is the
 Jev picture (the matrix and the plan) fed by the work page's order, and it
 stands only where that page has `jev:` and Jev is on. With such a page the Jev
@@ -212,6 +215,141 @@ The buttons speak four verbs everywhere, also in the Telegram inbox watcher:
 reports, then waits), **Ask** (a short read-only answer in the chat) and
 **Close** (done, not doing, or more). "To tab", "Message" and "View" only stand
 where a tab already runs.
+
+### The files view
+
+**Files** is one more view of the work tab, on every Bridge, with or without a
+work page, beside Due and never in its place: Due stays, and stays the view the
+tab opens on, unless `cockpit.work_view: files` says otherwise (below). On a Bridge without a work page
+this is what makes the tab's view switch appear ("Due | Files"), since without
+it the view could not be reached. It shows one task at a time as
+a file, on one framed surface centred at a reading width (it stays in the
+middle when the sidebar is hidden). Above it stand the view switch and a small
+search field. On the surface: an eyebrow (File, "2 of 16", status, kind and
+priority, the slug on the right), the task's title as the one heading, and the
+situation in one sentence (the `headline` of its STATUS.md, else what the
+triage made of it, always with where that comes from and its date). Under it
+the next step as the one strong block, with the four verbs as buttons, then the
+file's drawers as rows on hairlines, folded: Result, Inbox, History, Files,
+References (the `related:` paths of STATUS.md) and Sections, each only when it
+holds something, and a question to the file. At the foot of the surface walk
+**Previous file** and **Next file**, with the position between them ("2 of
+16"; a click on it shows the whole queue, a click on one opens it) and the
+title of the next file beside Next. A file taller than the screen keeps that
+foot in view. The view is made for the mouse and names no key; with the
+shortcuts switched on in the settings, `n` and `p` walk it too.
+The queue is the one the focus on the start page walks, in one function
+(`queueOf` in logic.js), only wider: a tab that asks about a task comes first,
+then a start whose result waits, then a task with an open inbox item, then
+every task in `doing` or `review`, whatever its priority (the focus takes only
+P0 and P1 of them, and keeps doing so). A file opens only for a task in
+`doing` or `review`: one the model knows no status of (a backlog section of a
+profile, a task closed since) opens none. A tab, a result or an inbox item
+opens its task's file wherever the task's row stands, also one waiting on
+someone else; on its own such a task stays out. Backlog, blocked and resting
+tasks stay out, and so does what has no task: a loose inbox item stays on
+Start. A file is the task's own row, never a board item that names the same
+task. The next step is derived and never stored: the tab's question, the
+result, the oldest open inbox item of the task (one put off does not count,
+one waiting for a yes does), else the `next:` of its STATUS.md, each
+with where it comes from and since when; with none of these the file says "No
+next step known" rather than making one up. A file a tab asks about keeps the
+verbs of its task, the tab named beside them. Every task row of the model
+carries `status` and `next` for it (`model.task_next`).
+
+The Result drawer holds what came back for the task: the starts of the
+return channel for the task or its inbox items, as the start page shows them
+(with their ways on and their forget), and the workflow runs of the last week
+that belong to it. A run belongs to a task only where it names exactly one
+open task: `task:<slug>`, `work/tasks/<slug>/` or `work/streams/<slug>/` in
+the run's name, summary, arguments or script (an absolute path counts only
+under this Bridge's own root), or a name that is the slug. A run that names
+two tasks belongs to neither. The session it ran in being linked to the task,
+and the folder it ran in ending in the slug, only confirm a mention: alone
+they bind nothing, and a session linked to another task undoes it. Only the
+runs of this Bridge are read: those whose session ran in the Bridge, a folder
+inside it, one of its git worktrees, or a folder that holds no Bridge of its
+own (the folder comes from the session's own file). The runs of another
+Bridge on the machine, and of a session whose folder is unknown, never reach
+this page. Each run says how it
+stands, since when, why it belongs here and what it left. A finished run
+whose result is not checked yet is a result that waits: it puts the file in
+the second place of the queue, its step reads "Check the result of ...", and
+the drawer stands open until **Checked** (the verb `run_seen`, kept in
+`state.json`, key `runs_seen`). The runs reach the page with the sessions
+(`runs` of the `sessions` event), read again every 30 seconds; the script of
+a run never leaves the server.
+
+The Files drawer lists the files of the task's folder besides STATUS.md:
+every `*.md` and `*.yaml` up to eight folders deep, never in a `video/`,
+`deliverables/` or `node_modules/` folder, never a hidden file or a link; the
+listing never walks into such a folder. Any name can be read, umlauts and
+brackets too, as long as it has no slash, backslash or control character and
+does not start with a dot. A long file is read up to its first 40000
+characters and says it was cut. A click reads one in
+place, Markdown as formatted text and anything else as it stands, with its
+path (`GET /api/task?slug=&file=`, which reads only a file that list names).
+A folder with only STATUS.md shows no Files drawer.
+
+On top of the Files view stands a search field of its own. It searches every
+task, stream and closed task (`work/tasks/`, `work/streams/`, `work/done/`),
+`work/log.md` and `work/archive/`: every `*.md` and `*.yaml`, never inside a
+`video/` or `deliverables/` folder, never a hidden file, a link or anything
+outside the Bridge. The words are plain text, never a pattern, matched without
+regard to case one letter at a time ("ß" stays "ß", it never stands for "ss"),
+and a file is a hit when its slug, its title and its lines hold every word
+between them. A file is one folder, so an open task and a closed one with the
+same slug are two files, each with its own hits; a file in a folder that is no
+slug (`work/tasks/_briefings/`) is listed by its path, with nothing to open. The
+results come by file, best first: the files whose slug or title holds every
+word, then those with a hit in their STATUS.md, then the rest, open before
+closed; a log row counts for the file its context column or its text names.
+A click opens a file, a closed one too: one in the queue is walked to, any
+other opens beside the queue on the same surface, with its drawers and "Back to
+the queue" at its foot, a closed one by its folder (`GET /api/task?slug=&path=`).
+While such a file is open the results fold to one line with the words searched
+("Show results" unfolds them, "Clear" drops them). The same
+search runs as a command, for a chat session as for a terminal: `python3 scripts/work-find.py gateway september` (`--json` for the
+whole answer). It uses `rg` when it is installed and plain Python when not,
+with the same answer either way (`GET /api/find?q=` runs that command).
+
+Under the drawers a file takes a question ("Ask this file"): a quick chat of
+its own (section 5, read only) with the file's folder and cover sent along as
+data. An open task becomes what the chat is about, so the chat leaves its list
+once the task closes; a closed one is never named, or the chat would be taken
+into the archive at once. With no file open, a question about the results
+sends the result list along instead. An open task whose next step nobody
+names, in the queue or opened from the search, offers "Suggest next step":
+one read-only question whose answer stands in the file and nowhere else (not
+in the chat lists, no note, no spinner on the chat tab); "Dismiss" drops it at
+any time. Nothing is written until you press Take over, which keeps the step
+in STATUS.md as `next: {what: ...}` with a dated note (`task.py next`, the
+verb `task_set_next`).
+
+**Switching the default.** Two keys of the `cockpit:` block (section 1) let
+the Files view take over step by step, each off by default, so a Bridge that
+sets neither sees the work tab as before:
+
+- `work_view: files` opens the work tab on Files (`due`, `source` and `jev`
+  name the other views; a view the tab does not offer opens Due). A click on
+  the tab's switch still picks another view for this browser, and that click
+  holds until the key changes: the first visit after a change opens the view
+  the key names, once, whatever was clicked before. Setting the key back to
+  `due` brings Due back the same way.
+- `focus_to_files: true` lets the focus on the start page lead on into Files
+  when it runs out: its calm card says "Continue with the files" in place of
+  "Open the tasks", and its last step offers the same where the bar would say
+  "That was the last one in this list"; `n` on the last step goes there too.
+  The focus itself keeps what it walks (P0 and P1 of the tasks).
+
+Both take effect with the next start of the cockpit (`bridge-cockpit.py stop`,
+then `open`) and a reload of the page. The page says which view it opened: every opening of the work
+tab, its view switch, the search of the command box and the focus's way on
+leave one `page_view` line in the audit log with `view=` (`due`, `area`, `jev`
+or `dossier`, the page's ids for Due, By source, By Jev and Files; section 4),
+so how often each view is used can be counted before the default changes, for
+instance with
+`grep -c ' page_view briefing view=dossier' .bridge/cockpit/audit.log`.
 
 ### The start page
 
@@ -1552,15 +1690,16 @@ the focus is not in a text field:
 | `g` then `t` | the agent tabs |
 | `g` then `a` | the start page, the focus on its Areas; there `j` / `k` move and `Enter` picks |
 | `Esc` | also: on Work, Chat or Sessions with nothing open, show every area again |
-| `n` / `p` | the next / previous entry of the walk you are in: a detail opened from a list, the Today list, the Chat page's tabs, the focus on the start page |
+| `n` / `p` | the next / previous entry of the walk you are in: a detail opened from a list, the Today list, the Chat page's tabs, the focus on the start page, the Files view |
 | `Alt` + `1` to `9` | the page tabs |
 | `?` | help |
 
 The row keys (`j` `k` `Enter` `x` and the five letters) act on the Briefing
 page only; `n` and `p` act while a detail opened from a list is open (the item
 drawer included), on the Today list with a row open in the center, on the
-Chat page (where `n` starts the walk through the tabs that want you) and on
-the start page in the focus view; the others work on every page. A text field keeps every key,
+Chat page (where `n` starts the walk through the tabs that want you), on
+the start page in the focus view (with `cockpit.focus_to_files`, `n` on its
+last step opens the Files view) and in the Files view of the work tab; the others work on every page. A text field keeps every key,
 `Alt` + a digit included, because on many keyboards that is how a bracket
 or a pipe is typed: leave the field with `Esc` first, for instance after
 the Chat page put the cursor in its box.
@@ -1570,6 +1709,10 @@ number a row shows and the letter of the table above. A row
 with a running tab jumps there instead of starting a second one, and `a` or
 `w` is refused for an entry only you can do, a row that waits for someone else,
 and a yes already given.
+A text that starts with `?` is no code but a search: `?gateway september`
+opens the work tab on its Files view with what the search found, for this
+visit only: the next load opens the work tab on the view it had before. Every
+code stays as it was.
 
 ## 4. Safety model
 
@@ -1669,6 +1812,14 @@ nothing a stranger could trigger:
   rows, judge), `/api/jev/run` and `/api/jev/rank` (`jev_run`, `jev_rank`,
   requests, rows and model sent to Jev) and a triage run (`triage`, click or
   daily, number of items, model; a click while one runs says `started=false`).
+  `GET /api/find` is a read: it runs `scripts/work-find.py` through the
+  runner's allowlist with the words as one argument after `--`, leaves no
+  line, and refuses a query shorter than 2 or longer than 200 characters or
+  one with a control character before anything runs.
+  `/api/seen` is the page's own measure: opening a page or a view of it
+  leaves `page_view`, the page id and `view=` (the work tab's view, the start
+  page's view, else `-`), nothing more. The first line waits for the model, so
+  a remembered view is measured as what it is.
   Read-only verbs and requests refused before anything happened leave none;
 - a question for Claude carries a signature (HMAC-SHA256) made with
   `relay.key`, which lives outside the Bridge in a folder only you can open
@@ -1907,7 +2058,7 @@ share or clean up.
 | `stdout.log` | what the process itself prints: the dated line of each start, and a crash before the server is up | no |
 | `audit.log` | one line per write action, question, route, Jev request and triage run | no: ids and counts only, though an inbox id carries a slug of its title |
 | `history.json` | what was closed, dropped, settled or hid, with its undo (readable by you only) | yes: the titles |
-| `state.json` | rows hidden on the page, rows marked done or not doing, team runs started from the page, the start page's tiles and pins, how the first-run tour ended | yes: the title of each row marked done or not doing |
+| `state.json` | rows hidden on the page, rows marked done or not doing, team runs started from the page, the start page's tiles and pins, how the first-run tour ended, the workflow runs marked as checked | yes: the title of each row marked done or not doing |
 | `view.json` | the last briefing, shown at once on the next start until a fresh one arrives | yes: the whole briefing |
 | `days.json` | the day book: each quota's use per day and the counts of each day (section 3), two weeks | no: numbers under ids |
 | `launches.json` | the starts of the last days for the return channel, with model, effort and who chose them | yes: the titles |
@@ -2096,6 +2247,11 @@ The page's own buttons and help come in German and English
 (`cockpit.language`). The briefing's words (headline, tab names, "today") are
 yours: set them in `view.labels`, for example
 `labels: {page_status: Systeme, today: heute}`.
+
+The Files view calls an open or closed task a file ("File", "Files", "Next
+step", "Search the files"); in German the page says "Akte" and "Akten". Like
+every word of the page itself they come from the page's own table in both
+languages (`scripts/web/text.js`), not from the profile.
 
 Opening a `file://` link on the page is not possible; the page shows its path
 to copy.

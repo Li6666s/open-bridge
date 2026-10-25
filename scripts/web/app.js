@@ -16,7 +16,7 @@ import {
   upsertRecord, addFeed, feedEvents, workPageOf, withLaunch, routesToFetch, newerTicker, tickerRemember,
   applyQuickLive, quickLiveSnapshot, whenShown, pruneAnswered, organizeGroups, organizeTicks, roomsOf, askContext,
   listedChats, tabWalkView, walkRefs, inProject, AREA_PAGES, areaScope, scopeKeep, scopeRow, escapeStep, keyScope, TOUR_VERSION, tourIndex, tourOffered, tourSteps, queueLiveKeys, queueView, dayQueue, workViewOf,
-  focusIndex, homeChosen, homeListParts, homeQueue, homeView, openStream, mergePages,
+  focusIndex, homeChosen, homeListParts, homeQueue, homeView, openStream, mergePages, fileQueue, commandSearch, workViewWrites, focusStep,
 } from './logic.js'
 import { T, language, setControl, setLanguage } from './text.js'
 
@@ -125,6 +125,7 @@ const store = createStore({
   ticker: null,        // the news ticker (state.ticker); null: an older server, the band and its settings stay hidden
   guide: null,         // the decision guide of waiting tabs (state.guide); null: an older server, the guide stays hidden
   tour: null,          // the first-run tour (state.tour): { enabled, done }; null: an older server, it never starts by itself
+  work: null,          // the work tab as the config sets it (state.work): { view, focus_to_files }; null: an older server, as before
   rooms: null,         // the chat as cmux (state.rooms: layout, root, control, Bridges); null: an older server, the classic chat
   launchRoutes: {},    // per row key the recommendation of Auto: { title, status: loading|ok|error, route }   // null: not known yet, every button shows; a list: only what the terminal driver serves
   notes: [], toasts: [], conn: 'connecting', connMs: Date.now(), now: Date.now(), mock: MOCK,
@@ -141,6 +142,10 @@ const store = createStore({
     workView: load('bridge-cockpit.workTab', 'due'),
     workKind: load('bridge-cockpit.workKind', null),
     theme: THEME_OVERRIDE ?? load('bridge-cockpit.theme', 'auto'), drawer: null, item: null, pane: 'day', confirm: null, askFallback: null, pageDetail: false, queue: null, focusAt: null,
+    // where the files view of the work tab stands in its queue (views/dossier.js), held by the task key
+    dossierAt: null,
+    // a file opened from the search beside that queue (its slug), and the suggested next step asked in one: { slug, conv }
+    dossierOpen: null, suggest: null,
     settingsSection: load('bridge-cockpit.settingsSection', 'start'),
     busy: {}, snapshotText: null, openMsg: null, tabView: null, room: null, quickConv: null, agentPeer: null, agentConv: null, agentMode: 'question', agentsListHidden: load('bridge-cockpit.agentsList', 'shown') === 'hidden',
     railHidden: load('bridge-cockpit.rail', 'shown') === 'hidden',
@@ -161,6 +166,8 @@ const store = createStore({
   },
   details: { inbox: {}, task: {} },
   more: {},
+  // the search of the files view (/api/find): { q, status: loading|ok|error|tooShort, data, error }; null: none
+  find: null,
 })
 
 const setUi = patch => store.set(s => ({ ...s, ui: { ...s.ui, ...(typeof patch === 'function' ? patch(s.ui) : patch) } }))
@@ -247,6 +254,10 @@ updateChromeGap()
 
 // ---------------------------------------------------------------- live events
 
+// whether a page view was left with the model at hand: the first one waits for it, since the remembered view
+// and the start view read it (pageSeen, applyState)
+let bootSeen = false
+
 function applyState(payload) {
   store.set(s => ({
     ...s,
@@ -268,13 +279,31 @@ function applyState(payload) {
     ticker: payload.ticker ?? s.ticker,
     guide: payload.guide ?? s.guide,
     tour: payload.tour ?? s.tour,
+    work: payload.work ?? s.work,
     rooms: payload.rooms ?? s.rooms,
     notes: Array.isArray(payload.notes) ? payload.notes.slice(-20).map(n => ({ ...n, ms: 0 })) : s.notes,
   }))
   // the answers being written, whole: a page that connects in the middle of one shows all of it
   if (payload.quick_live) quickLive.set(quickLiveSnapshot(payload.quick_live))
+  // the config's view first: a remembered check that moved onto a page then opens in By source (fixPage)
+  workDefault()
   fixPage()
   offerTour()
+  if (!bootSeen && payload.model) pageSeen(store.get().ui.page)
+}
+
+let workOffer = true   // a visit takes the work tab's view from the config once, on its first state with one
+
+/** The view the work tab opens on, from cockpit.work_view: a config changed since this browser saw it wins once
+ *  over the remembered click, after that the click holds (logic.js workViewStart) */
+function workDefault() {
+  const s = store.get()
+  if (!workOffer || !s.work) return
+  workOffer = false
+  const stored = { workTab: load('bridge-cockpit.workTab', null), workTabSeen: load('bridge-cockpit.workTabSeen', null) }
+  const { view, writes } = workViewWrites(stored, s.work?.view)
+  for (const [k, v] of Object.entries(writes)) save(`bridge-cockpit.${k}`, v)
+  if (view !== s.ui.workView) setUi({ workView: view })
 }
 
 let tourOffer = true   // a visit offers the tour once, on its first state; Help and Settings start it again
@@ -337,7 +366,8 @@ const handlers = {
     for (const c of q?.convs ?? []) {
       const was = before.find(b => b.id === c.id)
       const last = c.turns?.[c.turns.length - 1]
-      if (was?.running && !c.running && last?.a && !(inView && ui.quickConv === c.id)) answeredNote(last.q, 'ask', c.id)
+      // a suggested next step shows in its file, never as a chat answer
+      if (was?.running && !c.running && last?.a && c.place !== 'suggest' && !(inView && ui.quickConv === c.id)) answeredNote(last.q, 'ask', c.id)
     }
   },
   triage(tr) {
@@ -565,12 +595,24 @@ async function copy(text) {
   }
 }
 
+/** The files view's measure: which page, and which view of it, was opened (POST /api/seen, one page_view line
+ *  in the server's audit log). Nothing waits for the answer; an older server without the endpoint says 404 */
+function pageSeen(page) {
+  const s = store.get()
+  // a page measured with the model at hand counts as the first one: applyState leaves none after it (fixPage)
+  if (s.model) bootSeen = true
+  const view = page === 'briefing' ? workViewOf(s.ui.workView, workPageOf(s.model?.pages), s.jev)
+    : page === START_PAGE ? homeView(homeChosen(s.model, s.home)) : null
+  api.seen(page, view)
+}
+
 async function loadDetail(kind, id) {
   // `ver` ties the entry to the collect run it was read for; the old data stays visible meanwhile
   const ver = store.get().model?.collected_ms ?? 0
   store.set(s => ({ ...s, details: { ...s.details, [kind]: { ...s.details[kind],
     [id]: { status: 'loading', ver, data: s.details[kind][id]?.data ?? null } } } }))
-  const res = kind === 'inbox' ? await api.inbox(id) : await api.task(id)
+  // a task by its slug, or one folder of it (a closed copy the files view opened from the search)
+  const res = kind === 'inbox' ? await api.inbox(id) : id.includes('/') ? await api.task(id.split('/').pop(), id) : await api.task(id)
   const entry = res.ok ? { status: 'ok', data: res.data, ver } : { status: 'error', error: errorText(res.error, T()), ver }
   if (res.status === 401) failNote(res)
   store.set(s => ({ ...s, details: { ...s.details, [kind]: { ...s.details[kind], [id]: entry } } }))
@@ -707,6 +749,7 @@ const ctl = {
     // a page with the tab column beside it closes the tab drawer a folded page opened
     const drawer = s.layout === 'wide' && railShown(id, s.rooms?.layout, s.ui.railHidden) && s.ui.drawer === 'tabs' ? null : s.ui.drawer
     setUi({ page: id, pageDetail: false, queue: null, drawer, pane: s.layout === 'narrow' ? 'day' : s.ui.pane, workersFilter: null })
+    pageSeen(id)
   },
   // the task check: on the page where inbox and tasks stand together (its tasks label chosen), else its own tab
   openReview() {
@@ -872,7 +915,68 @@ const ctl = {
       : { order: s.jevOrder[page]?.order ?? null, error: res.error?.message ?? 'error', running: false } } }))
     if (force && res.ok && res.data.order) ctl.setWorkView('jev')
   },
-  setWorkView: v => { save('bridge-cockpit.workTab', v); setUi({ workView: v }) },
+  setWorkView: v => { save('bridge-cockpit.workTab', v); setUi({ workView: v }); pageSeen('briefing') },
+  // the files view of the work tab for this visit only (the search of the command box, the focus's way on with
+  // cockpit.focus_to_files): the saved view stays the default (it changes by a click on the switch or the config)
+  openFiles() {
+    setUi({ workView: 'dossier', dossierOpen: null })
+    ctl.setPage('briefing')   // measures the page view, the files view already set
+  },
+  dossierWalk: (id, i) => setUi({ dossierAt: { id, i }, dossierOpen: null }),
+  // the search of the files view: an answer for words no longer asked is dropped
+  async findFiles(q) {
+    const words = String(q ?? '').replace(/\s+/g, ' ').trim()
+    if (words.length < 2) return store.set(s => ({ ...s, find: { q: words, status: 'tooShort', data: null, error: null } }))
+    store.set(s => ({ ...s, find: { q: words, status: 'loading', data: s.find?.data ?? null, error: null } }))
+    const res = await api.find(words)
+    if (store.get().find?.q !== words) return
+    store.set(s => ({ ...s, find: res.ok ? { q: words, status: 'ok', data: res.data, error: null }
+      : { q: words, status: 'error', data: null, error: res.error?.message ?? String(res.status) } }))
+  },
+  clearFind: () => store.set(s => ({ ...s, find: null })),
+  // a found file opens in the queue where it stands there, else beside it (a backlog task); a closed one always
+  // beside it, by its folder, since a slug can be open and closed at once
+  openFile(slug, path) {
+    const closed = typeof path === 'string' && path.startsWith('work/done/')
+    const s = store.get()
+    const queue = closed ? [] : fileQueue(s.tabs?.tabs ?? [], s.model, s.now || Date.now(), s.sessions?.runs)
+    const i = queue.findIndex(x => x.slug === slug)
+    setUi(i >= 0 ? { dossierAt: { id: queue[i].id, i }, dossierOpen: null } : { dossierOpen: closed ? path : slug })
+  },
+  closeFile: () => setUi({ dossierOpen: null }),
+  // one file of a task's folder (the Files drawer), read in place; `path` the folder of a closed copy, or null
+  taskFile: (slug, file, path) => api.taskFile(slug, file, path),
+  // a question in a file or about the results: a quick read-only chat with the file (or the list) as data;
+  // `task` names an open task only (dossier.js), the server checks it again
+  askFile: (text, context, task) => withBusy('ask:free', 'free', async () => {
+    const ui = store.get().ui
+    const args = { text, ...(context ? { context } : {}), ...(task ? { task } : {}) }
+    const res = await api.ask('free', args, { via: 'quick', model: ui.quickModel })
+    if (res.ok && res.data?.conv) {
+      setUi({ tabView: '@ask', quickConv: res.data.conv, openMsg: null })
+      return true
+    }
+    failNote(res)
+    return false
+  }),
+  // a next step suggested for a file: read only, in a place of its own outside the chat lists; shown in the file
+  suggestNext: (slug, context) => withBusy('ask:suggest', 'free', async () => {
+    const res = await api.ask('free', { text: T().dossier.suggest.ask, ...(context ? { context } : {}), task: slug },
+      { via: 'quick', place: 'suggest', model: store.get().ui.quickModel })
+    if (res.ok && res.data?.conv) {
+      setUi({ suggest: { slug, conv: res.data.conv } })
+      return true
+    }
+    failNote(res)
+    return false
+  }),
+  dismissSuggest: () => setUi({ suggest: null }),
+  // only this click writes it: next: in STATUS.md with a dated note (verb task_set_next)
+  async takeNext(key, text) {
+    const r = await act('task_set_next', { key, text })
+    if (r?.ok) setUi({ suggest: null })
+    return !!r?.ok
+  },
   // the Jev view of the work tab: the first request of a day orders by itself (daily), the button orders anew
   jevWork: async (page, force) => {
     const res = await api.post('/api/jev/rank', { page, force: !!force, daily: !force })
@@ -1157,6 +1261,13 @@ const ctl = {
     return runPlan(plan)
   },
   async runCommand(text) {
+    // ?words searches the files: the work tab opens on its files view with the results; every code stays as it was
+    const search = commandSearch(text)
+    if (search !== null) {
+      ctl.openFiles()
+      if (search) await ctl.findFiles(search)
+      return true
+    }
     const codes = parseShortcut(text)
     if (!codes) {
       pushNote({ text: T().notCode(text.trim()), tone: 'warn' })
@@ -1344,13 +1455,22 @@ function onKey(e) {
     const to = key === 'n' ? v.next[0] : v.prev
     return to ? ctl.walkTab(to.key, { focus: true }) : undefined
   }
+  // n / p in the files view of the work tab: the same walk its bar takes (views/dossier.js)
+  if ((key === 'n' || key === 'p') && s.ui.page === 'briefing' && !s.ui.drawer && !s.ui.pageDetail
+    && workViewOf(s.ui.workView, workPageOf(s.model?.pages), s.jev) === 'dossier') {
+    const queue = fileQueue(s.tabs?.tabs ?? [], s.model, s.now || Date.now(), s.sessions?.runs)
+    const to = focusIndex(queue, s.ui.dossierAt) + (key === 'n' ? 1 : -1)
+    e.preventDefault()
+    return queue[to] ? ctl.dossierWalk(queue[to].id, to) : undefined
+  }
   // n / p on the start page in the focus view: the same walk its bar takes
   if ((key === 'n' || key === 'p') && s.ui.page === START_PAGE && !s.ui.drawer && !s.ui.pageDetail
     && homeView(homeChosen(s.model, s.home)) === 'focus') {
     const queue = homeQueue(homeListParts(s.tabs?.tabs ?? [], s.model, { pins: s.home?.pins ?? [] }))
-    const to = focusIndex(queue, s.ui.focusAt) + (key === 'n' ? 1 : -1)
     e.preventDefault()
-    return queue[to] ? ctl.focusWalk(queue[to].id, to) : undefined
+    // past the last step the focus leads on into the files view where cockpit.focus_to_files says so
+    const step = focusStep(queue, s.ui.focusAt, key, !!s.work?.focus_to_files)
+    return step?.files ? ctl.openFiles() : step ? ctl.focusWalk(queue[step.to].id, step.to) : undefined
   }
   // j / k in the areas of the start page walk its lines; Enter is the button's own click
   const areas = document.activeElement?.closest?.('#home-areas-list')
@@ -1406,6 +1526,7 @@ async function boot() {
     transport = mock.createMockTransport({
       lang: params.get('lang') || 'en', offline: params.get('offline') === '1', empty: params.get('empty') === '1',
       auth: params.get('auth') === '0' ? false : undefined, tour: params.get('tour') === '1',
+      work: params.get('work'), focusToFiles: params.get('focus_to_files') === '1',
     })
   }
   api = createApi(transport)
@@ -1428,6 +1549,7 @@ async function boot() {
     warnings: Array.isArray(b.data.config_warnings) ? b.data.config_warnings : [] } }))
   if (MOCK) pushNote({ text: T().mockNote, tone: 'info' }, { toast: false })
 
+  // the page view at boot is measured in applyState, once the model and the home settings came
   openStream(api, handlers, onConn, { apply: applyState, fail: failNote })
 
   document.addEventListener('keydown', onKey)

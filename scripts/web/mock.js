@@ -179,6 +179,7 @@ function row(over) {
     has_action: false, inbox_state: null, inbox_key: null, mark: null, is_new: false, is_changed: false,
     tab: null, actions: [{ id: 'ask', primary: false, dim: false }], selectable: false, starting: false,
     adopt_candidates: [], team: null, team_suggestions: [], closable: false, settle: ['done', 'not_doing'], review: null,
+    status: null, next: null,
     ...over,
   }
 }
@@ -387,7 +388,7 @@ export function buildState(now = Date.now(), opts = {}) {
     }),
     release: row({
       key: 'task:alpha-release', bucket: 'do', section: 'now', title: 'Prepare the alpha release notes',
-      why: ['tab asks for permission'], sources: ['tasks'], task: 'alpha-release', priority: 'P0', urgency: 'now',
+      why: ['tab asks for permission'], sources: ['tasks'], task: 'alpha-release', priority: 'P0', urgency: 'now', status: 'doing',
       area: 'Ops', area_names: ['Ops'], task_type: 'ops', mark: { label: 'Ops', color: 'red' },
       tab: { ref: 'surface:7', state: 'needs-you', live: true, waiting: true },
       actions: [A('to_tab', true)], team: { team_id: 'build', started: 1, next_role: { id: 'review', name: 'Review' }, ready: false, waiting_for: 'Implement' },
@@ -413,7 +414,8 @@ export function buildState(now = Date.now(), opts = {}) {
     }),
     demo: row({
       key: 'task:demo-task', bucket: 'tasks', section: 'work', title: 'Write the onboarding guide for the demo project',
-      why: ['1 in the inbox'], sources: ['tasks'], task: 'demo-task', priority: 'P1', area: 'Demo', area_names: ['Demo'],
+      why: ['1 in the inbox'], sources: ['tasks'], task: 'demo-task', priority: 'P1', area: 'Demo', area_names: ['Demo'], status: 'doing',
+      next: { what: 'Review the demo report', from: 'inbox', since: isoIn(-2, now), key: 'inbox:20261009-0900-review-demo-a1b2' },
       task_type: 'feature', actions: [A('do', true), A('advise')], selectable: true, closable: true,
       adopt_candidates: [{ ref: 'surface:9', name: 'notes', workspace: 'Demo' }], team_suggestions: ['build', 'research'],
       link: { kind: 'file', path: 'work/tasks/demo-task/STATUS.md' },
@@ -447,12 +449,13 @@ export function buildState(now = Date.now(), opts = {}) {
     }),
     index: row({
       key: 'task:docs-refresh', bucket: 'tasks', section: 'work', title: 'Refresh the docs index', sources: ['tasks'],
-      task: 'docs-refresh', priority: 'P2', area: 'Docs', area_names: ['Docs'], task_type: 'docs',
+      task: 'docs-refresh', priority: 'P2', area: 'Docs', area_names: ['Docs'], task_type: 'docs', status: 'doing',
+      next: { what: 'Check the links of the new index page', from: 'status', since: isoIn(-3, now), key: null },
       tab: { ref: 'surface:8', state: 'working', live: true, waiting: false }, actions: [A('to_tab', true)],
     }),
     cleanup: row({
       key: 'task:old-cleanup', bucket: 'tasks', section: 'work', title: 'Clean up the old example fixtures', sources: ['tasks'],
-      task: 'old-cleanup', priority: 'P3', area: 'Ops', area_names: ['Ops'], actions: [A('do', true), A('advise')], selectable: true,
+      task: 'old-cleanup', priority: 'P3', area: 'Ops', area_names: ['Ops'], status: 'review', actions: [A('do', true), A('advise')], selectable: true,
     }),
     vendor: row({
       key: 'inbox:20261008-1400-vendor-reply-9f9f', bucket: 'waiting', section: 'later', title: 'Waiting for the reply on the license question',
@@ -667,6 +670,8 @@ export function buildState(now = Date.now(), opts = {}) {
     guide: guideState(tabs, now),
     // the first-run tour: ended in the demo unless ?tour=1 asks for a first visit
     tour: { enabled: true, done: opts.tour ? null : { how: 'finished', v: 1, at: isoIn(-3, now) } },
+    // the work tab as the config sets it (cockpit.work_view, cockpit.focus_to_files): ?work=files and ?focus_to_files=1
+    work: { view: ['due', 'source', 'jev', 'files'].includes(opts.work) ? opts.work : 'due', focus_to_files: opts.focusToFiles === true },
     loading: { pass: null, fresh: false, started_ms: 0, eta_ms: 0, queued: null, last_error: null },
     notes: [
       { at: hhmm(now - 9 * MIN), text: 'Yes given, runs on the next pass: Sweep old log files', tone: 'ok' },
@@ -715,6 +720,16 @@ export function buildState(now = Date.now(), opts = {}) {
         tab: null, agents: { running_count: 1, done_recent: 0, running: [
           { id: 'c03f9aa', type: 'general-purpose', description: 'Run the migration tests', since_ms: now - 6 * MIN, background: true }] },
         workflows: [] },
+    ],
+    // the workflow runs the server bound to an open task (sessions.py run_task): one whose result waits, one checked
+    runs: empty ? [] : [
+      { id: 'wf_3fa1c2d4-a01', task: 'alpha-release', name: 'release-check', status: 'completed', seen: false, agents: 5,
+        since_ms: now - 50 * MIN, ended_ms: now - 35 * MIN, at_ms: now - 35 * MIN, sid: '7a16c7b2-0000-4000-8000-000000000001',
+        how: ['named'], summary: 'Check the release candidate against the checklist',
+        answer: 'Two items open: the changelog misses the fix for the export, and the upgrade note names the old flag.' },
+      { id: 'wf_9b0e7f12-c33', task: 'docs-refresh', name: 'docs-outline', status: 'completed', seen: true, agents: 3,
+        since_ms: now - 26 * 60 * MIN, ended_ms: now - 25 * 60 * MIN, at_ms: now - 25 * 60 * MIN,
+        sid: 'd8db96ad-0000-4000-8000-000000000002', how: ['session'], summary: 'Outline the new getting-started page', answer: null },
     ] },
   }, WORDS[opts.lang])
 }
@@ -757,16 +772,44 @@ function githubDetail(ref) {
   }
 }
 
+// a closed task the search finds in work/done/ (the queue never holds one): invented, like everything here
+const DONE_FILE = { slug: 'release-notes-2026-09', title: 'Release notes for September', month: '2026-09',
+  lines: ['Release notes for September went out on the 30th.', 'The vendor export timed out twice, fixed with a retry.'] }
+
+// the search (work-find.py through /api/find): every word in the slug, title or a line of an invented file, the
+// files whose slug or title holds every word first, then the rest; the same shape the server answers with
+function findFiles(q, state) {
+  const words = [...new Set(String(q ?? '').toLowerCase().split(/\s+/).filter(Boolean))].slice(0, 8)
+  const rows = (state?.model?.sections ?? []).flatMap(x => x.rows ?? []).filter(r => r.task && !r.inbox_id)
+  const seen = new Set()
+  const files = rows.filter(r => !seen.has(r.task) && seen.add(r.task)).map(r => ({ slug: r.task, kind: 'task', title: r.title,
+    path: `work/tasks/${r.task}`, lines: [`headline: ${r.title}`, ...(r.next?.what ? [`next: ${r.next.what}`] : [])] }))
+  files.push({ ...DONE_FILE, kind: 'done', path: `work/done/${DONE_FILE.month}/${DONE_FILE.slug}` })
+  const groups = []
+  for (const f of files) {
+    const name = `${f.slug} ${f.title}`.toLowerCase()
+    const hits = f.lines.map((text, i) => ({ path: `${f.path}/STATUS.md`, line: i + 2, text }))
+      .filter(h => words.some(w => h.text.toLowerCase().includes(w)))
+    const all = `${name} ${hits.map(h => h.text).join(' ')}`.toLowerCase()
+    if (!words.length || !words.every(w => all.includes(w))) continue
+    groups.push({ slug: f.slug, kind: f.kind, path: f.path, title: f.title, rank: words.every(w => name.includes(w)) ? 0 : 1,
+      count: hits.length, hits })
+  }
+  groups.sort((a, b) => a.rank - b.rank || (a.kind === 'done') - (b.kind === 'done') || b.count - a.count)
+  return { ok: true, query: String(q ?? '').trim(), words, engine: 'python', total: groups.length, truncated: false, groups }
+}
+
 function taskDetail(slug, state) {
   // the front of the task the row stands for (review C12): a P0 row opens as that P0, not as one fixed page
   const rows = [...(state?.model?.sections ?? []).flatMap(s => s.rows ?? []),
     ...(state?.model?.pages ?? []).flatMap(p => (p.sections ?? []).flatMap(s => s.items ?? []))]
   // the task's own row, not an inbox item that names the task
   const row = rows.find(r => r?.task === slug && !r.inbox_id && !r.inbox) ?? rows.find(r => r?.task === slug) ?? {}
+  const done = slug === DONE_FILE.slug
   return {
-    ok: true, slug, kind: 'task', path: `work/tasks/${slug}/STATUS.md`,
-    front: { type: row.task_type ?? 'feature', status: row.state ?? 'doing', priority: row.priority ?? 'P1', created: '2026-10-01',
-      last_updated: '2026-10-08', headline: row.title ?? 'Onboarding guide for the demo project', origin: 'team call on 2026-09-30',
+    ok: true, slug, kind: done ? 'done' : 'task', path: done ? `work/done/${DONE_FILE.month}/${slug}/STATUS.md` : `work/tasks/${slug}/STATUS.md`,
+    front: { type: row.task_type ?? 'feature', status: done ? 'done' : row.state ?? 'doing', priority: row.priority ?? 'P1', created: '2026-10-01',
+      last_updated: '2026-10-08', headline: done ? DONE_FILE.title : row.title ?? 'Onboarding guide for the demo project', origin: 'team call on 2026-09-30',
       blocked_by: null },
     sections: [
       { heading: 'Goal', text: 'A new team member sets up the demo project in under an hour, with every step written down.', truncated: false },
@@ -777,7 +820,20 @@ function taskDetail(slug, state) {
       { at: '2026-10-08 16:20', glyph: 'n', context: slug, text: 'Outline written, examples collected' },
       { at: '2026-10-03 11:05', glyph: 'n', context: slug, text: 'Task opened after the team call' },
     ],
+    // the files of its folder besides STATUS.md (details.py folder_files)
+    files: MOCK_FILES.map(f => ({ path: f.path, size: f.text.length })),
   }
+}
+
+// the files of a task folder, read in place in the files view (/api/task?file=)
+const MOCK_FILES = [
+  { path: 'notes.md', text: '# Notes\n\nThe outline is agreed. **Open:** who reviews the second chapter.\n\n- Draft chapter one\n- Collect screenshots' },
+  { path: 'research/options.yaml', text: 'options:\n  - name: one page\n    effort: small\n  - name: a guide in chapters\n    effort: medium\n' },
+]
+
+function taskFile(slug, file) {
+  const f = MOCK_FILES.find(x => x.path === file)
+  return f ? { ok: true, slug, file, text: f.text, cut: false } : null
 }
 
 // the tokens of 7, 30 or 90 days (usage.py view(days=n)): invented counts per day and source, today a little loud;
@@ -1107,7 +1163,16 @@ export function createMockTransport(opts = {}) {
       }
       if (url.pathname === '/api/state') return ok(state)
       if (url.pathname === '/api/inbox') return ok(inboxDetail(url.searchParams.get('id'), state))
+      if (url.pathname === '/api/task' && url.searchParams.get('file')) {
+        const found = taskFile(url.searchParams.get('slug'), url.searchParams.get('file'))
+        return found ? ok(found) : fail(404, 'not_found', 'no such file')
+      }
       if (url.pathname === '/api/task') return ok(taskDetail(url.searchParams.get('slug'), state))
+      if (url.pathname === '/api/find') {
+        const q = String(url.searchParams.get('q') ?? '')
+        if (q.trim().length < 2 || q.length > 200) return fail(400, 'invalid_argument', 'the query must be 2 to 200 characters')
+        return ok(findFiles(q, state))
+      }
       if (url.pathname === '/api/inbox/noise') {
         // invented sources and one invented rule, in the shape of `inbox.py stats --json` and `mute list --json`
         const src = (source, filed, dropped, reasons, muted = 0) => ({ source, filed, dropped, muted, done: filed - dropped - muted - 1, open: 1,
@@ -1182,6 +1247,8 @@ export function createMockTransport(opts = {}) {
       await new Promise(r => wait(r, 250))
       // the demo has no server poll to slow down: a page reporting its visibility is simply acknowledged
       if (path === '/api/presence') return { status: 200, ok: true, data: { ok: true }, error: null }
+      // nor an audit log: a page view is simply acknowledged
+      if (path === '/api/seen') return { status: 200, ok: true, data: { ok: true }, error: null }
       if (path === '/api/reload') {
         const loading = { pass: 'quick', fresh: !!body?.fresh, started_ms: now(), eta_ms: 3000, queued: 'full', last_error: null }
         state.loading = loading
@@ -1379,6 +1446,12 @@ export function createMockTransport(opts = {}) {
           result.muted = `20261010-1200-mock-${mockMutes.length}`
           mockMutes.push({ id: result.muted, source: 'homebox/health', scope: args.reason,
             ...(args.reason === 'source' ? { until: '2026-11-09' } : { key_prefix: 'health:crash:' }) })
+        }
+        if (verb === 'run_seen') {
+          // a workflow run's result checked: it no longer waits in its task's file (the server's sessions event)
+          state.sessions = { ...state.sessions, runs: (state.sessions?.runs ?? []).map(r => (r.id === args.id ? { ...r, seen: true } : r)) }
+          result.note = 'Mock: result checked'
+          wait(() => emit('sessions', state.sessions), 80)
         }
         if (verb === 'inbox_unmute') mockMutes.splice(0, mockMutes.length, ...mockMutes.filter(r => r.id !== args.id))
         if (verb === 'snapshot_list') result.note = 'Mock: 3 snapshots, latest 09:00'
