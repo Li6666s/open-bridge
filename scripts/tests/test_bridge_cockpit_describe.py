@@ -634,3 +634,102 @@ def test_the_docs_say_what_the_thinking_switch_and_the_local_hashes_do_not_promi
     text = (ROOT / "docs" / "bridge-cockpit.md").read_text(encoding="utf-8")
     assert "best effort" in text and "per machine" in text
     assert "best effort" in (dsc.__doc__ or "") and "per machine" in (dsc.__doc__ or "")
+
+
+# ---------------------------------------------------------------- what reaches the page (server.describe_items)
+
+def rebuilt_row(world, key="task:demo-task"):
+    """the row as the page gets it after the next pass, the task list read for real (it carries the brief)"""
+    world.runner.handlers["workplace.tasks"] = real
+    world.app.collector.refresh_tasks()
+    world.app.collector.request("both")
+    world.app.collector.drain()
+    return world.row(key)
+
+
+def test_a_written_brief_reaches_the_row_card_with_who_wrote_it(world):
+    world.act("describe_run", key="task:demo-task")
+    out = rebuilt_row(world)
+    assert out["card"]["goal"] == GOAL and out["card"]["acceptance"] == CRITERIA and out["card"]["written"] == "ai"
+    assert out["describe"]["written"] == "ai" and out["describe"]["stale"] is False and out["describe"]["proposal"] is None
+    # what the page's AI mark says on hover: the model and the day it wrote the brief
+    assert out["describe"]["by"] == HAIKU and out["describe"]["at"] == world.app.describe.today()
+
+
+def test_a_stale_brief_says_so_on_the_row(world):
+    world.act("describe_run", key="task:demo-task")
+    path = status_path(world)
+    path.write_text(path.read_text(encoding="utf-8") + "\n## New\n\nnew work\n", encoding="utf-8")
+    assert rebuilt_row(world)["describe"]["stale"] is True
+
+
+def test_a_proposal_reaches_the_row_and_the_task_detail(world):
+    world.act("describe_run", key="task:demo-task")
+    path = status_path(world)
+    path.write_text(path.read_text(encoding="utf-8").replace("edited: false", "edited: true"), encoding="utf-8")
+    world.runner.handlers["claude.p"] = lambda argv: answer(goal="A newer goal from the model")
+    pid = world.act("describe_run", key="task:demo-task")["describe"]["proposal"]["id"]
+    out = rebuilt_row(world)
+    assert out["describe"]["proposal"]["id"] == pid and out["describe"]["written"] == "human"
+    assert out["card"]["goal"] == GOAL and out["card"]["written"] == "human"
+    detail = json.loads(world.request("GET", "/api/task?slug=demo-task", headers=world.cookie)[2])
+    assert detail["describe"]["proposal"]["brief"]["goal"] == "A newer goal from the model"
+    assert detail["card"]["written"] == "human"
+
+
+def test_an_inbox_item_carries_its_describe_state_on_the_row_and_the_detail(world):
+    world.act("describe_run", key=f"inbox:{YES_ID}")
+    out = rebuilt_row(world, f"inbox:{YES_ID}")
+    assert out["card"]["goal"] == GOAL and out["describe"]["written"] == "ai"
+    detail = json.loads(world.request("GET", f"/api/inbox?id={YES_ID}", headers=world.cookie)[2])
+    assert detail["describe"]["written"] == "ai" and detail["card"]["goal"] == GOAL
+
+
+def test_describe_items_names_only_what_has_something_to_say(world):
+    assert world.app.describe_items() == {}
+    assert rebuilt_row(world)["describe"] is None
+    world.act("describe_run", key="task:demo-task")
+    items = world.app.describe_items()
+    assert set(items) == {"task:demo-task"} and items["task:demo-task"] == world.app.describe.state_for("task:demo-task")
+
+
+def test_a_damaged_describe_store_never_stops_the_page(world):
+    (world.app.root / ".bridge").mkdir(exist_ok=True)
+    (world.app.root / ".bridge" / "describe.json").write_text("{not json", encoding="utf-8")
+    assert world.app.describe_items() == {}
+    assert rebuilt_row(world)["card"]["kind"] == "task"
+
+
+def test_a_detail_reads_only_its_own_describe_view(world, monkeypatch):
+    world.act("describe_run", key="task:demo-task")
+    asked = []
+    real_state = world.app.describe.state_for
+    monkeypatch.setattr(world.app.describe, "state_for", lambda key: asked.append(key) or real_state(key))
+    detail = json.loads(world.request("GET", "/api/task?slug=demo-task", headers=world.cookie)[2])
+    assert detail["describe"]["written"] == "ai" and detail["card"]["goal"] == GOAL
+    assert asked == ["task:demo-task"]
+    # an item describe never touched carries no describe view, as on the rows
+    world.request("GET", f"/api/inbox?id={YES_ID}", headers=world.cookie)
+    assert json.loads(world.request("GET", f"/api/inbox?id={YES_ID}", headers=world.cookie)[2])["describe"] is None
+
+
+def test_the_model_build_reads_an_inbox_item_again_only_once_it_changed(world, monkeypatch):
+    world.act("describe_run", key=f"inbox:{YES_ID}")
+    reads = []
+    make = world.app.describe._inbox
+
+    def counting():
+        inbox = make()
+        get = inbox.get
+        inbox.get = lambda iid: reads.append(iid) or get(iid)
+        return inbox
+    monkeypatch.setattr(world.app.describe, "_inbox", counting)
+    first = world.app.describe.views()
+    assert first[f"inbox:{YES_ID}"]["written"] == "ai"
+    reads.clear()
+    assert world.app.describe.views() == first and reads == []
+    # a new event (here: a seen note) changes the item, so the next build reads it again
+    events = world.app.root / "work" / "inbox" / YES_ID / "events"
+    (events / "9999-seen.yaml").write_text("verb: seen\nby: web\nat: '2026-10-25T10:00:00'\n", encoding="utf-8")
+    world.app.describe.views()
+    assert reads == [YES_ID]
