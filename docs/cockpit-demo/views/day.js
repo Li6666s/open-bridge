@@ -269,9 +269,12 @@ export function StartMany({ rows, s, c, size = 'xs' }) {
 }
 
 /** The close door of the panel: "Close ▾" on one row, "Close n ▾" on a selection, with done or discard, not now
- *  and a note. `seed` fills the sentence (the check hands its reason for a close) */
+ *  and a note. `seed` fills the sentence; without one, a single row the check would close (or found resolved)
+ *  brings the check's reason */
 export function SettleMenu({ rows, s, c, size = 'xs', seed }) {
   const t = T()
+  const rv = rows.length === 1 ? rows[0].review : null
+  const sentence = seed ?? (rv && (rv.verdict === 'close' || rv.resolved) ? (rv.reason ?? '').slice(0, 400) : undefined)
   const [open, setOpen] = useState(false)
   const box = usePopover(open, setOpen)
   const ok = rows.filter(r => (r.settle ?? []).length)
@@ -280,7 +283,7 @@ export function SettleMenu({ rows, s, c, size = 'xs', seed }) {
   const word = ok.length > 1 ? t.settleMany(ok.length) : t.settle
   return html`<span class="settle" ref=${box}>
     <${Btn} size=${size} variant="ghost" busy=${busy} pressed=${open} onClick=${() => setOpen(!open)} label=${word}>${word} ▾<//>
-    ${open ? html`<${RowPanel} rows=${ok} s=${s} c=${c} part="settle" close=${() => setOpen(false)} anchor=${box} seed=${seed} />` : null}
+    ${open ? html`<${RowPanel} rows=${ok} s=${s} c=${c} part="settle" close=${() => setOpen(false)} anchor=${box} seed=${sentence} />` : null}
   </span>`
 }
 
