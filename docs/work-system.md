@@ -151,12 +151,34 @@ takes a close back: the newest `work/done/*/<slug>/` moves to `work/tasks/<slug>
 or `review`, for a task closed while in review),
 `closed:` and `outcome:` go, a dated "Reopened" note joins the notes under the close
 note, the board is regenerated and one log row is written. It refuses a slug that is
-open. The dashboard's history and its undo run it.
+open. The dashboard's history and its undo run it. When the task was shelved (below), reopening
+also closes the idea that shelve filed.
+
+`python3 scripts/task.py shelve <slug> [--until YYYY-MM-DD] [--reason TEXT] [--json]` parks a finite
+task nobody works on without losing it. It replaces the three hand steps (file an idea, close the task
+as declined, defer the idea) with one command. In this order: it files an inbox item of kind `idea`
+(gate `only-you`, urgency `later`, key `shelve:<slug>`, summary from the task's headline, detail naming
+`work/done/YYYY-MM/<slug>/STATUS.md` and `task.py reopen <slug>`), defers it until `--until` (default
+today + 90 days) so notifiers that announce new items stay quiet, then closes the task through the
+normal close as declined with the reason `shelved: <reason>`. Every check runs before anything is
+written, and when the close still fails the idea is closed again, so a task never disappears without
+its idea. It refuses a stream (not finite), an unknown slug and a task already under `work/done/`.
+Shelving a task again after a reopen brings its idea back, deferred again, also when a person dropped or
+rejected it in between: a new shelve is a new decision. Only a mute rule on the `shelve:` family keeps the idea
+dropped, and the shelve says so in a warning.
 
 `python3 scripts/task.py next <slug> -- <text>` keeps a task's next step as
 `next: {what: <text>}` with `last_updated:` and a dated "Next step" note, so the step
 carries the day it was set; `--clear` takes it away. The cockpit runs it only when the
 person takes over a suggested step ([`bridge-cockpit.md`](bridge-cockpit.md) § 3).
+
+### Upgrading
+
+`task.py shelve` and the idea cleanup in `task.py reopen` are additive: nothing to migrate, every
+existing call and every existing task or inbox item works unchanged (`reopen --json` gains a
+`closed_ideas` list). Tasks you shelved by hand earlier (idea, close declined, defer) keep working; their
+idea carries no `shelve:<slug>` key, so `reopen` leaves it alone. To move one onto the new behaviour:
+`task.py reopen <slug>`, close the old idea with `inbox.py close <id>`, then `task.py shelve <slug>`.
 
 ## Finding work
 
@@ -299,11 +321,11 @@ Automatic at the start of every session when Task Management is enabled:
 
 Three-class rule from [`protocols/standing-orders/board-task-criteria.md`](../protocols/standing-orders/board-task-criteria.md):
 
-- **A — Board task** (STATUS.md + board row): cross-session pickup needed **or** external recipient (mandant / external tracker / customer wiki).
-- **B — Log-only**: state changed, but session-bounded and no external party.
-- **C — Silent**: read-only routine commands (`/briefing`, `/bridge-status`, `/archive`).
+- **A: Board task** (STATUS.md + board row): only when asked for, **or** work already exists (branch, draft, file, a sent request awaiting an answer) **and** continues in a later session, **or** a dated commitment to someone. An external recipient alone no longer qualifies; an assigned tracker issue stays in the tracker.
+- **B: Log-only**, state changed and finished in the session. A mention with nothing started goes to the inbox as kind `idea`.
+- **C: Silent**, read-only routine commands (`/briefing`, `/bridge-status`, `/archive`).
 
-Sub-items of an existing task are checked off in the parent STATUS.md — no own task. Cold ideas without pickup plan live in `work/backlog.md` (lazily created, split threshold >15 backlog rows).
+Sub-items of an existing task are checked off in the parent STATUS.md, no own task. Cold ideas already collected in `work/backlog.md` stay there; new mentions go to the inbox as kind `idea`.
 
 ## Configuration
 

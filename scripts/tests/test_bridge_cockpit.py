@@ -1723,6 +1723,22 @@ def test_settle_takes_a_foreign_row_out_for_good_and_show_again_brings_it_back(w
     assert "ref:example/repo#12" not in world.app.store.dismissed()
 
 
+def test_a_settled_row_stays_settled_on_another_machine_and_show_again_reaches_it(world, tmp_path):
+    # state.json is per machine (.bridge/ is ignored); the decision also lands in work/cockpit/settled/, tracked
+    from lib.bridge_cockpit.store import WebStore
+    world.act("settle", keys=["ref:example/repo#12"], outcome="done")
+    world.act("hide", key="task:other-task", until=TOMORROW)
+    shared = world.root / "work" / "cockpit" / "settled"
+    assert len(list(shared.glob("*.yaml"))) == 2
+    world.app.store = WebStore(tmp_path / "another-machine", world.clock, settled_dir=shared)   # empty state.json
+    world.app.collector.rebuild()
+    hidden = {r["key"]: r for r in world.app.collector.model["hidden"]}
+    assert hidden["ref:example/repo#12"]["settled_as"] == "done" and hidden["task:other-task"]["hidden_until"] == TOMORROW
+    world.act("unhide", key="ref:example/repo#12")
+    assert "ref:example/repo#12" not in WebStore(tmp_path / "third", world.clock, settled_dir=shared).dismissed()
+    assert sum("unsettle" in p.name for p in shared.glob("*.yaml")) == 1
+
+
 def test_every_close_lands_in_the_history_with_its_undo(world):
     res = world.act("settle", keys=["task:other-task"], outcome="done")
     assert res["undo"] == [{"title": res["undo"][0]["title"], "kind": "task",
@@ -2882,6 +2898,29 @@ def test_ids_are_checked_again_before_an_argv(world):
     world.runner.calls.clear()
     status, _, body = world.post("/api/action", {"verb": "drop", "args": {"key": "inbox:20261009-0900---evil"}})
     assert status == 409 and writes(world) == []
+
+
+def test_waits_for_you_counts_only_the_asks_of_the_inbox(world):
+    # an idea or a report filed for today stands in Now, but it asks nothing of you: the number counts the asks
+    # (decision, question, draft), and a row that is no inbox item (a task, a board item) as before
+    data = collect_fixture(world.root)
+    data["view"]["buckets"][0]["items"] += [
+        {"title": "A dark mode one day", "inbox_id": "20261009-0930-dark-mode-0a0a", "gate": "only-you",
+         "urgency": "today", "inbox_kind": "idea", "sources": ["inbox"]},
+        {"title": "Disk at 91 %", "inbox_id": "20261009-0931-disk-0b0b", "gate": "your-yes", "urgency": "today",
+         "inbox_kind": "finding", "sources": ["inbox"]},
+        {"title": "Which date suits?", "inbox_id": "20261009-0932-date-0c0c", "gate": "only-you", "urgency": "today",
+         "inbox_kind": "question", "sources": ["inbox"]}]
+    world.runner.handlers["briefing.collect"] = lambda argv: ok(data)
+    world.app.collector.request("delta")
+    world.app.collector.drain()
+    model = world.app.collector.model
+    now = next(s for s in model["sections"] if s["id"] == "now")
+    assert now["total"] == 4                                      # every row still stands where it stood
+    arts = {r["title"]: r["art"] for r in now["rows"]}
+    assert arts == {"Review the demo report": "ask", "A dark mode one day": "idea", "Disk at 91 %": "report",
+                    "Which date suits?": "ask"}                   # an item without its kind is an ask
+    assert model["counts"]["now"] == 2 and model["briefing_badge"] == 2
 
 
 @pytest.mark.parametrize("path", ["/../bridge-config.yaml", "/%2e%2e/bridge-config.yaml", "/vendor/../../briefing.py",

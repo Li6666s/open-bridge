@@ -213,7 +213,12 @@ filter as the rows beside it.
 Only one number in the bar carries colour: Today's count of what waits for
 you, the same count as the start page's station "waits for you" and the
 headline in the middle (the approvals stand in its tooltip and in their own
-block). A finding is red wherever it is; every other count is grey. A page
+block). It counts the rows of Now that ask you: every row that is no inbox
+item, and of the inbox only the asks (decision, question, draft). An idea or a
+report filed for today still stands in Now, it is just not counted, so the
+section's own head can show the larger number ([inbox.md § Arts](inbox.md#arts)).
+The start page's lists named "waiting on you" show the same asks.
+A finding is red wherever it is; every other count is grey. A page
 badge that adds up several sections names them in its tooltip. A finding on a
 status page also shows as a banner on the Today tab.
 
@@ -785,6 +790,7 @@ work:
     command: "claude -p --model {model} --output-format json --no-session-persistence --setting-sources '' --strict-mcp-config --tools ''"
     max_age_days: 7
     stale_days: 21
+    skip_sections: []   # briefing section ids the triage leaves out
 ```
 
 The overview of the last check (on the page that holds the task check) reads
@@ -1154,6 +1160,19 @@ row a row in `work/log.md` (`task.py log`), since it has no place of its own
 here. Not now on a task writes "Later until <day>" even without a sentence:
 the page only hides the row, the task keeps why it was put off.
 
+**A settled row stays settled on every machine.** That a row is hidden until a
+day, or out of the briefing as done or not doing, is itself written to
+`work/cockpit/settled/`, which git tracks: one new file per decision, written
+once and never changed, the way the inbox records its events. Two machines that
+settle rows and sync through git only ever add different files, so a rebase has
+nothing to merge. "Show again" and an undo are a file of their own too
+(`act: unsettle`), never a deletion, since a file removed on one machine while
+the other still holds it is exactly the conflict this layout avoids. For each
+row the newest file decides. The page reads the folder on every pass and the
+watcher notices when a pull brings a new file, so a row settled elsewhere
+leaves the page within seconds. Commit the folder with the rest of `work/`; see
+"Upgrading: settled rows in git" in section 6.
+
 **Dropping asks why.** Drop on an inbox row opens a small dialog with four
 reasons: not worth it this time (preselected, so Enter keeps it one keystroke),
 a duplicate, never this kind again, this source is too loud. The last two
@@ -1250,6 +1269,21 @@ can do it, Needs you, Unclear with counts, and closes everything closable in
 two clicks after naming it (the `settle` verb, so the history can undo it). An
 inbox row on a page carries its item id (`inbox`), which is how a row finds its
 triage.
+
+A section that only adds noise or cost can be left out of the triage:
+`work.review.skip_sections` lists briefing section ids (the `sources` of a row),
+for example `[applications]`. Its tracker rows (a board card, an issue, an
+application, a date: a `ref` with no task and no inbox item) are not sent to a
+model and are not in `.bridge/triage.json`, so they keep the bucket the
+briefing gave them and carry no triage mark. A row that two sections carry is
+skipped only when both are listed. Open tasks and inbox items are judged from
+their own lists whatever section shows them, so the key does not leave those out.
+
+**Upgrading.** Opt-in, nothing changes until the key is set: an instance that
+does not have `work.review.skip_sections` judges every row as before. To leave
+a section out, add its id under `work.review` in `bridge-config.yaml`, then
+run "sort again"; rows already in the cache from that section simply stop
+being listed.
 
 ### Each item's brief
 
@@ -2115,7 +2149,8 @@ fixed verbs of section 4.
 
 ## 6. Files
 
-Everything lives under `.bridge/cockpit/` in the Bridge root, which git ignores.
+Everything lives under `.bridge/cockpit/` in the Bridge root, which git ignores,
+except the record of settled rows in `work/cockpit/settled/` (below).
 The last column says whether a file holds inbox, task or chat text (titles,
 gists, questions, answers): those are the files to think of when you back up,
 share or clean up.
@@ -2128,7 +2163,7 @@ share or clean up.
 | `stdout.log` | what the process itself prints: the dated line of each start, and a crash before the server is up | no |
 | `audit.log` | one line per write action, question, route, Jev request and triage run | no: ids and counts only, though an inbox id carries a slug of its title |
 | `history.json` | what was closed, dropped, settled or hid, with its undo (readable by you only) | yes: the titles |
-| `state.json` | rows hidden on the page, rows marked done or not doing, team runs started from the page, the start page's tiles and pins, how the first-run tour ended, the workflow runs marked as checked | yes: the title of each row marked done or not doing |
+| `state.json` | team runs started from the page, the start page's tiles and pins, how the first-run tour ended, the workflow runs marked as checked; and this machine's copy of the rows hidden or marked done or not doing (the shared record is `work/cockpit/settled/`, below) | yes: the title of each row marked done or not doing |
 | `view.json` | the last briefing, shown at once on the next start until a fresh one arrives | yes: the whole briefing |
 | `days.json` | the day book: each quota's use per day and the counts of each day (section 3), two weeks | no: numbers under ids |
 | `launches.json` | the starts of the last days for the return channel, with model, effort and who chose them | yes: the titles |
@@ -2156,6 +2191,41 @@ the cockpit (git ignores them too):
 | `.bridge/resources/workers-view.json` | the full worker view of the Resources section (`scripts/bridge-resources.py workers`) | no |
 | `.bridge/resources/costs-view.json` | the last cloud cost report with its source, read time and age (`scripts/bridge-resources.py costs`) | no |
 | `.bridge/resources/usage-days.json` | the token counts of each closed day per source, model, project and Bridge, 120 days | no: numbers under model, project and Bridge names |
+
+One folder the cockpit writes is **not** under `.bridge/` but tracked, because
+it must reach every machine:
+
+| File | What | Inbox or chat text |
+|---|---|---|
+| `work/cockpit/settled/` | every hide ("not now until <day>"), every row marked done or not doing, every "show again", one YAML file each (`<UTC stamp>-<seq>-<rand>-<act>.yaml`, or `legacy-<hash>-<act>.yaml` for an entry migrated from `state.json`), written once, never changed; the newest file for a row decides | yes: the row titles |
+
+### Upgrading: settled rows in git
+
+Before this change a hidden or settled row lived only in `.bridge/cockpit/state.json`,
+so another machine showed it again. Nothing has to be done by hand:
+
+1. **Migration is automatic.** On its first start the server copies every
+   `hidden` and `dismissed` entry of `state.json` into `work/cockpit/settled/`
+   as `legacy-<hash>-<act>.yaml`. The name is the hash of the entry, so a second
+   start writes nothing, and two machines holding the same entry write the same
+   file (git adds it once). A row the folder already decides is not copied, so
+   a row taken back on one machine does not return from another machine's old
+   `state.json`. `state.json` itself is left as it is.
+2. **Commit the folder.** `git add work/cockpit/settled && git commit` on each
+   machine, then pull and push as usual (`git pull --rebase`). The files never
+   conflict. Until they are committed and pulled, the other machine simply does
+   not know them yet.
+3. **Going back.** The cockpit keeps writing `hidden` and `dismissed` in
+   `state.json` beside the folder, so an older version reads this machine's
+   decisions unchanged after a downgrade. What it cannot see are the decisions
+   made on other machines since; they are back in force when you upgrade again.
+   To drop the shared record as well, remove the folder
+   (`git rm -r work/cockpit/settled`) once the older version runs; while the new
+   one runs, its next start would fill the folder again from `state.json`.
+
+If `work/cockpit/settled/` cannot be written (a read-only checkout), the cockpit
+keeps working from `state.json` alone, as before, and copies what it missed at
+a later start.
 
 The server deletes relay files after a day, heartbeats after an hour. The
 `relay/` folder is readable by you only. The signing key `relay.key` is the
