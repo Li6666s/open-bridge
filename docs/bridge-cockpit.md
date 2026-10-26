@@ -87,7 +87,7 @@ their defaults:
 | `focus_to_files` | `false` | `true`: when the focus on the start page runs out, its calm card and its last step lead on into the Files view of the work tab rather than to the tasks |
 | `files_scope` | `active` | which tasks are files in the Files view: `active` the `doing` and `review` ones, as before; `all` every task and stream but the closed ones, the queue on top and the rest behind it on the chips Active, Waiting, Resting, Backlog and All, see [Every task as a file](cockpit-files.md#every-task-as-a-file). Any other value keeps `active` and is named in `status` |
 | `origin_map` | none | your own source names, mapped to a category the work tab shows: a name or a quoted glob (`"*-health"`) to one of `github`, `tracker`, `calendar`, `bot`, `session`, `skill`, `work`, `person`, `bridge`, `other`. It comes before the built-in rules; a wrong category or a repeated name is ignored and named in `status`. It stays on the server, the page never sees it (see [Where a row comes from](#where-a-row-comes-from)) |
-| `describe` | `auto: off` | each item's brief (goal, story, acceptance) written and kept by a small model, see [Each item's brief](#each-items-brief): `auto` is `off`, `missing` (items without a brief) or `stale` (also briefs whose text moved on); `budget_per_hour` (`20`) caps the calls of an hour; `kinds` (`[task, stream, inbox]`) names what the pass takes. The button on a card works with `auto: off` too |
+| `describe` | `auto: off` | each item's brief (goal, story, acceptance) written and kept by a small model, see [Each item's brief](#each-items-brief): `auto` is `off`, `missing` (items without a brief) or `stale` (also briefs whose text moved on); `budget_per_hour` (`20`) caps the calls of an hour; `kinds` (`[task, stream, inbox]`) names what the pass takes; `effort` (`medium`) is how long the model may think, `low`, `medium` or `high`. The button on a card works with `auto: off` too |
 | `snapshot_minutes` | `60` | while the server runs, save the cmux layout this often, only when it changed; `0` = only on "Save layout now" |
 | `idle_minutes` | `10` | a tab the terminal reports as waiting that has been still this long and whose last words ask nothing (no question mark, no options, nothing typed in its prompt) is done, not waiting: it leaves "waits for you" and counts as "to review" in its area; a tab whose item or task is settled is done at once; it reads the tab's screen, so without a terminal driver that serves screens (or with the questions off) only the settled rule applies and every other tab keeps waiting; an idle tab raises no "waits for an hour" and the decision guide does not read it; `0` = off |
 | `person_name` | none | how Claude and Jev name you; without it they say "the user" |
@@ -1262,9 +1262,11 @@ the `brief:` block of its STATUS.md (`task.py brief`), an inbox item in its
 The small model writes it (service `cockpit-describe` in
 `workflow/ai-services/`, default `haiku` resolved to its full id; one call
 without tools, settings or session, a fixed JSON schema with the limits of a
-brief, and `MAX_THINKING_TOKENS=0` in its env). That switch is best effort: the
-CLI still reported thinking tokens with it, most of a call's output, about
-$0.001 a call, so 20 calls an hour cost near $0.03. The
+brief). The model may think before it answers, at the effort
+`cockpit.describe.effort` names (`--effort`, `low`, `medium` or `high`,
+default `medium`). One call at `medium` on 2026-10-26 thought for about 2500 of
+its 2900 output tokens and cost about $0.002, so 20 calls an hour cost near
+$0.04. The
 item goes in as data: a few frontmatter fields, its heading, the start of the
 body, its two last sections and its open inbox items, about 6000 characters.
 `by` names the model that answered as `modelUsage` reports it; another one than
@@ -1283,6 +1285,41 @@ proposes for it, and a hand edit of it is not marked). What the gate left out
 of a brief it still wrote (a text over its limit, fewer than two criteria for
 a task) is kept as the card's `warnings`.
 
+**References.** A criterion has to make sense from the card alone, so the data
+carries `references`: what a reader can reach from the item
+(`scripts/lib/bridge_cockpit/brief_refs.py`). That is the repository the task is
+bound to (`sync.github.repo`, else its context's `sync.defaults.github.repo` or
+`repos[].github`), its issues as `owner/repo#n` and its board, URLs and
+`owner/repo#n` of the text, a bare `#n` of the text written as `owner/repo#n`
+when exactly one repository is known ("Board #18" is a board, never an issue),
+paths the text names that exist, the files of the task folder, and the slugs of
+other tasks that exist; for an inbox item its detail, its `closes_when` probe and
+its task. At most 24, scrubbed like the rest; one the scrub changes is left out.
+The rules say: cite only from that list, exactly as written; never a bare `#n`,
+never "the list" or "the report §6" without saying what and where; when the text
+names something only vaguely, describe it in words; and when a criterion is
+about a listed reference (the epic the task is bound to), cite it exactly, so
+the card can link it. After the answer every
+reference the brief names is checked against the list. One that does not resolve
+(a bare `#n` with no or two repositories, a section such as §6 without a place
+beside it, a path that does not exist, an issue number the text never names)
+does not stop the write, since a brief with a goal beats none: it is kept in
+`warnings` ("Unresolved reference: §6", in the cockpit's language), the card
+shows the gap "points at something that cannot be found", and with
+`auto: stale` the brief counts as stale for one more try of the pass on this
+text, never more. A section of a law ("§ 14 UStG", "§ 3 Abs. 2"), words such as
+"Soll/Ist/Delta", tool names such as "Node.js", a plain word in backticks and a
+colour such as "#a1b2c3" are no references. What is reachable is read with the
+item, again once its STATUS.md, its folder or a folder right inside it changed,
+so a file made later in the folder is found.
+
+**Prompt version.** describe.json stores the version of the rules
+(`PROMPT_VERSION` in `describe.py`) with every brief describe writes. A brief
+describe wrote from an older version (or before there was one) that nobody
+changed counts as stale, so `auto: stale` writes it again within the budget of
+the hour. A person's brief is never rewritten for it. The view's `stale_why`
+says which reason holds: `basis` (the text moved on), `prompt` or `refs`.
+
 "Describe" on a card (`describe_run {key}`) asks for one item now. With
 
 ```yaml
@@ -1290,6 +1327,7 @@ cockpit:
   describe:
     auto: missing        # or stale
     budget_per_hour: 20
+    effort: medium       # low, medium or high
 ```
 
 a pass of the server every ten minutes takes the items without a brief (and,
@@ -1297,7 +1335,8 @@ with `stale`, the stale ones), proposes at most once per text for a brief a
 person wrote, does not ask again for a text whose answer failed, stays within
 the calls of the hour (clicks count, but are never refused) and never runs two
 calls at once. A card reads `written` (`ai`, `human` or none), `stale`, the
-waiting `proposal`, `running` and `last_error` from `describe.state_for`.
+waiting `proposal`, `running`, `last_error`, `stale_why` and `refs` (what the
+stored brief names, resolved) from `describe.state_for`.
 
 ### One card for every item
 
@@ -1316,7 +1355,15 @@ only when the item has it:
   source, the progress of the steps (2 of 5), and quiet hints for what is
   missing: no goal yet, a placeholder step, no next step, an entry about a task
   that is closed already (with "Close this entry" beside it; there is no verb
-  that moves an inbox entry to another task, so the card offers no "reassign").
+  that moves an inbox entry to another task, so the card offers no "reassign"),
+  a brief that points at something that cannot be found.
+
+Where the goal or a criterion names a reference, it is a link: an issue,
+pull request or URL opens on GitHub or the web in a new tab, a task slug opens
+the task in the files view, a file of a task folder is read in place under the
+brief (as the Files drawer reads it), and any other path shows as code with a
+copy button. A reference nobody can reach stays text, with a quiet "not found"
+on hover and for a screen reader. The parts come from the card's `brief_refs`.
 
 A check or an info row shows only what it has, so it stays small. A list row
 shows the card's title. Its goal stands under the title on the start page, and
@@ -1326,7 +1373,8 @@ item's state and due day).
 
 Text a model wrote and no person edited carries a small **AI**; the model and
 the day show on hover and are its label for a screen reader. Once the item changed past it, **outdated** stands
-beside it.
+beside it, saying why on hover: the item changed, an older version of the rules
+wrote it, or it names something that cannot be found and is tried once more.
 
 **Describe with AI** on a task, stream or inbox item asks the small model for
 its goal, story and criteria now. While no person edited the brief, it is
