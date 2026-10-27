@@ -83,6 +83,9 @@ Two things that are **not** statuses:
   a `waiting` state.
 - **Declined is an OUTCOME, not a status.** A task closed without completion is
   `status: done` **+** `outcome: declined`.
+- **Merged is an OUTCOME too.** A task closed into another one is `status: done`
+  **+** `outcome: merged` **+** `merged_into: <slug>`, the task that took it in
+  (`task.py merge`, below). `merged_into` stands only with that outcome.
 
 `waiting`, `building`, `in-progress`, `in_review`, `active`, `cancelled` are all
 **invalid** — they fail the schema.
@@ -167,6 +170,37 @@ Shelving a task again after a reopen brings its idea back, deferred again, also 
 rejected it in between: a new shelve is a new decision. Only a mute rule on the `shelve:` family keeps the idea
 dropped, and the shelve says so in a warning.
 
+`python3 scripts/task.py merge <keep> --from <slug> [--heading TEXT] [--json]` folds one finite task
+into another, one task per call. The task `keep` stays; `slug` closes as merged into it. In this order:
+a section between the markers `<!-- merged-from: <slug> -->` and `<!-- /merged-from: <slug> -->` goes
+into keep's STATUS.md, before its `## Notes` (else at the end), with the merged task's headline, its
+`brief.goal` when that says more, every line of its `## Notes` (but the notes an earlier merge, its undo or a
+reopen after it wrote) and every open step (`- [ ]`) as written,
+and the paths of its STATUS.md and of up to 20 files of its `deliverables/` at their new place under
+`work/done/YYYY-MM/<slug>/` (nothing is copied, the folder moves whole with the close). The same paths
+join keep's `related:` as items tagged `# merged-from: <slug>`, after its last item in the list's own
+style (indented or not); a `related:` in flow style or as a scalar, or a list the edit would not leave
+reading as its items plus the paths, is left alone, with a warning. Keep gets the note "Merged in <slug>:
+<headline>", then the merged task closes with `task.py close <slug> --merged-into <keep>` (`outcome:
+merged`, `merged_into: <keep>`, the note "Merged into <keep>"; unlike a plain close it keeps `blocked_by`
+and `blocked_since`), and the board and the log follow. Both STATUS.md files as they were before and
+after go to `.bridge/task-merges.json` for the undo. When the close fails, the section and the related
+lines come out again, so nothing stays half merged. It refuses,
+without writing, a slug equal to keep, a stream, a missing or closed task, a
+`work/done/<month>/<slug>` that exists already, and a keep that already holds a section for that slug. What does not move: inbox items
+that name the merged task, session links, `sync:`, priority, area, the rest of the brief, ticked steps.
+
+`python3 scripts/task.py unmerge <keep> --from <slug> [--as doing|backlog|review] [--json]` takes one
+merge back. Each of the two files that is still as the merge left it (a brief written since aside) comes
+back byte for byte as it was before the merge, from `.bridge/task-merges.json`: no note, no new
+`last_updated`, the status it had. A file changed since is edited instead: the section (markers
+included), the tagged `related:` items (`related:` itself when no item is left) and the note "Merged in
+<slug>" leave keep, and the merged task reopens as `--as` (default doing) without its "Merged into" note.
+The undo writes no note of its own, only its log rows; `--json` says `restored` when both came back
+whole. It refuses a slug that is not closed as merged into keep, and a keep whose section for it is gone.
+`reopen` also drops `merged_into`. The cockpit's Merge in Work through runs both
+([`bridge-cockpit.md`](bridge-cockpit.md) § 3).
+
 `python3 scripts/task.py next <slug> -- <text>` keeps a task's next step as
 `next: {what: <text>}` with `last_updated:` and a dated "Next step" note, so the step
 carries the day it was set; `--clear` takes it away. The cockpit runs it only when the
@@ -179,6 +213,10 @@ existing call and every existing task or inbox item works unchanged (`reopen --j
 `closed_ideas` list). Tasks you shelved by hand earlier (idea, close declined, defer) keep working; their
 idea carries no `shelve:<slug>` key, so `reopen` leaves it alone. To move one onto the new behaviour:
 `task.py reopen <slug>`, close the old idea with `inbox.py close <id>`, then `task.py shelve <slug>`.
+
+`task.py merge`, `task.py unmerge` and `close --merged-into` are additive too. The schema's `outcome`
+gains `merged` and the field `merged_into`; a reader that knows only `declined` sees a merged task as
+done, which it is.
 
 ## Finding work
 
