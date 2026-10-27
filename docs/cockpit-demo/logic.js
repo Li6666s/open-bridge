@@ -1478,6 +1478,12 @@ export function railShown(page, chatLayout = 'classic', hidden = false) {
   return !hidden && RAIL.has(page) && !(page === '@chat' && chatLayout === 'workspaces')
 }
 
+/** railShown for the state as it is: Work through (a view of the work tab) has its own columns, the details of
+ *  the point in front on the right, so the tab column folds there too */
+export function railOn(s, hidden = s?.ui?.railHidden) {
+  return railShown(s?.ui?.page, s?.rooms?.layout, hidden) && !(s?.ui?.page === 'briefing' && workViewIn(s) === 'flow')
+}
+
 /** The one next step a slim tab card offers, as action keys: answer a question, go on, close a tab
  *  that filed its result or whose start is settled, else go to the tab; `can(right)` says what this cockpit
  *  may do with a tab (canTab) */
@@ -1779,19 +1785,31 @@ export function workPageOf(pages) {
 }
 
 /** The views of the work tab: what is due (the four blocks) always, by source where a work page exists,
- *  by Jev where that page asks for an order and Jev is switched on and has its key, and the files (one task
- *  at a time, views/dossier.js) always, last: an extra view, the default only where cockpit.work_view says so */
-export function workViews(page, jev) {
-  return ['due', ...(page ? ['area'] : []), ...(page?.jev && jev?.enabled && jev?.ready ? ['jev'] : []), 'dossier']
+ *  by Jev where that page asks for an order and Jev is switched on and has its key, the files (one task
+ *  at a time, views/dossier.js) always, and Work through (views/flow.js) last while cockpit.flow.enabled is on
+ *  (`flow`): extra views, the default only where cockpit.work_view says so */
+export function workViews(page, jev, flow = false) {
+  return ['due', ...(page ? ['area'] : []), ...(page?.jev && jev?.enabled && jev?.ready ? ['jev'] : []), 'dossier', ...(flow ? ['flow'] : [])]
 }
 
 /** The view the work tab shows: the remembered one where it can, else what is due */
-export function workViewOf(view, page, jev) {
-  return workViews(page, jev).includes(view) ? view : 'due'
+export function workViewOf(view, page, jev, flow = false) {
+  return workViews(page, jev, flow).includes(view) ? view : 'due'
+}
+
+/** The view of the work tab under the state: workViewOf with the work page, Jev and cockpit.flow.enabled of `s` */
+export function workViewIn(s) {
+  return workViewOf(s?.ui?.workView, workPageOf(s?.model?.pages), s?.jev, s?.work?.flow?.enabled === true)
+}
+
+/** Where a page id leads that is a view now: the Work through page (@flow, a stored page or a link of an older
+ *  page) is the work tab in its view Work through; null for every other id */
+export function flowPageFor(id) {
+  return id === '@flow' ? { page: 'briefing', view: 'flow' } : null
 }
 
 // cockpit.work_view names a view by the word the docs use; the page has its own ids for them
-const WORK_VIEW_IDS = { due: 'due', source: 'area', jev: 'jev', files: 'dossier' }
+const WORK_VIEW_IDS = { due: 'due', source: 'area', jev: 'jev', files: 'dossier', flow: 'flow' }
 
 /** The view id a word of cockpit.work_view names, or null for anything else */
 export function workViewId(word) {
@@ -3421,8 +3439,9 @@ const HINTS = {
     ['reviewSort', '.review-top .seg'], ['reviewTable', '.tbl-review']],
   '@jev': [['jevRun', '.jev-actions'], ['jevStage', '.jev-stage'], ['jevPlan', '.jev-side']],
   '@settings': [['settingsNav', '.settings-nav'], ['settingsBody', '.settings-body'], ['setCard', '.set-card-head']],
-  '@flow': [['flowChips', '.flow-chips'], ['flowLane', '.flow-lane'], ['flowCard', '.flow-card'], ['flowVerbs', '.flow-card .verbbar'],
-    ['flowWalk', '.flow-work > .next-up']],
+  // Work through, a view of the work tab (its parts are explained there, hintsFor)
+  '@flow': [['flowSide', '.flow-side'], ['flowOverview', '.flow-overview'], ['flowCard', '.flow-card'], ['flowVerbs', '.flow-card .verbbar'],
+    ['flowDetails', '.flow-details'], ['flowWalk', '.flow-walk']],
 }
 // a page of the briefing profile is built from the same parts everywhere: each part it has is explained
 const PAGE_HINTS = [['pageBadge', '.col-page > .page-head .pbadge'], ['oboard', '.oboard'], ['kinds', '.tri-kinds'],
@@ -3437,8 +3456,9 @@ const HEADER_HINTS = [['pages', '.pagebar'], ['asof', '.hdr-asof'], ['reload', '
  *  The work tab showing a page instead of the day's columns (by area, by Jev) explains that page's parts */
 export function hintsFor(s) {
   const page = s?.ui?.page
-  const dayColumns = page !== 'briefing' || workViewOf(s.ui.workView, workPageOf(s.model?.pages), s.jev) === 'due'
-  const own = !dayColumns ? [['workSwitch', '.work-switch'], ...PAGE_HINTS, ['tabcol', '#tabs-column']]
+  const view = page === 'briefing' ? workViewIn(s) : null
+  const dayColumns = page !== 'briefing' || view === 'due'
+  const own = view === 'flow' ? [['workSwitch', '.work-switch'], ...HINTS['@flow']] : !dayColumns ? [['workSwitch', '.work-switch'], ...PAGE_HINTS, ['tabcol', '#tabs-column']]
     : HINTS[page] ?? [...PAGE_HINTS, ['tabcol', '#tabs-column']]
   return [...own.map(([id, target]) => ({ id, target, group: 'page' })),
     ...HEADER_HINTS.map(([id, target]) => ({ id, target, group: 'head' }))]

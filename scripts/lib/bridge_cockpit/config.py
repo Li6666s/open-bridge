@@ -19,14 +19,16 @@ from .. import model_route as mr
 from . import describe as dsc
 from . import guide as gd
 from . import origin as og
+from . import themes as thm
 from . import ticker as tk
 
 DEFAULT_PORT = 8797
 OPEN_IN = ("auto", "cmux", "system", "none")
 TARGETS = ("tab", "workspace", "area", "auto")
 CHAT_LAYOUTS = ("classic", "workspaces")   # workspaces: the chat as cmux shows it (workspaces, tabs, Bridges, agents)
-# the view the work tab opens on (cockpit.work_view): Due, By source, By Jev or Files; the page maps each to its own id
-WORK_VIEWS = ("due", "source", "jev", "files")
+# the view the work tab opens on (cockpit.work_view): Due, By source, By Jev, Files or Work through (only while
+# cockpit.flow.enabled is on, else Due); the page maps each to its own id
+WORK_VIEWS = ("due", "source", "jev", "files", "flow")
 # which tasks the files view holds (cockpit.files_scope): the doing and review ones, or every task and stream
 FILES_SCOPES = ("active", "all")
 # the Work through page (cockpit.flow, page @flow): off unless switched on. drop_reasons are what "Drop because"
@@ -37,7 +39,8 @@ FILES_SCOPES = ("active", "all")
 # each with its default and minimum (a value below it keeps the default)
 FLOW_DROP_REASONS = ("resolves_itself", "not_needed", "someone_else", "not_worth_it")
 FLOW_INTS = (("prep_ahead", 2, 0), ("max_running", 4, 1), ("rank_max_age_days", 7, 1), ("rerank_per_day", 3, 0))
-FLOW_KEYS = ("enabled", "drop_reasons", "return_after_s", *(key for key, _d, _low in FLOW_INTS))
+# themes: the nested block of the themes the page groups its points by (themes.py, cockpit.flow.themes)
+FLOW_KEYS = ("enabled", "drop_reasons", "return_after_s", *(key for key, _d, _low in FLOW_INTS), "themes")
 FLOW_REASON_MAX = 80
 FLOW_REASONS_MAX = 12
 FLOW_RETURN_MAX = 3600
@@ -157,7 +160,7 @@ def jev_criteria_of(value: Any) -> dict | None:
 
 def flow_defaults() -> dict:
     return {"enabled": False, "drop_reasons": list(FLOW_DROP_REASONS), "return_after_s": 20,
-            **{key: default for key, default, _low in FLOW_INTS}}
+            **{key: default for key, default, _low in FLOW_INTS}, "themes": thm.defaults()}
 
 
 def _flow_reasons(value: Any) -> tuple[list[str], list[str]]:
@@ -189,6 +192,7 @@ def flow_of(value: Any) -> dict:
     for key, _default, low in FLOW_INTS:
         if _is_int(value.get(key)) and value[key] >= low:
             out[key] = value[key]
+    out["themes"] = thm.themes_of(value.get("themes"))
     return out
 
 
@@ -215,6 +219,8 @@ def _check_flow(value: Any, used: dict, where: str) -> list[str]:
         elif key == "return_after_s" and (not _is_int(v) or not 0 <= v <= FLOW_RETURN_MAX):
             out.append(f"{at}: must be a whole number of seconds from 0 to {FLOW_RETURN_MAX}, got {_show(v)}; "
                        f"using {used['return_after_s']}")
+        elif key == "themes":
+            out += thm.check(v, used["themes"], at)
         elif key in lows:
             if not _is_int(v):
                 out.append(f"{at}: must be a whole number, got {_show(v)}; using {used[key]}")

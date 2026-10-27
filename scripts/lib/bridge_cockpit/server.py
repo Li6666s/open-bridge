@@ -53,6 +53,7 @@ from .agents import Agents
 from .bridges import Bridges
 from .triage import Triage
 from .describe import Describer
+from .themes import Themes
 from .history import History
 from .quick import Quick
 from .review import Review
@@ -214,6 +215,7 @@ class App:
         self.bridges = Bridges(self.root)
         self.triage = Triage(self)
         self.describe = Describer(self)                # each item's brief, written and kept (describe.py)
+        self.themes = Themes(self)                     # the themes of the Work through page (themes.py)
         self.history = History(self.state_dir, self.clock)
         self.collector = Collector(self)
         self.relay = Relay(self.state_dir, cfg, clock, self.tx, key=load_key(key_dir or default_key_dir()))
@@ -413,7 +415,7 @@ class App:
                 "driver": {"caps": self.driver_caps()}, "home": self.store.home(),
                 "sessions": self.sessions_state(), "quick": self.quick.state(), "quick_live": self.quick.live_state(), "agents": self.agents.state(), "triage": self.triage.state(), "jev": jev.status(self) if jev else dict(JEV_OFF),
                 "launch": self.launch_model.state(), "ticker": self.ticker.state(), "guide": self.guide.state(),
-                "tour": self.tour_state(), "work": self.work_state(),
+                "tour": self.tour_state(), "work": self.work_state(), "themes": self.themes.state(),
                 "rooms": {"layout": self.cfg.chat_layout, "root": str(self.root), "control": self.cfg.control,
                           "bridges": self.bridges.state()}}
 
@@ -1138,10 +1140,11 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(200, app.actions.execute(body.get("verb"), body.get("args")))
             elif path == "/api/ask":
                 for name in body:
-                    if name not in ("kind", "args", "via", "model", "conv", "place"):
+                    if name not in ("kind", "args", "via", "model", "conv", "place", "origin", "keys"):
                         raise ActionError(400, "invalid_argument", "unknown field", str(name)[:40])
                 status, payload = app.actions.ask(body.get("kind"), body.get("args"), via=body.get("via", "control"),
-                                                  model=body.get("model"), conv=body.get("conv"), place=body.get("place"))
+                                                  model=body.get("model"), conv=body.get("conv"), place=body.get("place"),
+                                                  origin=body.get("origin"), keys=body.get("keys"))
                 self.send_json(status, payload)
             elif path == "/api/reload":
                 for name in body:
