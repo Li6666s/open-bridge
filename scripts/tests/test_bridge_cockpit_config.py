@@ -268,7 +268,10 @@ def test_the_flow_page_is_off_by_default_with_its_reasons_and_its_return_delay(t
     assert cfg.flow == {"enabled": False, "drop_reasons": ["resolves_itself", "not_needed", "someone_else", "not_worth_it"],
                         "return_after_s": 20, "prep_ahead": 2, "max_running": 4, "rank_max_age_days": 7,
                         "rerank_per_day": 3,
-                        "themes": {"enabled": False, "max_themes": 8, "budget_per_day": 6, "model": None}}
+                        "themes": {"enabled": False, "max_themes": 8, "budget_per_day": 6, "model": None},
+                        "summary": {"enabled": False, "budget_per_day": 10, "model": None},
+                        "instruct": {"enabled": False, "budget_per_day": 30, "model": None},
+                        "attach": {"enabled": False, "max_mb": 10}}
     assert cfg.flow == cf.flow_defaults() and cfg.config_warnings == ()
 
 
@@ -375,6 +378,12 @@ def test_a_bad_flow_value_keeps_its_default_and_says_so(tmp_path, flow, key, use
 
 def test_every_flow_key_has_a_doc_row():
     doc = (ROOT / "docs" / "bridge-cockpit.md").read_text(encoding="utf-8")
-    for key in ("enabled", "prep_ahead", "max_running", "rank_max_age_days", "rerank_per_day"):
-        assert re.search(rf"^\| `flow\.{key}` \|", doc, re.M), f"flow.{key} has no row in docs/bridge-cockpit.md"
-    assert "flow" in template_block()
+    for key in ("enabled", "prep_ahead", "max_running", "rank_max_age_days", "rerank_per_day",
+                "summary.enabled", "summary.budget_per_day", "summary.model",
+                "instruct.enabled", "instruct.budget_per_day", "instruct.model", "attach.enabled", "attach.max_mb"):
+        assert re.search(rf"^\| `flow\.{re.escape(key)}` \|", doc, re.M), f"flow.{key} has no row in docs/bridge-cockpit.md"
+    flow = template_block()["flow"]
+    # round 3 of Work through: each block in the template with its default, all off
+    assert {k: flow[k] for k in ("summary", "instruct", "attach")} == {
+        "summary": {"enabled": False, "budget_per_day": 10}, "instruct": {"enabled": False, "budget_per_day": 30},
+        "attach": {"enabled": False, "max_mb": 10}}

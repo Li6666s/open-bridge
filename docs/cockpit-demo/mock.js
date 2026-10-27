@@ -193,6 +193,41 @@ const WORDS = {
     'The fixtures are gone from the repository': 'Die Fixtures sind aus dem Repository verschwunden',
     'Accounts for two new members are ready': 'Zugänge für zwei neue Mitglieder sind bereit',
     'The board was tidied last week': 'Das Board wurde letzte Woche aufgeräumt',
+    // Work through, round 3: the activity of the demo task, its summary, the mail note of an instruction
+    'Started: find three good sources for the team page': 'Gestartet: drei gute Quellen für die Teamseite finden',
+    'Outline agreed with the team, screenshots come next': 'Gliederung mit dem Team abgestimmt, als Nächstes die Screenshots',
+    'Outline written, examples collected': 'Gliederung geschrieben, Beispiele gesammelt',
+    'example/repo#15 Add a config switch for the report': 'example/repo#15 Einen Config-Schalter für den Bericht einbauen',
+    'example/repo#18 Docs: setup guide outline': 'example/repo#18 Doku: Gliederung der Einrichtungsanleitung',
+    'Finished: three sources found, the result note is filed': 'Fertig: drei Quellen gefunden, die Ergebnisnotiz ist abgelegt',
+    'The new config key needs a line in the setup guide': 'Der neue Config-Schlüssel braucht eine Zeile in der Einrichtungsanleitung',
+    'Started: update the setup docs': 'Gestartet: die Einrichtungs-Doku nachziehen',
+    'Docs and guides': 'Doku und Anleitungen',
+    'Since last week the outline was agreed with the team and the first two chapters stand as a draft. An agent found three sources, and the screenshots come next.':
+      'Seit letzter Woche ist die Gliederung mit dem Team abgestimmt, und die ersten zwei Kapitel stehen als Entwurf. Ein Agent hat drei Quellen gefunden, als Nächstes kommen die Screenshots.',
+    'A file of the demo, invented: nothing here is real.': 'Eine Datei der Demo, erfunden: nichts hier ist echt.',
+    'No verb in the sentence: done, later, drop, a mail or a reply.': 'Kein Verb im Satz: erledigt, später, weg, eine Mail oder eine Antwort.',
+    'Write a mail draft with the mail-draft skill, a draft only, never send it': 'Schreibe einen Mail-Entwurf mit dem Skill mail-draft, nur als Entwurf, niemals senden',
+    'No verb in this part:': 'Kein Verb in diesem Teil:', 'Started from the cockpit': 'Aus dem Cockpit gestartet',
+    // Work through, round 3 after review: the notes the demo gives its verbs, the briefs and steps of its tasks
+    'Mock: the note is kept': 'Demo: Notiz gespeichert', 'Mock: decided': 'Demo: entschieden', 'Mock: put off': 'Demo: verschoben',
+    'Mock: shelved': 'Demo: zurückgestellt', 'Mock: an agent starts on it': 'Demo: ein Agent fängt damit an', 'Mock: back in the list': 'Demo: wieder in der Liste',
+    'Onboard the new team members': 'Die neuen Teammitglieder einarbeiten',
+    'Issue example-org/demo-project#12 links the finished guide': 'Issue example-org/demo-project#12 verlinkt die fertige Anleitung',
+    ' links the finished guide': ' verlinkt die fertige Anleitung',
+    'The open points of the review (§3) are answered': 'Die offenen Punkte des Reviews (§3) sind beantwortet',
+    'The open points of the review (': 'Die offenen Punkte des Reviews (', ') are answered': ') sind beantwortet',
+    'Done, with its result written down in STATUS.md': 'Erledigt, mit dem Ergebnis in STATUS.md festgehalten',
+    'Outline the chapters': 'Die Kapitel gliedern', 'Collect examples from the setup': 'Beispiele aus der Einrichtung sammeln',
+    'Write the first two chapters': 'Die ersten zwei Kapitel schreiben', 'Take the screenshots': 'Die Screenshots machen',
+    'Let a new colleague try the guide': 'Eine neue Kollegin die Anleitung ausprobieren lassen',
+    'List the merged changes since the last tag': 'Die gemergten Änderungen seit dem letzten Tag auflisten',
+    'Link each change to its pull request': 'Jede Änderung mit ihrem Pull Request verlinken',
+    'Answer the open points of the review': 'Die offenen Punkte des Reviews beantworten', 'Push the tag': 'Den Tag pushen',
+    'List every page of the docs folder': 'Jede Seite des Doku-Ordners auflisten', 'Group the pages by topic': 'Die Seiten nach Thema gruppieren',
+    'Check every link of the index': 'Jeden Link des Index prüfen',
+    'Read what is still open': 'Lesen, was noch offen ist', 'Do the work': 'Die Arbeit erledigen', 'Write the result into STATUS.md': 'Das Ergebnis in STATUS.md schreiben',
+    'Outline the guide in chapters, screenshots come next.': 'Die Anleitung in Kapitel gliedern, als Nächstes die Screenshots.',
   },
 }
 
@@ -480,7 +515,7 @@ function mockCard(r, m = {}, now = Date.now()) {
 
 /** What the demo's describe writes for a row without a brief: invented, in the shape the model answers with */
 function mockBrief(r) {
-  return { goal: `${r.title}, done and checked`, acceptance: r.stream ? [] : ['The work is done and written down in STATUS.md', 'Someone else checked the result'],
+  return { goal: 'Done, with its result written down in STATUS.md', acceptance: r.stream ? [] : ['The work is done and written down in STATUS.md', 'Someone else checked the result'],
     by: 'claude-haiku-5-5', edited: false }
 }
 
@@ -894,7 +929,13 @@ export function buildState(now = Date.now(), opts = {}) {
       files_scope: opts.filesScope === 'all' ? 'all' : 'active',
       // the Work through page (cockpit.flow): on in the demo, ?flow=0 shows the cockpit without it
       flow: { enabled: opts.flow !== false, drop_reasons: ['resolves_itself', 'not_needed', 'someone_else', 'not_worth_it'], return_after_s: 20,
-        themes: { enabled: opts.flow !== false, max_themes: 8, budget_per_day: 6, model: null } } },
+        themes: { enabled: opts.flow !== false, max_themes: 8, budget_per_day: 6, model: null },
+        // round 3: the summary of a point's Activity, the instruction line, a document attached (all off by default)
+        summary: { enabled: opts.flow !== false, budget_per_day: 10, model: null },
+        instruct: { enabled: opts.flow !== false, budget_per_day: 30, model: null },
+        attach: { enabled: opts.flow !== false, max_mb: 10 } } },
+    // what the day's budgets of Work through still hold (server.py state_payload flow_ai)
+    flow_ai: { summary_left: 10, instruct_left: 30, instruct_running: false },
     // the themes of Work through (themes.py state), invented: three themes across the areas, a point moved by hand
     themes: empty || opts.flow === false ? { enabled: false } : themesState(now),
     loading: { pass: null, fresh: false, started_ms: 0, eta_ms: 0, queued: null, last_error: null },
@@ -1028,7 +1069,20 @@ function findFiles(q, state) {
   return { ok: true, query: String(q ?? '').trim(), words, engine: 'python', total: groups.length, truncated: false, groups }
 }
 
-function taskDetail(slug, state) {
+// the checklist of each demo task (its Steps), and the paths its STATUS.md names; any other task a short one of its own
+const DEMO_STEPS = {
+  'demo-task': [[true, 'Outline the chapters'], [true, 'Collect examples from the setup'], [false, 'Write the first two chapters'],
+    [false, 'Take the screenshots'], [false, 'Let a new colleague try the guide']],
+  'alpha-release': [[true, 'List the merged changes since the last tag'], [true, 'Link each change to its pull request'],
+    [true, 'Answer the open points of the review'], [false, 'Push the tag']],
+  'docs-refresh': [[true, 'List every page of the docs folder'], [false, 'Group the pages by topic'], [false, 'Check every link of the index']],
+}
+const DEMO_STEPS_ANY = [[true, 'Read what is still open'], [false, 'Do the work'], [false, 'Write the result into STATUS.md']]
+const DEMO_RELATED = { 'demo-task': ['docs/demo-guide.md', 'work/tasks/docs-refresh/STATUS.md'],
+  'alpha-release': ['CHANGELOG.md', 'work/tasks/release-polish/STATUS.md'], 'docs-refresh': ['docs/index.md'] }
+
+/** A task's file as details.py task_detail sends it; `words` the demo's own language, for the lines composed here */
+function taskDetail(slug, state, words = null) {
   // the front of the task the row stands for (review C12): a P0 row opens as that P0, not as one fixed page
   const rows = [...(state?.model?.sections ?? []).flatMap(s => s.rows ?? []),
     ...(state?.model?.pages ?? []).flatMap(p => (p.sections ?? []).flatMap(s => s.items ?? []))]
@@ -1055,7 +1109,11 @@ function taskDetail(slug, state) {
       { heading: 'Goal', text: 'A new team member sets up the demo project in under an hour, with every step written down.', truncated: false },
       { heading: 'Next', text: '- Draft the first two chapters\n- Collect screenshots from the example setup', truncated: false },
       { heading: 'Log', text: '2026-10-08: outline written, examples collected\n2026-10-03: task opened', truncated: false },
+      // the checklist the Steps tab of Work through reads
+      { heading: 'Steps', text: (DEMO_STEPS[slug] ?? DEMO_STEPS_ANY).map(([done, step]) => `- [${done ? 'x' : ' '}] ${localize(step, words)}`).join('\n'), truncated: false },
     ],
+    // the paths STATUS.md names under related (details.py)
+    related: DEMO_RELATED[slug] ?? [],
     log: [
       { at: '2026-10-08 16:20', glyph: 'n', context: slug, text: 'Outline written, examples collected' },
       { at: '2026-10-03 11:05', glyph: 'n', context: slug, text: 'Task opened after the team call' },
@@ -1375,6 +1433,72 @@ function jevOrder(page, now) {
     first: items[0]?.key ?? null, items, usage: { input_tokens: 1840, output_tokens: 220 }, price: null }
 }
 
+// ---------------------------------------------------------------- Work through, round 3: the Activity of a point
+
+/** A row of the feed as activity.py sends it */
+const feedRow = (ms, over) => ({ id: '', at: localIso(ms), at_ms: ms, kind: 'note', filters: ['notes'], text: '', change: null, undone_ms: null,
+  by: null, links: [], doc: null, agent: null, ...over })
+
+/** The invented rows of a point, newest first: every kind and filter on the demo task (an inbox item that names it
+ *  reads it too), a short feed for the item about the setup docs, the creation alone for any other row */
+function feedRows(row, now) {
+  const ago = (min, over) => feedRow(now - min * MIN, over)
+  const day = (days, over) => ({ ...feedRow(dayAt(-days, 12), over), at: isoIn(-days, now) })
+  const doc = (path, state, extra = {}) => ({ path, state, changes: 1, attached: false, bytes: 4120, ...extra })
+  if (row.task === 'demo-task') {
+    return [
+      ago(120, { id: 'theme:1', kind: 'theme', filters: ['state'], change: { field: 'theme', old: null, new: 'Docs and guides' }, by: { kind: 'themes', name: null } }),
+      ago(160, { id: 'doc:1', kind: 'doc', filters: ['docs'], text: 'guide-draft.md', by: { kind: 'agent', name: 'demo-task research' },
+        doc: doc('deliverables/guide-draft.md', 'new'), links: [{ kind: 'doc', slug: 'demo-task', path: 'deliverables/guide-draft.md' }] }),
+      ago(240, { id: 'agent:1', kind: 'agent', filters: ['agents', 'state'], text: 'Started: find three good sources for the team page',
+        change: { field: 'driver', old: null, new: 'demo-task research' }, by: { kind: 'suggestion', name: null },
+        agent: { mode: 'go', stage: 'working', result: null }, links: [{ kind: 'tab', ref: 'surface:12' }] }),
+      ago(19 * 60, { id: 'decision:1', kind: 'decision', filters: ['state'], change: { field: 'decision', old: null, new: 'later', until: isoIn(0, now) },
+        undone_ms: now - 18 * 60 * MIN, by: { kind: 'batch', name: null } }),
+      ago(21 * 60, { id: 'code:1', kind: 'code', filters: ['code'], text: 'example/repo#15 Add a config switch for the report', by: { kind: 'bridge', name: null },
+        links: [{ kind: 'web', href: 'https://example.org/repo/issues/15' }] }),
+      ago(25 * 60, { id: 'note:1', kind: 'note', filters: ['notes'], text: 'Outline agreed with the team, screenshots come next' }),
+      ago(44 * 60, { id: 'doc:2', kind: 'doc', filters: ['docs'], by: { kind: 'git', name: null },
+        doc: doc('deliverables/outline.md', 'changed', { changes: 3, bytes: 2310 }), links: [{ kind: 'doc', slug: 'demo-task', path: 'deliverables/outline.md' }] }),
+      day(2, { id: 'log:1', kind: 'log', filters: ['notes'], text: 'Outline written, examples collected', by: { kind: 'bridge', name: null } }),
+      ago(3 * 1440 + 60, { id: 'code:2', kind: 'code', filters: ['code'], text: 'example/repo#18 Docs: setup guide outline', by: { kind: 'git', name: null },
+        links: [{ kind: 'web', href: 'https://example.org/repo/pull/18' }] }),
+      ago(3 * 1440 + 120, { id: 'session:1', kind: 'session', filters: ['agents', 'state'], text: 'demo-task review',
+        change: { field: 'driver', old: null, new: 'demo-task review' }, by: { kind: 'you', name: null } }),
+      ago(4 * 1440, { id: 'agent:2', kind: 'agent', filters: ['agents', 'state'], text: 'Finished: three sources found, the result note is filed',
+        by: { kind: 'agent', name: 'demo-task research' }, agent: { mode: 'go', stage: 'result', result: 'Three sources found' } }),
+      ago(5 * 1440, { id: 'doc:3', kind: 'doc', filters: ['docs'], by: { kind: 'you', name: null },
+        doc: doc('deliverables/screenshots.pdf', 'new', { attached: true, bytes: 48213 }), links: [{ kind: 'doc', slug: 'demo-task', path: 'deliverables/screenshots.pdf' }] }),
+      ago(6 * 1440, { id: 'status:1', kind: 'status', filters: ['state'], change: { field: 'status', old: 'backlog', new: 'doing' }, by: { kind: 'git', name: null } }),
+      day(7, { id: 'created:1', kind: 'created', filters: ['state'], change: { field: 'status', old: null, new: 'backlog' },
+        by: { kind: 'you', name: null } }),
+    ]
+  }
+  if (row.inbox_id === '20261009-0915-update-docs-e5f6') {
+    return [
+      ago(35, { id: 'agent:1', kind: 'agent', filters: ['agents', 'state'], text: 'Started: update the setup docs', change: { field: 'driver', old: null, new: null },
+        by: { kind: 'you', name: null }, agent: { mode: 'go', stage: 'working', result: null } }),
+      ago(26 * 60, { id: 'note:1', kind: 'note', filters: ['notes'], text: 'The new config key needs a line in the setup guide' }),
+      day(3, { id: 'created:1', kind: 'created', filters: ['state'], change: { field: 'status', old: null, new: 'open' } }),
+    ]
+  }
+  return [day(5, { id: 'created:1', kind: 'created', filters: ['state'], change: { field: 'status', old: null, new: row.status ?? 'open' } })]
+}
+
+/** The counts of a feed's filters, a row in all and in each of its own (activity.py counts) */
+function feedCounts(rows) {
+  const counts = { all: rows.length, notes: 0, docs: 0, state: 0, agents: 0, code: 0 }
+  for (const r of rows) for (const f of r.filters) counts[f] += 1
+  return counts
+}
+
+// the notes the demo gives the verbs Work through sends, in words both languages carry (WORDS); any other verb names itself
+const MOCK_NOTES = { note: 'Mock: the note is kept', settle: 'Mock: decided', later: 'Mock: put off', shelve: 'Mock: shelved',
+  do_it: 'Mock: an agent starts on it', task_reopen: 'Mock: back in the list', inbox_reopen: 'Mock: back in the list' }
+
+// the sentence a mail of an instruction becomes: a start that drafts only (text.py instruct.mail_note)
+const MAIL_NOTE = 'Write a mail draft with the mail-draft skill, a draft only, never send it'
+
 /** A transport with the same interface as the real one, backed by the example state */
 export function createMockTransport(opts = {}) {
   // opts.latency scales every pause the demo makes to look like a server (1 by default, 0 in the tests)
@@ -1389,6 +1513,9 @@ export function createMockTransport(opts = {}) {
   const jev = createMockJev ? createMockJev() : null   // the Jev tab's mock: the server's once-per-day rule, invented tokens
   const history = opts.empty ? [] : historyEntries(now())
   const orders = {}                                       // the kept Jev order per work page, as jev.py keeps it
+  const added = {}                                        // Work through: notes and documents added per row key, newest first
+  const summaries = {}                                    // the summary kept per key with the ids of the rows it read
+  const blobs = new Map()                                 // the documents of the demo as Blob addresses, one per path
   const words = WORDS[opts.lang]
   const emit = (name, payload) => { if (handlers[name]) handlers[name](localize(payload, words)) }
   const note = (text, tone = 'info') => emit('note', { at: hhmm(now()), text, tone })
@@ -1406,7 +1533,12 @@ export function createMockTransport(opts = {}) {
     })
     history.unshift({ id: `h${Math.random().toString(16).slice(2, 12).padEnd(10, '0')}`, at_ms: now(), verb, items, backfilled: false })
   }
+  const gone = new Map()                                   // the rows a decision took out, by key, for its undo
   const removeRows = (keys, verb) => {
+    for (const sec of state.model.sections) {
+      sec.rows.forEach((r, at) => { if (keys.includes(r.key)) gone.set(r.key, { section: sec.id, at, row: r, compact: sec.compact.includes(r.key),
+        approvable: state.model.approvable.includes(r.key), task: state.model.task_rows.find(x => x.key === r.key) ?? null }) })
+    }
     // a file put off stays a file, deferred; one closed or dropped leaves the list
     if (state.model.files) {
       const put = ['later', 'hide'].includes(verb)
@@ -1426,7 +1558,138 @@ export function createMockTransport(opts = {}) {
     wait(() => emit('view', state.model), 300)
   }
 
+  // an undo: the row a decision took out comes back to its section, at its place, the page hears the new view
+  const restoreRow = key => {
+    const was = gone.get(key)
+    if (!was) return
+    gone.delete(key)
+    const sec = state.model.sections.find(x => x.id === was.section)
+    if (!sec || sec.rows.some(r => r.key === key)) return
+    sec.rows.splice(Math.min(was.at, sec.rows.length), 0, was.row)
+    if (was.compact) sec.compact.push(key)
+    sec.total = sec.rows.length
+    if (was.approvable) state.model.approvable.push(key)
+    if (was.task) state.model.task_rows.push(was.task)
+    if (state.model.files && key.startsWith('task:')) state.model.files = state.model.files.map(f => (`task:${f.slug}` === key ? { ...f, deferred: false, deferred_until: null } : f))
+    seq += 1
+    state.model = { ...state.model, seq }
+    wait(() => emit('view', state.model), 120)
+  }
+
+  // Work through, round 3: the row of a key, the feed of a point (an inbox item that names a task reads the task's), the
+  // refusals of flow_off and of a key no longer in the list
+  const flowOff = () => (state.work?.flow?.enabled ? null : fail(409, 'flow_off', 'Work through is off'))
+  const rowOf = key => state.model.sections.flatMap(x => x.rows).find(r => r.key === key) ?? null
+  // the starts of the return channel on a row, as activity.py lists them, where the invented feed has none of its own
+  const startRows = row => (state.model.returns ?? []).filter(r => r.key === row.key).map((r, k) => {
+    const tab = state.tabs.tabs.find(t => t.ref === r.tab?.ref) ?? null
+    return feedRow(r.at_ms ?? now(), { id: `agent:r${k + 1}`, kind: 'agent', filters: ['agents', 'state'], text: 'Started from the cockpit',
+      change: { field: 'driver', old: null, new: tab?.name ?? null }, by: { kind: 'you', name: null },
+      agent: { mode: r.mode ?? 'go', stage: r.stage ?? 'started', result: r.result?.text ?? null }, links: tab ? [{ kind: 'tab', ref: tab.ref }] : [] })
+  })
+  const feedOf = row => {
+    const own = row.task ? `task:${row.task}` : row.key
+    const base = feedRows(row, now())
+    const rows = [...(added[row.key] ?? []), ...(own !== row.key ? added[own] ?? [] : []), ...base,
+      ...(base.some(r => r.kind === 'agent') ? [] : startRows(row))]
+      .sort((a, b) => (b.at_ms ?? 0) - (a.at_ms ?? 0))
+    const hash = rows.map(r => r.id).join(',')
+    const kept = summaries[row.key] ?? null
+    const fl = state.work.flow
+    return { ok: true, key: row.key, at_ms: now(), rows, more: false, counts: feedCounts(rows),
+      facts: { created: rows.at(-1)?.at.slice(0, 10) ?? null, moved: rows[0]?.at ?? null,
+        jev: row.task === 'demo-task' ? { quadrant: 'plan', rank: 2, urgency: 0.67, impact: 1.0, effort: 0.33, only_me: 0.8, at_ms: now() - 60 * MIN } : null },
+      summary: kept ? { ...kept.summary, stale: kept.hash !== hash } : null,
+      can: { note: true, attach: !!fl.attach?.enabled && !!row.task, summary: !!fl.summary?.enabled && rows.length > 0 }, hash }
+  }
+  // a document attached (activity.py attach): the name made safe and flat, the size and the data checked, a name taken
+  // gets -2 up to -99; the row comes into the feed at once
+  const attach = args => {
+    const off = flowOff()
+    if (off) return off
+    if (!state.work.flow.attach?.enabled) return fail(409, 'attach_off', 'attaching is off')
+    const row = rowOf(args.key)
+    if (!row) return fail(409, 'stale_row', 'no such row')
+    if (!row.task) return fail(409, 'attach_no_task', 'no open task on this row')
+    const data = String(args.data ?? '')
+    const bad = field => ({ ...fail(400, 'invalid_argument', `bad ${field}`), error: { code: 'invalid_argument', message: `bad ${field}`, field } })
+    if (!data || data.length % 4 || !/^[A-Za-z0-9+/]+={0,2}$/.test(data)) return bad('data')
+    const bytes = (data.length / 4) * 3 - (data.endsWith('==') ? 2 : data.endsWith('=') ? 1 : 0)
+    if (bytes > state.work.flow.attach.max_mb * 1048576) return fail(413, 'attach_too_big', 'too big')
+    // as activity.py safe_name: Python's \w is every letter and digit of any script, so \p{L} and \p{N} here; control
+    // and format characters out; runs of blanks, then of underscores, as one
+    let name = String(args.name ?? '').split(/[\\/]/).pop().normalize('NFC').replace(/[\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Cn}]/gu, '')
+      .replace(/[^\p{L}\p{N}_ .()+,=@-]/gu, '_').replace(/ {2,}/g, ' ').replace(/_{2,}/g, '_').replace(/^[. _-]+/, '').replace(/[. ]+$/, '')
+    if (name.length > 120) { const dot = name.lastIndexOf('.'); const ext = dot > 0 && name.length - dot <= 16 ? name.slice(dot) : ''; name = name.slice(0, 120 - ext.length) + ext }
+    if (!name) return bad('name')
+    const slug = row.task
+    const own = `task:${slug}`
+    const taken = new Set([...(added[own] ?? []), ...feedRows({ task: slug, key: own }, now())].filter(r => r.doc).map(r => r.doc.path.toLowerCase()))
+    const dot = name.lastIndexOf('.')
+    const [stem, ext] = dot > 0 ? [name.slice(0, dot), name.slice(dot)] : [name, '']
+    let pick = name
+    for (let n = 2; taken.has(`deliverables/${pick}`.toLowerCase()); n += 1) {
+      if (n > 99) return fail(409, 'attach_exists', 'that name is taken')
+      pick = `${stem}-${n}${ext}`
+    }
+    const path = `deliverables/${pick}`
+    const r = feedRow(now(), { id: `doc:a${Object.values(added).flat().length + 1}`, kind: 'doc', filters: ['docs'], by: { kind: 'you', name: null },
+      doc: { path, state: 'new', changes: 1, attached: true, bytes }, links: [{ kind: 'doc', slug, path }] })
+    added[own] = [r, ...(added[own] ?? [])]
+    // the page says the attachment itself (app.js flowAttach): no note of the demo's beside it
+    return ok({ ok: true, verb: 'flow_attach', note: '', steps: [], settled: [], reload: 'none', attach: { path, name: pick, bytes, row: r } })
+  }
+  // a sentence of the instruction line as a plan (instruct.py), by a fixed word match, part by part (the parts between
+  // commas): done, later, drop, a mail or a question to someone (always a start that drafts only), a start, a reply
+  // (only with the point open and its tab at its prompt; after "reply:" the rest of the sentence is its words). A part
+  // with none of them stays unclear, as the model says what it could not plan; nothing runs
+  const instruct = args => {
+    const rows = (args.keys ?? []).map(rowOf).filter(Boolean)
+    if (!rows.length) return fail(409, 'stale_row', 'no such row')
+    const text = String(args.text ?? '').trim()
+    const steps = []
+    const unclear = []
+    const step = (op, rs, extra = {}) => steps.push({ n: steps.length + 1, op, keys: rs.map(r => r.key), titles: rs.map(r => r.title), skipped: [], ...extra })
+    const monday = (() => { const d = new Date(now()); d.setDate(d.getDate() + (((8 - d.getDay()) % 7) || 7)); return isoIn(Math.round((d.getTime() - now()) / DAY), now()) })()
+    // typed words go only to a tab that waits at its prompt (instruct.py takes_words); one that asks a choice is answered
+    // on the card (asks), one at work takes nothing (not_offered)
+    const reply = said => {
+      const tab = args.point ? state.tabs.tabs.find(t => t.slug === rows[0].task && t.state !== 'shell') : null
+      if (tab?.state === 'waiting' && !tab.is_control) step('reply', rows.slice(0, 1), { tab_ref: tab.ref, text: said })
+      else step('reply', [], { tab_ref: null, text: said, skipped: rows.map(r => ({ key: r.key, title: r.title,
+        why: !tab ? 'no_tab' : tab.state === 'needs-you' ? 'asks' : 'not_offered' })) })
+    }
+    const told = /(?:^|[\s,;])(?:reply|answer|antworte|antwort)\s*:\s*(.*)$/iu.exec(text)
+    const head = told ? text.slice(0, told.index) : text
+    for (const part of head.split(/[,;]/).map(x => x.trim().replace(/^(?:and|und|then|dann)\s+/iu, '')).filter(Boolean)) {
+      const low = ` ${part.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ')} `
+      const has = (...w) => w.some(x => low.includes(` ${x} `))
+      const before = steps.length
+      if (has('done', 'erledigt', 'fertig')) step('done', rows)
+      if (has('later', 'später', 'monday', 'montag')) step('later', rows, { until: monday })
+      if (has('drop', 'weg', 'not needed', 'nicht mehr nötig')) step('drop', rows, { reason: 'not_needed' })
+      if (has('mail', 'e mail', 'email', 'ask', 'frag', 'frage')) step('do', rows, { mail: true, note: `${localize(MAIL_NOTE, words)}: ${part}` })
+      else if (has('let ai', 'bridge macht', 'agent')) step('do', rows, { note: part })
+      if (has('reply', 'antwort', 'antworte', 'go on', 'weiter')) reply(part)
+      if (steps.length === before) unclear.push(part)
+    }
+    if (told) reply(told[1].trim() || text)
+    return { id: `p${Math.random().toString(16).slice(2, 12).padEnd(10, '0')}`, text, point: !!args.point, n: rows.length, steps,
+      unclear: !steps.length ? 'No verb in the sentence: done, later, drop, a mail or a reply.' : unclear.length ? `${localize('No verb in this part:', words)} ${unclear.join('; ')}` : null,
+      model: 'haiku', at_ms: now() }
+  }
+
   return {
+    // the address of a file the page links: a document of a task opens as a Blob of invented text, the rest as it is
+    href(p) {
+      if (!String(p).startsWith('/api/flow/doc?') || typeof Blob !== 'function' || typeof URL?.createObjectURL !== 'function') return p
+      if (!blobs.has(p)) {
+        const file = new URLSearchParams(p.split('?')[1]).get('path') ?? ''
+        const text = `${file}\n\n${localize('A file of the demo, invented: nothing here is real.', words)}\n`
+        blobs.set(p, URL.createObjectURL(new Blob([text], { type: 'text/plain;charset=utf-8' })))
+      }
+      return blobs.get(p)
+    },
     async get(path) {
       const [pathname, query = ''] = path.split('?')
       const url = { pathname, searchParams: new URLSearchParams(query) }
@@ -1442,7 +1705,15 @@ export function createMockTransport(opts = {}) {
         const found = taskFile(url.searchParams.get('slug'), url.searchParams.get('file'))
         return found ? ok(found) : fail(404, 'not_found', 'no such file')
       }
-      if (url.pathname === '/api/task') return ok(taskDetail(url.searchParams.get('slug'), state))
+      if (url.pathname === '/api/task') return ok(taskDetail(url.searchParams.get('slug'), state, words))
+      if (url.pathname === '/api/flow/activity') {
+        const off = flowOff()
+        if (off) return off
+        const row = rowOf(url.searchParams.get('key'))
+        if (!row) return fail(409, 'stale_row', 'no such row')
+        const { hash, ...feed } = feedOf(row)
+        return ok(feed)
+      }
       if (url.pathname === '/api/find') {
         const q = String(url.searchParams.get('q') ?? '')
         if (q.trim().length < 2 || q.length > 200) return fail(400, 'invalid_argument', 'the query must be 2 to 200 characters')
@@ -1520,6 +1791,7 @@ export function createMockTransport(opts = {}) {
     },
     async post(path, body) {
       await new Promise(r => wait(r, 250))
+      if (path === '/api/flow/attach') return attach(body ?? {})
       // the demo has no server poll to slow down: a page reporting its visibility is simply acknowledged
       if (path === '/api/presence') return { status: 200, ok: true, data: { ok: true }, error: null }
       // nor an audit log: a page view is simply acknowledged
@@ -1611,9 +1883,44 @@ export function createMockTransport(opts = {}) {
         const verb = body?.verb
         const args = body?.args ?? {}
         const keys = args.keys ?? (args.key ? [args.key] : [])
-        const result = { ok: true, verb, note: `Mock: ${verb} ${keys.join(', ') || args.tab_ref || ''}`.trim(), steps: [], settled: [],
+        const result = { ok: true, verb, note: MOCK_NOTES[verb] ?? `Mock: ${verb} ${keys.join(', ') || args.tab_ref || ''}`.trim(), steps: [], settled: [],
           reload: 'none', jump: null, relay: null, confirm: null }
         if (verb === 'approve_all' && !args.confirm) return ok({ ...result, note: '', confirm: { count: keys.length } })
+        // Work through, round 3: an attachment, the summary of a point's Activity, the plan of an instruction
+        if (['flow_attach', 'flow_activity_summary', 'flow_instruct'].includes(verb)) {
+          const off = flowOff()
+          if (off) return off
+          if (verb === 'flow_attach') return attach(args)
+          const ai = state.flow_ai
+          if (verb === 'flow_activity_summary') {
+            if (!state.work.flow.summary?.enabled) return fail(409, 'summary_off', 'the summary is off')
+            const row = rowOf(args.key)
+            if (!row) return fail(409, 'stale_row', 'no such row')
+            const { hash, rows } = feedOf(row)
+            if (!rows.length) return fail(409, 'summary_empty', 'nothing to summarise')
+            const kept = summaries[row.key]
+            if (kept && kept.hash === hash) return ok({ ...result, note: '', summary: { ...kept.summary, stale: false, cached: true }, flow_ai: ai })
+            if (!ai.summary_left) return fail(429, 'summary_budget', 'no summaries left today')
+            await new Promise(r => wait(r, 900))
+            const summary = { text: 'Since last week the outline was agreed with the team and the first two chapters stand as a draft. An agent found three sources, and the screenshots come next.',
+              since: isoIn(-7, now()), at_ms: now(), model: 'haiku' }
+            summaries[row.key] = { hash, summary }
+            state.flow_ai = { ...ai, summary_left: ai.summary_left - 1 }
+            return ok({ ...result, note: '', summary: { ...summary, stale: false, cached: false }, flow_ai: state.flow_ai })
+          }
+          if (!state.work.flow.instruct?.enabled) return fail(409, 'instruct_off', 'the instruction line is off')
+          if (!ai.instruct_left) return fail(429, 'instruct_budget', 'no instructions left today')
+          const plan = instruct(args)
+          if (plan.ok === false || plan.error) return plan
+          await new Promise(r => wait(r, 700))
+          state.flow_ai = { ...ai, instruct_left: ai.instruct_left - 1 }
+          return ok({ ...result, note: '', plan, flow_ai: state.flow_ai })
+        }
+        // a note on a row: it comes into the row's Activity at once (task.py note, an inbox note event)
+        if (verb === 'note' && args.key && String(args.text ?? '').trim()) {
+          added[args.key] = [feedRow(now(), { id: `note:a${Object.values(added).flat().length + 1}`, kind: 'note', filters: ['notes'],
+            text: String(args.text).trim(), by: { kind: 'you', name: null } }), ...(added[args.key] ?? [])]
+        }
         // an answer to a tab: refused like the server when the question it names is no longer on screen
         // (the third option of the dialog stands for that here) or a draft is typed in the tab
         if (['tab_send', 'tab_option', 'tab_yes', 'tab_no', 'tab_go_on'].includes(verb)) {
@@ -1764,6 +2071,8 @@ export function createMockTransport(opts = {}) {
           const hit = history.flatMap(e => e.items).find(it => !it.undone_ms && it.undo?.verb === verb
             && Object.entries(args).every(([k, v]) => k === 'as' || k === 'note' || it.undo.args[k] === v))
           if (hit) hit.undone_ms = now()
+          // and the row the decision took out of the list is back where it stood
+          restoreRow(verb === 'task_reopen' ? `task:${args.slug}` : verb === 'inbox_reopen' ? `inbox:${args.id}` : args.key)
         }
         if (verb === 'drop' && (args.reason === 'family' || args.reason === 'source')) {
           result.muted = `20261010-1200-mock-${mockMutes.length}`
