@@ -24,6 +24,7 @@ const WORDS = {
     'Sweep old log files in the scratch folder': 'Alte Logdateien im Scratch-Ordner wegräumen',
     'Write the onboarding guide for the demo project': 'Die Einstiegsanleitung für das Demo-Projekt schreiben',
     'Tidy the old setup notes': 'Die alten Einrichtungsnotizen aufräumen',
+    'Result: the vendor takes the current format, nothing to change': 'Ergebnis: Der Anbieter nimmt das jetzige Format, nichts zu ändern',
     'Settle the invoice format with the vendor': 'Das Rechnungsformat mit dem Anbieter klären',
     'Fix the flaky test in example/repo#12': 'Den wackligen Test in example/repo#12 reparieren',
     'Refresh the docs index': 'Den Doku-Index auffrischen',
@@ -804,6 +805,13 @@ export function buildState(now = Date.now(), opts = {}) {
     start(rows.labels, 'go', 80, 'result', { tab: tabRef('surface:10'),
       result: { kind: 'filed', text: 'Draft written to the inbox as a result. Anything else?', key: rows.labels.key, at_ms: null } }),
     start(rows.filed, 'go', 130, 'lost'),
+    // a start whose tab went still without a question (idle: its agent ended, the shell is left), and one whose
+    // task got its result line ("Result: ...", a note on the task since the start)
+    { key: 'task:quiet-docs', item: 'quiet-docs', title: 'Tidy the old setup notes', mode: 'go', at_ms: now - 150 * MIN,
+      stage: 'idle', in_briefing: true, result: null, tab: tabRef('surface:11') },
+    { key: 'task:vendor-reply', item: 'vendor-reply', title: 'Settle the invoice format with the vendor', mode: 'go', at_ms: now - 90 * MIN,
+      stage: 'result', in_briefing: true, tab: null,
+      result: { kind: 'note', text: 'Result: the vendor takes the current format, nothing to change', key: null, at_ms: null } },
   ]
 
   const relayOnline = !opts.offline
@@ -1288,13 +1296,15 @@ function agentsState(now) {
 
 // the triage (triage.py state()): one line per task and inbox row of the demo, the last run 20 minutes ago
 function triageState(now, running = null) {
-  // effort is for the AI only: a row the person does carries none (triage.py)
+  // effort is for the AI only: a row the person does carries none (triage.py). next_rank is Jev's fresh rank of
+  // the row (the order of the Work through page's tasks), rank_at when it was given
   const x = (kind, title, gist, verdict, doer, effort, extra = {}) => ({ kind, title, gist, verdict, reason: null, doer, effort, why: null,
-    verdict_from: 'haiku', model: 'haiku-5-5', level: effort === 'small' ? 1 : 2, jev: null, ...extra })
+    verdict_from: 'haiku', model: 'haiku-5-5', level: effort === 'small' ? 1 : 2, jev: null, next_rank: null, rank_at: null, ...extra })
   const items = {
     'task:demo-task': x('task', 'Write the onboarding guide for the demo project', 'A setup guide for new team members', 'continue', 'either', 'medium',
       { topic: 'docs' }),
-    'task:docs-refresh': x('task', 'Refresh the docs index', 'Rebuild the index after the folder change', 'continue', 'ai', 'small', { topic: 'docs' }),
+    'task:docs-refresh': x('task', 'Refresh the docs index', 'Rebuild the index after the folder change', 'continue', 'ai', 'small',
+      { topic: 'docs', next_rank: 1, rank_at: now - 3 * 3600000 }),
     'inbox:20261009-0915-update-docs-e5f6': x('inbox', 'Update the setup docs after the config change', 'Update the setup docs after the config change',
       'keep', 'ai', 'small', { topic: 'docs' }),
     'task:alpha-release': x('task', 'Prepare the alpha release notes', 'Release notes from the merged changes', 'continue', 'you', null,

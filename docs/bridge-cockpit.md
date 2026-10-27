@@ -91,6 +91,10 @@ their defaults:
 | `flow.enabled` | `false` | the tab Work through (page `@flow`) right after Today: everything open as one card at a time in a fixed order, five verbs on each card, see [Work through](#work-through-flow). Off, the page and its tab do not exist |
 | `flow.drop_reasons` | `[resolves_itself, not_needed, someone_else, not_worth_it]` | the reasons "Drop because" offers to click, beside a free field; the four keys are worded by the page in both languages, a reason of your own (1 to 80 characters, at most 12) stands as written |
 | `flow.return_after_s` | `20` | after "To tab" on a card, how many seconds later (at most 4 hours) the page asks how it went once it is in view again; `0` asks at the first return. Switching apps without "To tab" never asks |
+| `flow.prep_ahead` | `2` | how many cards after the one in front get their brief prepared (`describe_run`, within `describe.budget_per_hour`), only when it is missing or stale; `0` prepares none |
+| `flow.max_running` | `4` | how many started agents may run before Let AI do it asks "4 are running already. Start anyway?" (at least 1) |
+| `flow.rank_max_age_days` | `7` | a Jev rank older than this many days does not order the tasks (the triage's `next_rank` is left out), the plain order takes over; at least 1 |
+| `flow.rerank_per_day` | `3` | how often a day a click on "order again" may ask Jev anew; `0` only the order of the day's first call. Reserved: the page has no such button yet, so nothing reads it |
 | `a2a_sources` | none | further sources of A2A peers beside `infra/a2a-peers/`: a list of `{name, script}`, `script` a skill's own `skills/<skill>/scripts/<name>.py` that reaches agents another way (an access proxy, a broker) and keeps its own credentials. At most four; a bad entry is ignored and named in `status`. Contract under [Peers from a script](#5-asking-claude-the-relay) |
 | `snapshot_minutes` | `60` | while the server runs, save the cmux layout this often, only when it changed; `0` = only on "Save layout now" |
 | `idle_minutes` | `10` | a tab the terminal reports as waiting that has been still this long and whose last words ask nothing (no question mark, no options, nothing typed in its prompt) is done, not waiting: it leaves "waits for you" and counts as "to review" in its area; a tab whose item or task is settled is done at once; it reads the tab's screen, so without a terminal driver that serves screens (or with the questions off) only the settled rule applies and every other tab keeps waiting; an idle tab raises no "waits for an hour" and the decision guide does not read it; `0` = off |
@@ -295,16 +299,18 @@ across a group, a Jev rank only orders inside one:
 | # | Group | What | Order inside |
 |---|---|---|---|
 | 1 | Back from a tab | the return card after **To tab** (below) | one |
-| 2 | A tab asks | a start whose tab stopped working, and every tab that asks you, with or without a task | the oldest question first |
-| 3 | Finished | a start of the return channel with its answer | the oldest first |
+| 2 | A tab asks | a start whose tab asks, and every tab that asks you (needs-you), with or without a task | the oldest question first |
+| 3 | Finished or quiet | a start of the return channel with its answer or result line, and one whose tab went quiet (stage `idle`) | the oldest first |
 | 4 | Tab gone | a start without a tab and without a word | the newest first |
 | 5 | A question for you | an inbox item that asks (art `ask`), with or without a task | a due day first, then the oldest |
-| 6 | Tasks | the tasks doing or in review, every priority | Jev rank, then priority, then age |
+| 6 | Tasks | the tasks doing or in review, every priority | the triage's `next_rank` (Jev's rank while it is fresh), then a Jev view of a work page, then priority, then age |
 | 7 | Reports | the reports (art `report`), all on one card | the oldest first |
 
 Every row stands once: a start, a tab or a question about a task takes that
 task out of the tasks, and a start that runs stays in the lane **Running** on
-top until it asks, finishes or is lost. A click on an entry of the lane shows
+top until it asks, finishes or is lost. The lane holds the tabs of sessions
+linked to a task too (one you started yourself in that task's tab), while they
+work; their task stays out of the band meanwhile. A click on an entry of the lane shows
 the last lines of its tab without leaving the cards. The chips over the queue
 show one kind at a time (asks you, running, tasks, reports). **Left out (n)**
 lists what the queue leaves out and why: put off until a day, waiting on
@@ -323,9 +329,37 @@ else Advise on a question and Let AI do it on a task the AI may do):
 | Later until | `later`: tomorrow, Monday, next week or a date |
 | Drop because | a reason from `cockpit.flow.drop_reasons` or typed, never without one: a task is shelved (`shelve`, an idea in the inbox and the task declined, taken back by reopening it), anything else settled as not doing with the reason. A stream's own row offers neither Drop nor Done; an inbox item about a stream is decided like any other item |
 
-A card whose tab asks offers no start (the tab takes no sentence while it
-asks), only **To tab** and **View** beside the other verbs. A finished start
-offers **Done and close the tab** and **Runs on**; a lost one **Start again**.
+**Let AI do it** shows the model and its effort under the start sentence (the
+picker of every start, while `cockpit.launch_model` is on): with Auto, the
+router's recommendation for this card is fetched once (`/api/route`) and kept
+for the page's life. Once `cockpit.flow.max_running` agents run (the entries
+of the lane), Start asks first: "4 are running already. Start anyway?". One
+click starts one item; there is no start of several at once.
+
+**A tab asks.** The card shows the question the tab poll read (`asks.py`) and
+its answers as buttons, the same as everywhere a tab is answered: a dialog's
+options (`tab_option`), yes and no, go on, a field for an answer of your own.
+With the decision guide on, its steps stand under them. Every answer names
+the question it answers, so nothing reaches a tab that moved on; once sent,
+the card leaves the queue until the tab asks anew. The card offers no start
+(the tab takes no sentence while it asks), only **To tab** and **View** beside
+the other verbs.
+
+**Finished or quiet.** A finished start shows its answer, or its result line
+(a note "Result: ..." on its task since the start), and a quiet one says that
+no question was read. Under it the criteria of the item's brief as a plain list
+to check yourself: nothing ticks them and nothing judges them. The card offers
+**Done and close the tab**, **Improve** (what is still to do: sent to the tab
+while its agent waits there, else a new start with those words), **Runs on**
+and **Drop because**. A lost start offers **Start again**.
+
+**Briefs ahead.** When a card comes to the front, the next
+`cockpit.flow.prep_ahead` cards whose brief is missing or stale get it written
+(`describe_run` with `ahead: true`), one at a time, each key once per page
+load, never on a timer. A refusal (the hour's budget spent, a brief being
+written already) ends the round; the cards not asked for yet are asked for
+when a later card comes up. These runs keep within `describe.budget_per_hour`;
+a click on a card's Describe button still always runs.
 
 **The return card.** **To tab** on a card remembers the jump, in the page's
 memory only (a reload forgets it). When the page is in view again at least
@@ -340,8 +374,10 @@ reports. A start then hands out the commands to start it by hand.
 
 **Upgrading.** Opt-in, nothing changes until the key is set: without
 `cockpit.flow.enabled: true` the tab and the page do not exist, and a page
-stored as `@flow` opens Today. The page adds one verb, `shelve`; every other
-page, view, verb and endpoint stays as it was. The state sends the block under
+stored as `@flow` opens Today. The page adds one verb, `shelve`, and one
+optional argument, `describe_run`'s `ahead` (refused with `describe_budget`
+once the hour's budget is spent); every other page, view, verb and endpoint
+stays as it was. The state sends the block under
 `work.flow` beside the work tab's keys; a page that does not read it is not
 affected. To try it in the demo, open it as it is (the demo has it on);
 `?flow=0` shows the demo without it.
@@ -621,10 +657,18 @@ Esc surfaces. The graph is built once a minute at most.
 **With AI.** Every start handed to a tab ("Let AI do it", "Advise",
 "Collect context") is kept in `launches.json` (`returns.py`), a week long.
 Its stage is read from what the Bridge has, nothing is asked of the tab:
-started, working, asks you (the tab waits), answer (a filed inbox item, or a
-note on its inbox item written after the start), done (its inbox item
-closed, or its task moved to `work/done/`), and "no word" when the tab is
-gone without an answer. The page follows tab states live and shows the stage
+started, working, asks you (a dialog the terminal reports, or a question read
+off the tab's screen: a question mark, numbered options, words typed in its
+prompt), quiet (`idle`: the tab stopped working and the words read off its
+screen ask nothing, or its agent left the shell; most likely through; a tab
+whose screen was not read keeps asking), answer (a filed inbox item, a note on its inbox item
+written after the start, or a note on its task since the day of the start that
+begins with `Result:`, in German `Ergebnis:`, and stands after the cockpit's
+own start line of that day), done (its inbox item closed, or
+its task moved to `work/done/`), and "no word" when the tab is gone without an
+answer. An agent tells its result in one line with
+`task.py note <slug> -- "Result: ..."`; the cockpit writes no line of its own
+for it. The page follows tab states live and shows the stage
 wherever the item appears: a chip on its card, its Briefing row and its row on
 every page (Work included), and the whole return panel (steps, the tab's last
 line or the answer, the ways on) at the top of its drawer and its detail. A
@@ -736,7 +780,7 @@ the screen and shows the next title on its own line.
 
 **With AI on the Sessions tab.** The Sessions tab leads with what the AI was
 handed, in four groups: **Done, please check** (a start whose item closed or
-whose task moved to `work/done/`, or that left an answer, plus every waiting tab
+whose task moved to `work/done/`, that left an answer or whose tab went quiet, plus every waiting tab
 whose own item or task is settled without a start of the cockpit naming it),
 **Needs you**, **Working** and **No word**. A settled tab says why ("Done: its
 item is closed. The tab can go.") and offers **Close tab** as its one next step,
@@ -1423,7 +1467,10 @@ changed counts as stale, so `auto: stale` writes it again within the budget of
 the hour. A person's brief is never rewritten for it. The view's `stale_why`
 says which reason holds: `basis` (the text moved on), `prompt` or `refs`.
 
-"Describe" on a card (`describe_run {key}`) asks for one item now. With
+"Describe" on a card (`describe_run {key}`) asks for one item now; it counts
+against the budget but is never refused. The Work through page writes the
+briefs of its next cards ahead (`describe_run {key, ahead: true}`): those runs
+are refused with `describe_budget` once the hour's budget is spent. With
 
 ```yaml
 cockpit:
@@ -2267,6 +2314,37 @@ it must reach every machine:
 | File | What | Inbox or chat text |
 |---|---|---|
 | `work/cockpit/settled/` | every hide ("not now until <day>"), every row marked done or not doing, every "show again", one YAML file each (`<UTC stamp>-<seq>-<rand>-<act>.yaml`, or `legacy-<hash>-<act>.yaml` for an entry migrated from `state.json`), written once, never changed; the newest file for a row decides | yes: the row titles |
+
+### Upgrading: quiet tabs and the result line
+
+The return channel used to call every start whose tab stopped working
+`asks`, also a tab that was long through. Nothing has to be done by hand:
+
+1. **A new stage `idle`.** `model.returns[].stage` is `asks` only when the
+   tab shows a dialog (needs-you) or a question on its screen, or when its
+   screen was not read (no driver that serves screens, the questions off, not
+   read yet); a still tab whose words read ask nothing, or a tab back at its
+   shell, is `idle`. A page of this version shows it as
+   "quiet" and files it under "Done, please check". A client that does not
+   know `idle` treats a still tab as asking, as before, because it reads the
+   tab's state live.
+2. **A task's result line.** A note on the task, since the day of the start
+   and after the cockpit's own start line of that day, that begins with
+   `Result:` (or `Ergebnis:`) turns its start into `result` with `{kind: note}`.
+   Older notes and notes with another head change nothing.
+3. **Triage rows carry `next_rank` and `rank_at`.** Jev's rank of the row from
+   the newest order of a work page, `null` without one or when it is older than
+   `cockpit.flow.rank_max_age_days`. Readers that do not know the fields skip
+   them.
+4. **`cockpit.flow`.** New keys, all with defaults, read only by the Work
+   through area, which stays off until `cockpit.flow.enabled: true`: the page
+   sorts its tasks by `next_rank`, prepares `prep_ahead` briefs and asks
+   before a start once `max_running` agents run. `rerank_per_day` is read by
+   no code yet.
+5. **`describe_run` takes `ahead`.** Optional, false by default: a run the Work
+   through page asks for ahead of a card keeps within
+   `describe.budget_per_hour` and is refused with `describe_budget` once it is
+   spent. A click sends no `ahead` and runs as before.
 
 ### Upgrading: settled rows in git
 
