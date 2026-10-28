@@ -932,6 +932,104 @@ test('a finished or quiet start whose item is not in the list (put off, resting)
   }
 })
 
+test('a start that ended with a note stays a card to look at, with its note and the way back to its question', () => {
+  // 28.10.: the tab closed the item with its note, and Running now showed nothing at all
+  const ID = '20261028-0736-chat-bot-a1b2'
+  const done = (over = {}) => ({ key: `inbox:${ID}`, item: ID, title: 'Chat bot job', mode: 'go', at_ms: NOW - 30 * MIN, stage: 'done',
+    in_briefing: false, tab: null, conv: 'q0123456789', result: { kind: 'close', text: 'Result: the bot runs, nothing to change', key: null, at_ms: NOW - MIN }, ...over })
+  let parts = logic.flowParts(state({ returns: [done()] }))
+  assert.deepEqual(parts.result.map(x => [x.start.key, x.stage]), [[`inbox:${ID}`, 'done']])
+  // ended without a word it is settled, as before
+  parts = logic.flowParts(state({ returns: [done({ result: { kind: 'close', text: '', key: null, at_ms: NOW - MIN } })] }))
+  assert.deepEqual(parts.result, [])
+  const c = recorder()
+  const s = cockpitState(NOW, state({ returns: [done()], quick: { convs: [{ id: 'q0123456789', turns: [{ q: 'what is with the bot?', a: 'x' }] }] } }))
+  const el = mount(html`<${FlowPage} s=${s} c=${c} />`)
+  const card = el.$('.flow-card')
+  assert.match(card.text(), new RegExp(en.flow.kind.done))
+  assert.match(card.$('.flow-answer').text(), /the bot runs, nothing to change/)
+  el.button(en.flow.toQuestion).click()
+  assert.deepEqual(c.calls.find(x => x[0] === 'openAsk'), ['openAsk', 'q0123456789'])
+  // seen: taken off the list
+  el.button(text.TABLES.en.home.returnForget).click()
+  assert.deepEqual(c.calls.at(-1), ['act', 'return_forget', { key: `inbox:${ID}` }])
+  // its question is gone from the chats (archived): no way back offered
+  const gone = mount(html`<${FlowPage} s=${cockpitState(NOW, state({ returns: [done()], quick: { convs: [] } }))} c=${recorder()} />`)
+  assert.ok(!gone.button(en.flow.toQuestion), 'no link to an archived question')
+  // a note that asks: the card asks under the question's own head
+  const asks = mount(html`<${FlowPage} s=${cockpitState(NOW, state({ returns: [done({ stage: 'asks',
+    result: { kind: 'note', text: 'Question: close it?', asks: true, key: null, at_ms: NOW - MIN } })] }))} c=${recorder()} />`)
+  assert.equal(asks.$('.flow-card .flow-answer').text(), `${en.flow.question} close it?`)
+  for (const lang of ['en', 'de']) assert.ok(text.TABLES[lang].flow.kind.done && text.TABLES[lang].flow.toQuestion && text.TABLES[lang].flow.question)
+  assert.equal(text.TABLES.de.flow.kind.done, 'Zum Ansehen')
+})
+
+// ---------------------------------------------------------------- round 6d: Close tab on every point with a tab
+
+test('28.10.: a finished start whose item already left the list still closes its tab', () => {
+  // the tab closed its item itself; under Work only To tab, View and Forget stood there (flowside.js FinishedActs)
+  const ID = '20261028-0736-chat-bot-a1b2'
+  const done = { key: `inbox:${ID}`, item: ID, title: 'Chat bot job', mode: 'go', at_ms: NOW - 30 * MIN, stage: 'done', in_briefing: false,
+    tab: { ref: 'surface:21' }, result: { kind: 'close', text: 'Result: the bot runs, nothing to change', key: null, at_ms: NOW - MIN } }
+  const tab = { ref: 'surface:21', name: 'inbox-chat-bot', item: ID, state: 'waiting', settled: 'item', behind: null, since_ms: NOW - 20 * MIN }
+  const c = recorder()
+  const el = mount(html`<${FlowPage} s=${cockpitState(NOW, state({ tabs: [tab], returns: [done] }))} c=${c} />`)
+  const can = el.$('.flow-aside .flow-can')
+  assert.ok(can.$('.tab-close'), 'the one close of a tab')
+  assert.deepEqual(can.$('.tab-close').$$('button').map(b => b.text()), [en.btnCloseTab], 'nothing open behind it: the tab alone')
+  can.$('.tab-close').$$('button')[0].click()
+  assert.deepEqual(c.calls.at(-1), ['act', 'tab_close', { tab_ref: 'surface:21' }])
+})
+
+test('a finished start with its task behind the tab: Done and close the tab ends both on the server, Close tab only beside it', () => {
+  const row = task('fin')
+  const live = { ref: 'surface:10', name: 'fin', slug: 'fin', state: 'waiting', behind: { task: 'fin', item: null }, since_ms: NOW - 25 * MIN }
+  const c = recorder()
+  const s = cockpitState(NOW, state({ work: [row], tabs: [live],
+    returns: [startOf('fin', 'result', { tab: { ref: 'surface:10' }, result: { kind: 'note', text: 'Result: nothing to do', key: null, at_ms: null } })] }))
+  const el = mount(html`<${FlowPage} s=${s} c=${c} />`)
+  const can = el.$$('.flow-aside .flow-can button')
+  assert.equal(can.filter(b => b.text() === en.flow.doneClose).length, 1, 'one Done')
+  assert.ok(can.some(b => b.text() === en.btnCloseTabOnly))
+  assert.ok(!can.some(b => b.text() === en.btnDoneCloseTab), 'the bar holds the Done')
+  can.find(b => b.text() === en.flow.doneClose).click()
+  assert.deepEqual(c.calls.filter(x => x[0] === 'act').at(-1), ['act', 'tab_done', { tab_ref: 'surface:10' }])
+})
+
+test('a tab card says the tab waits where it asks nothing, and asks only where it asks: never "asks" beside its close', () => {
+  // 28.10.: the card head read "A tab asks" while the aside offered Close tab (wantsYou against asksSomething)
+  const said = { ref: 'surface:12', name: 'Claude Code', state: 'waiting', since_ms: NOW - 14 * MIN, ask: { text: 'Done, the report is filed.', options: [] } }
+  const el = mount(html`<${FlowPage} s=${cockpitState(NOW, state({ tabs: [said] }))} c=${recorder()} />`)
+  assert.equal(el.$('.flow-card .fx-kind').text(), en.flow.kind.waits)
+  assert.ok(el.$('.flow-aside .tab-close'), 'it closes')
+  const asking = { ...said, ask: { text: 'Shall I go on?', yes_no: true, options: [] } }
+  const ask = mount(html`<${FlowPage} s=${cockpitState(NOW, state({ tabs: [asking] }))} c=${recorder()} />`)
+  assert.equal(ask.$('.flow-card .fx-kind').text(), en.flow.kind.asks)
+  assert.ok(!ask.$('.flow-aside .tab-close'), 'no close while it asks')
+  assert.equal(text.TABLES.de.flow.kind.waits, 'Tab wartet')
+})
+
+test('a point whose tab waits at its prompt: its close stands with the tab ways, and Done once where the close ends the point', () => {
+  const tab = { ref: 'surface:12', name: 'a research', slug: 'a', state: 'waiting', behind: { task: 'a', item: null }, since_ms: NOW - 14 * MIN }
+  const s = pointState({ rows: [task('a', { area: 'Ops' })], tabs: [tab] })
+  const el = mount(html`<${FlowPage} s=${s} c=${recorder()} />`)
+  const can = el.$$('.flow-aside .flow-can button').map(b => b.text())
+  assert.ok(can.includes(en.btnDoneCloseTab) && can.includes(en.btnCloseTabOnly), can.join(' | '))
+  assert.ok(!can.includes(en.flow.verbs.done), can.join(' | '))
+  // at work it neither closes nor loses its Done
+  const busy = mount(html`<${FlowPage} s=${pointState({ rows: [task('a', { area: 'Ops' })], tabs: [{ ...tab, state: 'working' }] })} c=${recorder()} />`)
+  assert.ok(!busy.$('.flow-aside .tab-close'))
+  assert.ok(busy.$$('.flow-aside .flow-can button').some(b => b.text() === en.flow.verbs.done))
+})
+
+test('Running now: an entry of the strip holds the same close (a session card holds it through its tab controls)', () => {
+  const tab = { ref: 'surface:12', name: 'a research', slug: 'a', state: 'waiting', idle: true, since_ms: NOW - 14 * MIN }
+  const lane = [{ group: 'doing', lane: true, id: 'tab:surface:12', kind: 'tab', row: task('a'), tab, stage: 'idle', how: 'tab', title: 'a', at: NOW - MIN }]
+  const s = cockpitState(NOW, state({ work: [task('a')], tabs: [tab] }))
+  const el = mount(html`<${views.flowrun.RunningStrip} lane=${lane} s=${s} c=${recorder()} />`)
+  assert.ok(el.$('.flow-runstrip-acts .tab-close'))
+})
+
 test('Improve: words to the tab while it lives (tab_send through the reply guard), else a new start with them', async () => {
   const row = task('fin')
   const live = { ref: 'surface:10', name: 'fin', slug: 'fin', state: 'waiting', since_ms: NOW - 25 * MIN }
@@ -3469,4 +3567,18 @@ test('round 6 c P2: where Work through is on, the check has no tab and every way
   const hints = logic.hintsFor({ ...on, ui: { page: 'briefing', workView: 'flow' } }).map(h => [h.id, h.target])
   assert.ok(hints.some(([id, target]) => id === 'flowCheck' && target === '.flow-check-row'))
   for (const lang of ['en', 'de']) assert.ok(text.TABLES[lang].hints.items.flowCheck?.body, lang)
+})
+
+test('6d: a record open in the files tab carries the right column of Work through for its point, the same verbs', () => {
+  const s = cockpitState(NOW, { ui: { page: '@files' } })
+  const parts = logic.flowParts(s)
+  const point = logic.flowQueue(parts, 'all').find(x => x.kind === 'row' && x.row?.task)
+  assert.ok(point, 'the demo has a task point')
+  const words = el => el.$$('.flow-aside .flow-can button').map(b => b.text().trim())
+  const flow = mount(html`<${views.flowside.FlowAside} x=${point} s=${s} c=${recorder()} />`)
+  const files = mount(html`<${views.dossier.DossierView} s=${{ ...s, ui: { ...s.ui, dossierOpen: point.row.task } }} c=${recorder()} />`)
+  assert.ok(words(flow).length > 2)
+  assert.deepEqual(words(files), words(flow))
+  // the list opens a record beside it, the walk off (app.js)
+  assert.match(APP, /openRecord: \(slug, path\) => setUi\(\{ dossierOpen: String\(path \?\? ''\)\.startsWith\('work\/done\/'\) \? path : slug, filesWalk: false \}\)/)
 })

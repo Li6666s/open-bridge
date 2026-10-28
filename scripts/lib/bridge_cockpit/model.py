@@ -369,6 +369,121 @@ def page_badge(page: dict) -> dict:
     return {"kind": "none"}
 
 
+# ---------------------------------------------------------------- findings marked seen ("Seen")
+
+ACK_FP_MAX = 400
+LOUD_SEVERITIES = ("high", "medium")
+
+
+def worker_key(run: dict) -> str:
+    """The key of a background job's finding, the inbox key of round 6d: worker:<host>:<id>"""
+    return f"worker:{as_text(run.get('host'))}:{as_text(run.get('id'))}"
+
+
+# a span of time in a finding's words ("4210s ago", "3 h ago", "vor 2 Std."): it grows on every read without
+# anything new happening, so a fingerprint reads it as one mark
+AGE_RE = re.compile(r"(?<![\w.:-])\d+(?:[.,]\d+)?\s?(?:s|secs?|seconds?|m|mins?|minutes?|h|hrs?|hours?|d|days?"
+                    r"|Sek\.?|Min\.?|Minuten|Std\.?|Stunden?|Tagen?|Tage)(?![\w-])")
+
+
+def steady(text: Any) -> str:
+    """A finding's words without the spans of time in them (AGE_RE): what stays while nothing new happens"""
+    return AGE_RE.sub("#", as_text(text))
+
+
+def run_fingerprint(run: dict) -> str:
+    """What a job's finding is: its loud findings (high, medium), state and detail, the detail without its spans
+    of time (steady: an overdue job's seconds since its last line grow on every refresh). The detail of a failed
+    run carries the time of the failure, so a NEW failure has another fingerprint; empty when nothing is loud"""
+    loud = [f for f in run.get("findings") or [] if isinstance(f, dict) and f.get("severity") in LOUD_SEVERITIES]
+    return "\n".join(f"{as_text(f.get('state'))}:{steady(f.get('detail'))}" for f in loud)[:ACK_FP_MAX]
+
+
+def item_fingerprint(it: dict) -> str:
+    """What a page row's finding is: its tone, title and detail without their spans of time (steady); empty for a
+    row that is not bad or warn"""
+    if it.get("tone") not in ("bad", "warn"):
+        return ""
+    return f"{it['tone']}:{steady(it.get('title'))}:{steady(it.get('detail'))}"[:ACK_FP_MAX]
+
+
+def _seen(ack: dict) -> dict:
+    return {"day": ack.get("day") or "", "note": ack.get("note") or ""}
+
+
+def workers_with_acks(view: Any, acks: dict) -> Any:
+    """The workers view with `acked` on every job whose finding was marked seen as it still stands: the page
+    draws it grey and counts it nowhere (logic.js jobSeverity). A job without one is left exactly as it was"""
+    if not acks or not isinstance(view, dict) or not isinstance(view.get("runs"), list):
+        return view
+    runs = []
+    for run in view["runs"]:
+        ack = acks.get(worker_key(run)) if isinstance(run, dict) else None
+        fp = run_fingerprint(run) if ack else ""
+        runs.append({**run, "acked": _seen(ack)} if ack and fp and ack.get("fp") == fp else run)
+    return {**view, "runs": runs}
+
+
+def ack_item(it: dict, acks: dict) -> bool:
+    """Mark a page row whose finding was marked seen as it still stands: grey (tone dim), its own tone kept in
+    `acked`. True when it was, so the caller takes it out of the section's bad and weight"""
+    ack = acks.get(it.get("key")) if acks else None
+    fp = item_fingerprint(it) if ack else ""
+    if not (ack and fp and ack.get("fp") == fp):
+        return False
+    it["acked"] = {**_seen(ack), "tone": it["tone"]}
+    it["tone"] = "dim"
+    return True
+
+
+def _when(text: Any) -> dt.datetime | None:
+    try:
+        moment = dt.datetime.fromisoformat(as_text(text).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return moment if moment.tzinfo else moment.replace(tzinfo=dt.timezone.utc)
+
+
+def item_about_run(item: dict, run: dict) -> bool:
+    """Whether an inbox item is about this job: its key is the job's (worker:<host>:<id>), its text names that
+    key, or it is a question handed over from the cockpit (key web:...) about it ("Background job <id> on
+    <host>", text.js workerAsk). Another item that merely names the job and its machine is not enough"""
+    key = worker_key(run)
+    text = f"{as_text(item.get('summary'))}\n{as_text(item.get('detail'))}"
+    if item.get("key") == key or key in text:
+        return True
+    if not as_text(item.get("key")).startswith("web:"):
+        return False
+    rid, host = re.escape(as_text(run.get("id"))), re.escape(as_text(run.get("host")))
+    return bool(rid and host and re.search(rf"(?<![\w-]){rid} (?:on|auf) {host}(?![\w-])", text))
+
+
+ACK_CLOSE_DAYS = 7
+
+
+def closed_acks(items: list[dict], view: Any, read: set, now: dt.datetime) -> list[tuple[str, str, str, str]]:
+    """(finding key, fingerprint, close note, inbox id) for each job whose inbox item was closed after its
+    finding came up: closing the item says the finding was looked at. Only a close not read before (`read`), of
+    the last ACK_CLOSE_DAYS (an old close says nothing about today's finding), and only one that came after the
+    job's newest failed run, where the view says when that was"""
+    runs = [r for r in (view or {}).get("runs") or [] if isinstance(r, dict) and run_fingerprint(r)]
+    out = []
+    for item in items:
+        closed = _when(item.get("closed_at"))
+        if item.get("id") in read or closed is None or (now - closed).days >= ACK_CLOSE_DAYS:
+            continue
+        for run in runs:
+            if not item_about_run(item, run):
+                continue
+            failed = [_when(e.get("at")) for e in run.get("strip") or [] if isinstance(e, dict)
+                      and e.get("verdict") in ("failed", "expired")]
+            failed = [f for f in failed if f is not None]
+            if failed and max(failed) > closed:
+                continue                     # closed before this failure: it is news
+            out.append((worker_key(run), run_fingerprint(run), as_text(item.get("note")), as_text(item.get("id"))))
+    return out
+
+
 def row_key(row: dict) -> str:
     if row.get("inbox_id"):
         return f"inbox:{row['inbox_id']}"
@@ -735,7 +850,13 @@ def is_idle(tab: dict, ask: dict | None, since_ms: float, settled: str | None, n
         return True
     if after_ms <= 0 or now - since_ms < after_ms or not ask:
         return False
-    return not ask.get("yes_no") and not ask.get("options") and not ask.get("draft")
+    return not asks_something(ask)
+
+
+def asks_something(ask: dict | None) -> bool:
+    """Whether the words read off a waiting tab's screen ask anything: a question (yes or no, a question mark),
+    options, or something typed in its prompt. Every waiting tab has its last words read, so words alone ask nothing"""
+    return bool(ask) and bool(ask.get("yes_no") or ask.get("options") or ask.get("draft"))
 
 
 def is_live(tab: dict) -> bool:

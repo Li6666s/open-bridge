@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 // Pure helpers of the cockpit's files view: the queue of files, what a file's drawers hold, its next step,
 // the search and what a question asked in a file carries along, and the start of the files tab (its records, their
-// filters, what its question to the AI sends and holds back). No DOM, no network, no state. logic.js
+// filters, what its question to the AI sends and holds back, the point of Work through its right column shows). No DOM, no network, no state. logic.js
 // passes every name on, so a view may import it from either; the frontend test imports this file under node.
 import { TABLES } from './text.js'
-import { CONTEXT_MAX, FILES_PAGE, filesOn, indexRows, liveStage, queueOf } from './logic.js'
+import { CONTEXT_MAX, FILES_PAGE, filesOn, flowParts, flowQueue, flowUniverse, indexRows, liveStage, queueOf } from './logic.js'
 import { areaScope, inProject, rowProject } from './areas.js'
 
 /** The files the files view walks under the filters of the files tab (areaScope as there, whatever page is open):
@@ -109,6 +109,20 @@ export function askPlan(rows, words) {
   return { paths, held: { n: held, words: block.filter(w => hit.has(w)) } }
 }
 
+/** The point a record open in the files tab stands for in its right column (views/flowside.js FlowAside, round 6d):
+ *  the open task's row (flowUniverse, across every area), as Work through shows it where it holds that row (a point
+ *  or an entry of Running now, flowParts), else as a task point of its own. `open` is a slug, or the folder of a
+ *  closed copy, which has none, as a task no row names has none: its verbs would act on nothing */
+export function recordPoint(s, open) {
+  if (!open || String(open).includes('/')) return null
+  const key = `task:${open}`
+  const row = flowUniverse({ ...s, model: s?.wholeModel ?? s?.model }).get(key)
+  if (!row) return null
+  const parts = flowParts(s)
+  return [...flowQueue(parts, 'all'), ...parts.lane].find(x => x.kind !== 'reports' && x.row?.key === key)
+    ?? { group: 'task', id: key, kind: 'row', row }
+}
+
 /** Where a found file opens: at its place in the filtered queue, the walk on (ui.filesWalk), else beside the queue
  *  (a file of another area, a backlog task); a closed one always beside it, by its folder, since a slug can be open
  *  and closed at once */
@@ -178,8 +192,8 @@ export const LEFT_OUT = ['resting', 'drop', 'waiting', 'deferred', 'area', 'unpi
  *  of another area (area) or not pinned (unpinned), put off (deferred, the day it comes back as `until`, null for
  *  one put away until shown again), dropped by its bucket, resting by its bucket or a block, else waiting with nothing that asks about it
  *  (a row of a later section with no tab, result or open item). Read from the whole model, so the filter's own
- *  share shows; backlog tasks stand in no section and count nowhere here (with cockpit.files_scope all they stand on
- *  their chip behind the queue, fileShelves). `s` the state the view sees (areaScope),
+ *  share shows; backlog tasks stand in no section and count nowhere here (with cockpit.files_scope all they stand in
+ *  the list of every record on the left). `s` the state the view sees (areaScope),
  *  `queue` its files. {total, groups: [{reason, rows: [{slug, row, until}]}]}, in LEFT_OUT order, none empty */
 export function queueLeftOut(s, queue) {
   const whole = s?.wholeModel ?? s?.model
@@ -200,13 +214,6 @@ export function queueLeftOut(s, queue) {
   const groups = LEFT_OUT.filter(k => by[k].length).map(reason => ({ reason, rows: by[reason] }))
   return { total: groups.reduce((n, g) => n + g.rows.length, 0), groups }
 }
-
-// the chips of every file behind the queue (cockpit.files_scope all), in the order the view shows them
-export const FILE_SHELVES = ['active', 'waiting', 'resting', 'backlog', 'all']
-
-// how the shelves sort: by status, then priority, then the latest change first
-const STATUS_RANK = { doing: 0, review: 1, backlog: 2 }
-const PRIO_RANK = { P0: 0, P1: 1, P2: 2, P3: 3 }
 
 /** Does the files view show every task and stream behind its queue? cockpit.files_scope all, and a server that
  *  sends the list (model.files); an older server or the default `active` keeps the view as it was */
@@ -230,35 +237,6 @@ export function fileReason(f, queued = false) {
   if (f.bucket === 'resting' || f.blocked_by) return 'resting'
   return 'waiting'
 }
-
-/** The shelf a file stands on: backlog by its status, active for a file of the queue (`queued`), else waiting or
- *  resting (resting, dropped or put off) by its reason */
-export function fileShelf(f, queued = false) {
-  if (f?.status === 'backlog') return 'backlog'
-  if (queued) return 'active'
-  return fileReason(f) === 'waiting' ? 'waiting' : 'resting'
-}
-
-const byFile = (a, b) => (STATUS_RANK[a.status] ?? 3) - (STATUS_RANK[b.status] ?? 3)
-  || (PRIO_RANK[a.priority] ?? 4) - (PRIO_RANK[b.priority] ?? 4)
-  || String(b.updated ?? '').localeCompare(String(a.updated ?? '')) || a.slug.localeCompare(b.slug)
-
-/** Every file behind the queue (model.files) under the area filter of Work, by shelf, each sorted by status,
- *  priority and last change. The shelves split by the queue the view walks (`queue`, its files): Active holds the
- *  files of the queue, Waiting and Resting the active ones it leaves out, so they count what the line of what the
- *  queue leaves out names. `elsewhere` how many the area filter leaves out. {lists: {shelf: [file]}, elsewhere} */
-export function fileShelves(s, queue = []) {
-  const every = (s?.wholeModel ?? s?.model)?.files ?? []
-  const area = s?.ui?.area || null
-  const queued = new Set((queue ?? []).map(x => x.slug))
-  const files = every.filter(f => inProject(f, area)).sort(byFile)
-  const lists = Object.fromEntries(FILE_SHELVES.map(k => [k, k === 'all' ? files
-    : files.filter(f => fileShelf(f, queued.has(f.slug)) === k)]))
-  return { lists, elsewhere: every.length - files.length }
-}
-
-/** The folder a file opens by: its stream or task folder */
-export const fileFolder = f => `work/${f.kind === 'stream' ? 'streams' : 'tasks'}/${f.slug}`
 
 /** What a file's Result drawer holds: the starts of the return channel for its task or its inbox items (each
  *  with where it stands now, `live`), the workflow runs bound to it, and how many of them wait on you (a start

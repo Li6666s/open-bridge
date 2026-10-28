@@ -12,8 +12,8 @@ from . import model as m
 from .history import item as history_item
 from .quick import CONV_RE, ORIGINS as QUICK_ORIGINS
 from .relay import KINDS as ASK_KINDS
-from .actions_base import (CONTEXT_MAX, HANDOFF_MAX, HANDOFF_ORDER_MAX, INBOX_ID_RE, QUICK_PLACES, SHORT_TIMEOUT, SLUG_RE,
-                           ActionError, Ctx, bad_arg, check_key, check_text)
+from .actions_base import (CONTEXT_MAX, CONTROL_RE, HANDOFF_MAX, HANDOFF_ORDER_MAX, INBOX_ID_RE, QUICK_PLACES, SHORT_TIMEOUT,
+                           SLUG_RE, WORKER_DETAIL_MAX, WORKER_REF_RE, ActionError, Ctx, bad_arg, check_key, check_text)
 
 
 class ChatVerbs:
@@ -24,7 +24,9 @@ class ChatVerbs:
         (the workplace's agent model, Sonnet or more, never the quick model), "control" gives it to the
         control session through the relay. The chat carries how that went (quick.py `handed`): claimed as
         `starting` once every check passed, then the launch outcome or the relay's queued / offline, and
-        `failed` whatever goes wrong on the way, so a second click is refused only while one is starting."""
+        `failed` whatever goes wrong on the way, so a second click is refused only while one is starting.
+        What the person adds is the order: at the end of the item's detail, and on the item as its start note,
+        which the tab reads first and which keeps it from closing the item without asking (workplace.py)."""
         app = self.app
         order = (text or "").strip()
         if len(order) > HANDOFF_ORDER_MAX:
@@ -58,11 +60,14 @@ class ChatVerbs:
             done = {"status": "failed", "inbox_id": new_id}
             # a chat that is about nothing yet is now about this item: it leaves when the item ends
             app.quick.set_about(conv, {"kind": "handoff", "inbox": new_id})
-            got = self.launch(ctx, [{"key": f"inbox:{new_id}", "inbox_id": new_id, "title": first}], "go", app.cfg.target)
+            # the order as the start note; a note that cannot be written leaves the order in the detail alone
+            noted = bool(order) and self.write_note(ctx, {"inbox_id": new_id}, f"Start note: {order}")
+            got = self.launch(ctx, [{"key": f"inbox:{new_id}", "inbox_id": new_id, "title": first, "conv": conv}], "go",
+                              app.cfg.target, start_note=noted)
             done = {"status": got, "inbox_id": new_id}
-            if got == "busy" and order:
-                # the tab of this chat is already on its way: the new words reach the item as a note, not that tab
-                ctx.call("inbox.note", new_id, self.inbox("note", new_id, "--", order[:2000]), SHORT_TIMEOUT)
+            if got in ("busy", "running") and noted:
+                # the tab of this chat is already on its way or at work: the order reached the item as its start note,
+                # never that tab, and is written only once (a second, plain note would read back as the tab's result)
                 ctx.note(self.tx["handoff_order_late"], bad=True)
         finally:
             handed = app.quick.set_handed(conv, **done)
@@ -232,7 +237,7 @@ class ChatVerbs:
         if not isinstance(args, dict):
             raise bad_arg("args", "must be an object")
         allowed = {"row": {"key"}, "follow_up": {"key"}, "info": {"page", "section", "index"}, "free": {"text"},
-                   "overview": set(), "plan_day": set(), "evening": set()}[kind]
+                   "worker": {"host", "id"}, "overview": set(), "plan_day": set(), "evening": set()}[kind]
         # may come along, never required: what the page shows right now, for a free quick question only
         optional = {"free": {"context", "task"}}.get(kind, set())
         for name in args:
@@ -278,6 +283,23 @@ class ChatVerbs:
             prompt = m.ask_info(re.sub(r"\s*\(.*?\)", "", sec["title"]), info, tx)
             about = {"kind": "info", "key": m.item_key(page, sec["id"], info),
                      "inbox": self.info_inbox(sec, info) if via == "quick" else None}
+        elif kind == "worker":
+            # a background job's row: the question is built from the kept workers view, never from the page's words
+            host, ident = args["host"], args["id"]
+            if not all(isinstance(x, str) and WORKER_REF_RE.match(x) for x in (host, ident)):
+                raise bad_arg("id", "not a job or machine name")
+            run = self.worker_run(host, ident)
+            if run is None:
+                raise ActionError(409, "stale_row", "the workers view holds no such job", "id")
+            found = run.get("findings") if isinstance(run.get("findings"), list) else []
+            top = next((f for f in found if isinstance(f, dict) and f.get("severity") != "info"), (found or [{}])[0])
+            # the finding as the job wrote it (often a log line, in English), one short line after the question
+            detail = CONTROL_RE.sub(" ", str((top.get("detail") if isinstance(top, dict) else "") or ""))
+            detail = m.short(" ".join(detail.split()), WORKER_DETAIL_MAX)
+            prompt = tx["ask_worker"].format(id=ident, host=host, state=self.worker_state(run)) \
+                + (tx["ask_worker_detail"].format(detail=detail) if detail else "")
+            key = f"worker:{host}:{ident}"
+            about = {"kind": "worker", "key": key, "inbox": self.filed_page_item(key, None) if via == "quick" else None}
         elif kind == "free":
             prompt = check_text(args["text"], "text", 4000)
         else:

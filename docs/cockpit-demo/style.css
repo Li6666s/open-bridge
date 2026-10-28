@@ -126,6 +126,8 @@ code { font-size: 12px; overflow-wrap: anywhere; }
 .icon-btn:hover { background: var(--surface-muted); }
 
 .btn-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+/* the one close of a tab (views/detail.js TabClose) lays its buttons into the row it stands in */
+.tab-close { display: contents; }
 
 /* ---------------------------------------------------------------- chips */
 
@@ -961,7 +963,10 @@ kbd {
 .ghl-chip-board { border-color: var(--info); color: var(--on-surface); }
 .ghl-pr { border-color: var(--tk); color: var(--on-surface); }
 .ghl-side { display: grid; justify-items: end; gap: 2px; text-align: right; white-space: nowrap; }
-.ghl-people { display: flex; gap: 6px; }
+.ghl-people { display: block; }
+/* round 6d: a name on a row is a button that filters by it, drawn as the name */
+.ghl-pick { background: none; border: 0; padding: 0; font: inherit; color: inherit; cursor: pointer; }
+.ghl-pick:hover, .ghl-pick:focus-visible { text-decoration: underline; }
 .ghl-acts { justify-content: flex-end; flex-wrap: nowrap; }
 @media (max-width: 860px) {
   .ghl-row { grid-template-columns: 22px minmax(0, 1fr); }
@@ -1014,11 +1019,7 @@ kbd {
 .card-opens:focus-visible { outline: 2px solid var(--secondary); outline-offset: 2px; }
 .info-detail-full { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .send-btns { display: flex; flex-direction: column; gap: 6px; }
-.chat-hint { margin: 6px 0 0; }
-/* the chat's one input: where Enter goes, and once handed on, how that went (views/chat.js ChatFoot) */
-.route-line { margin: 6px 0 0; }
-.route-chip { cursor: pointer; }
-.route-chip.is-tab { font-weight: 600; }
+/* the chat's one input: once handed on, how that went (views/chat.js ChatFoot) */
 .handoff-status { margin: 6px 0 0; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .ptab-more { display: inline-flex; }
 /* a folder's tab with its ▾ (views/header.js FolderTab); the tab keeps its own button, the marker measures it */
@@ -1044,6 +1045,13 @@ kbd {
 }
 .tabview-title { margin: 0; }
 .tabview-live { margin-left: auto; }
+/* a tab open in the Chat keeps its head on one line where it fits: a long name (a terminal's folder) gives way first,
+   cut short, and Write and the close stay together on the right */
+.rooms-main .tabview-title { flex: 1 1 10em; min-width: 6em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rooms-main .tabview-head .room-task, .rooms-main .tabview-head .room-from-link {
+  flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.room-head-acts { display: inline-flex; flex-wrap: nowrap; align-items: center; gap: 6px; flex-shrink: 0; }
 .tabview-body {
   overflow-y: auto; padding: 14px 18px; background: var(--surface); font-family: var(--font-mono);
   font-size: var(--text-code); line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere;
@@ -1143,23 +1151,34 @@ kbd {
   color: var(--secondary); font-size: var(--text-label); text-align: center; }
 .room-bridge { font-weight: 400; }
 .room-more { justify-self: start; margin: 2px 0 4px 16px; }
+/* round 6d: a handed question's marker beside its title (views/chat.js AskMark), an archived one greyed, and what
+   a handed question came back with, under it and in its status line */
+.ask-mark { font-size: var(--text-label); font-weight: 600; color: var(--tk, var(--on-surface-muted)); white-space: nowrap; }
+.room-chat-row.is-archived .room-name { color: var(--on-surface-muted); }
+/* a question's title takes its whole line, its marker and time stand under it (round 6d fix) */
+.room-chat { flex-wrap: wrap; row-gap: 0; }
+.room-chat .room-name { flex: 1 1 0; white-space: normal; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical; }
+.room-sub { flex: 1 0 100%; display: flex; gap: 8px; align-items: baseline; min-width: 0; padding-left: 20px; }
+/* round 6d: a waiting tab as a short line (C2), greyed in its workspace below; what a tab came from (C5), as a
+   second line of its row and as a link in its head */
+.room-wait { padding-left: 16px; flex-wrap: wrap; row-gap: 0; }
+.room-wait .room-name { flex: 1 1 0; }
+.room-lage { flex: 1 0 100%; min-width: 0; padding-left: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.room-wait.is-left { opacity: 0.55; }
+.room-item.is-dim .room-name { color: var(--on-surface-muted); }
+.room-item.has-from { flex-wrap: wrap; row-gap: 0; }
+.room-from { flex: 1 0 100%; min-width: 0; padding-left: 20px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.qoutcome { display: grid; gap: 4px; padding: 6px 12px; border-left: 3px solid var(--border-strong); }
 .rooms-main { height: calc(100dvh - 180px); grid-template-rows: auto minmax(0, 1fr) auto; }
 .rooms-main.rooms-agent { display: block; }
 .rooms-main > .tabview-body { overflow-y: auto; padding: 12px 16px; }
 .room-ws-pane { border-top: 3px solid var(--ws-color, var(--border)); }
 /* what a waiting tab asks, and the answers to it (views/reply.js) */
-.reply-group { display: grid; gap: 6px; margin: 0 0 8px; }
+.reply-group { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1px; margin: 0 0 8px; }
 .reply-group > .room-group { margin-bottom: 0; }
-.reply-row { display: grid; gap: 4px; min-width: 0; padding: 6px 8px; margin: 0 4px; border: 1px solid var(--border);
-  border-radius: var(--radius-md); background: var(--surface-raised); }
-.reply-row.is-left { opacity: 0.55; }
-/* the whole row opens its tab (a control in it does its own work) */
-.reply-row.is-pickable { cursor: pointer; }
-.reply-head { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 0; border: none; background: none;
-  color: inherit; font: inherit; font-weight: 600; text-align: left; cursor: pointer; }
-.reply-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .reply-ask { margin: 0; font-size: 12.5px; white-space: pre-line; overflow-wrap: anywhere; }
-.reply-done, .reply-draft, .reply-note { margin: 0; }
+.reply-draft, .reply-note { margin: 0; }
 .reply-note { color: var(--danger); }
 .reply-btns { flex-wrap: wrap; }
 .reply-field { display: flex; gap: 6px; align-items: flex-end; }
@@ -1704,7 +1723,10 @@ kbd {
 .quickchat { display: flex; flex-direction: column; }
 .quickchat > .quick-body { flex: 1 1 auto; min-height: 0; }
 .quickchat > .quick-convs { flex: none; align-items: center; }
-.quick-conv { flex: none; max-width: 280px; overflow: hidden; text-overflow: ellipsis; padding: 4px 12px; border-radius: var(--radius-full); }
+.quick-conv { flex: none; display: inline-flex; align-items: center; gap: 4px; max-width: 420px; padding: 4px 12px; border-radius: var(--radius-full); }
+/* only the title is clipped, the marker beside it stays in view (round 6d) */
+.quick-conv-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.quick-conv .ask-mark, .room-chat .ask-mark { flex: none; }
 
 /* A2A agents: the agents as cards on the left, the conversation with one on the right */
 .agents-grid { display: grid; grid-template-columns: minmax(240px, 340px) minmax(0, 1fr); gap: 16px; align-items: start; }
@@ -3050,6 +3072,15 @@ pre.guide-read-text { font-family: var(--font-mono); }
 }
 .hints-bar .btn { white-space: nowrap; }
 .hints-where, .hints-bar-text { white-space: nowrap; }
+/* "What bothers you here?": its field stands above the bar, a note it can pick from is ringed */
+.hints-say {
+  position: fixed; left: 50%; bottom: 68px; transform: translateX(-50%); display: flex; flex-direction: column; gap: 8px;
+  width: min(460px, calc(100vw - 32px)); background: var(--surface-raised); border: 1px solid var(--border); cursor: default;
+  border-radius: var(--radius-lg); box-shadow: var(--shadow-float); padding: 10px 12px;
+}
+.hints-say-acts { display: flex; justify-content: flex-end; gap: 8px; }
+.hints-note.is-picked { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-line), var(--shadow-float); }
+.hints-noted { color: var(--on-surface-muted); }
 @media (max-width: 599px) {
   .hints-bar-text { display: none; }
   .hints-bar { padding-left: 8px; }

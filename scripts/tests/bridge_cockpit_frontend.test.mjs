@@ -875,6 +875,17 @@ test('background jobs: an outage is what the engine files high, upkeep what it f
   assert.equal(logic.workerTone({ state: 'drifted' }), 'warn')
 })
 
+test('a job finding marked seen is grey and counts toward no tile, badge, alarm or attention filter', () => {
+  const failed = { id: 'chat-bot', host: 'mini', state: 'last_run_failed', severity: 'high', findings: [{ severity: 'high', state: 'last_run_failed' }] }
+  const seen = { ...failed, acked: { day: '2026-10-28', note: 'a planned restart' } }
+  assert.equal(logic.jobSeverity(seen), 'info')
+  assert.equal(logic.workerTone(seen), 'dim')
+  assert.deepEqual(logic.jobCounts({ runs: [seen] }), { all: 1, failing: 0, upkeep: 0, ok: 1 })
+  assert.deepEqual(logic.jobCounts({ runs: [failed] }), { all: 1, failing: 1, upkeep: 0, ok: 0 })
+  assert.deepEqual(logic.filterWorkers([seen], { outage: true }), [])
+  assert.deepEqual(logic.filterWorkers([seen], { attention: true }), [])
+})
+
 test('a sub page tile: red with its findings, orange with what needs a look, green only where an alarm reports nothing', () => {
   const sec = (id, items, extra = {}) => ({ id, title: id, status: 'ok', items, count: items.length, total: items.length,
     bad: items.filter(x => x.tone === 'bad').length, ...extra })
@@ -1223,7 +1234,7 @@ test('the chat decides per message: ask (read only) or solve it in a real Claude
   assert.match(box, /e\.metaKey \|\| e\.ctrlKey/)                                   // Cmd or Ctrl Enter takes the second way
   for (const lang of ['en', 'de']) {
     const t = text.TABLES[lang]
-    for (const k of ['chatAsk', 'chatSolve', 'chatSolveTitle', 'chatSolveHint']) assert.ok(t[k], `${lang} ${k}`)
+    for (const k of ['chatAsk', 'chatSolve', 'chatSolveTitle']) assert.ok(t[k], `${lang} ${k}`)
   }
 })
 
@@ -1317,7 +1328,17 @@ test('a slim tab card offers one next step: answer, go on, close, else go to the
   const logic = await import(pathToFileURL(path.join(WEB, 'logic.js')).href)
   const all = () => true
   assert.deepEqual(logic.tabNextStep({ state: 'needs-you' }, all), ['yes', 'no'])
-  assert.deepEqual(logic.tabNextStep({ state: 'waiting' }, all), ['go_on'])
+  // round 6d: a tab that neither works nor asks offers its close beside going on (or going to it at its shell)
+  assert.deepEqual(logic.tabNextStep({ state: 'waiting' }, all), ['go_on', 'close'])
+  assert.deepEqual(logic.tabNextStep({ state: 'waiting', ask: { text: 'Go on?' } }, all), ['go_on'])
+  assert.deepEqual(logic.tabNextStep({ state: 'shell' }, all), ['jump', 'close'])
+  // every waiting tab has its last words read off the screen: only a question, options or a draft ask (the quiet
+  // rule of model.py is_idle), the last words of a tab that finished ask nothing (28.10.: no close anywhere live)
+  const said = { text: 'Done, the report is filed.', options: [], yes_no: false, draft: false }
+  assert.deepEqual(logic.tabNextStep({ state: 'waiting', ask: said }, all), ['go_on', 'close'])
+  assert.deepEqual(logic.tabNextStep({ state: 'waiting', ask: { ...said, yes_no: true } }, all), ['go_on'])
+  assert.deepEqual(logic.tabNextStep({ state: 'waiting', ask: { ...said, draft: true } }, all), ['go_on'])
+  assert.deepEqual(logic.tabNextStep({ state: 'waiting', ask: { ...said, options: [{ n: 1, label: 'Yes' }] } }, all), ['go_on'])
   assert.deepEqual(logic.tabNextStep({ state: 'waiting', filed_by: 'x' }, all), ['close'])
   assert.deepEqual(logic.tabNextStep({ state: 'working' }, all), ['jump'])
   assert.deepEqual(logic.tabNextStep({ state: 'waiting', is_control: true }, all), ['jump'])
@@ -2091,6 +2112,30 @@ test('a tab whose start is settled (its item closed, its task done) offers to cl
   assert.deepEqual(logic.tabNextStep({ state: 'waiting' }, k => k !== 'close', true), ['go_on'])
 })
 
+test('a tab closes only while it neither works nor asks, never the control tab, and says what stands behind it', async () => {
+  const logic = await import(pathToFileURL(path.join(WEB, 'logic.js')).href)
+  const s = { driver: { caps: ['close'] }, tabs: { tabs: [] }, model: { returns: [] }, now: 1 }
+  const offer = tab => logic.tabCloseOffer({ ref: 'surface:1', ...tab }, s)
+  for (const state of ['working', 'needs-you']) assert.equal(offer({ state }), null, state)
+  assert.equal(offer({ state: 'waiting', ask: { text: 'Shall I?' } }), null)
+  assert.equal(offer({ state: 'waiting', is_control: true }), null)
+  assert.equal(logic.tabCloseOffer({ ref: 'surface:1', state: 'waiting' }, { ...s, driver: { caps: ['focus'] } }), null)
+  // nothing behind it and nothing came back from it: only Close tab, at once (round 6d fix: unseen means a result
+  // came back that nobody looked at, not merely that nothing is settled)
+  assert.deepEqual(offer({ state: 'waiting' }), { done: false, unseen: false, keys: [] })
+  const back = { ...s, model: { returns: [{ key: 'inbox:x', item: 'x', stage: 'result', tab: { ref: 'surface:1' }, result: { text: 'Done.' }, at_ms: 0 }] } }
+  assert.equal(logic.tabCloseOffer({ ref: 'surface:1', state: 'waiting' }, back).unseen, true)
+  assert.equal(offer({ state: 'waiting', filed_by: 'ref:issue-1' }).unseen, true)
+  assert.deepEqual(offer({ state: 'shell', settled: 'item' }), { done: false, unseen: false, keys: [] })
+  // what the server says stands behind it, never a guess from its name
+  assert.deepEqual(offer({ state: 'waiting', name: 'inbox-some-item', behind: { task: 'a-task', item: '20261028-0736-x-a1b2' } }),
+    { done: true, unseen: false, keys: ['task:a-task', 'inbox:20261028-0736-x-a1b2'] })
+  assert.deepEqual(offer({ state: 'waiting', name: 'a-task' }).keys, [])
+  // a start of it that settled counts as seen
+  const settled = { ...s, tabs: { tabs: [{ ref: 'surface:1', state: 'waiting' }] }, model: { returns: [{ key: 'inbox:x', item: 'x', stage: 'done', tab: { ref: 'surface:1' }, at_ms: 0 }] } }
+  assert.equal(logic.tabCloseOffer({ ref: 'surface:1', state: 'waiting' }, settled).unseen, false)
+})
+
 test('the starts handed to the AI fall into: to check, done, needs you, working, no word', async () => {
   const logic = await import(pathToFileURL(path.join(WEB, 'logic.js')).href)
   const now = 10 * 60000
@@ -2236,7 +2281,7 @@ test('launch: the route cache fetches once per key and again when the title chan
 test('launch: the picker stands in every start block and only there through one shared component', () => {
   const comp = readComponents()
   const pick = read('views/launch.js')
-  assert.match(pick, /export function LaunchPick\(\{ s, c, items = \[\] \}\)/)
+  assert.match(pick, /export function LaunchPick\(\{ s, c, items = \[\], label = null \}\)/)
   assert.match(pick, /const opts = launchOptions\(s\.launch\)/)
   assert.match(pick, /if \(!opts\) return null/)
   // one central choice, kept in this browser
@@ -3124,9 +3169,17 @@ test('github filter bar: each row has its values per dimension, you as Me, nobod
   assert.equal(logic.ghMyLogin([rows[0]]), 'demo-user', 'else the only assignee of a row assigned to you')
   assert.equal(logic.ghMyLogin([rows[2]]), null)
   const v = (i, d) => logic.ghValues(rows[i], d, me)
-  assert.deepEqual(v(0, 'person'), [logic.GH_ME, 'teammate'], 'yours, your own login not twice')
-  assert.deepEqual(v(1, 'person'), [logic.GH_ME, 'teammate'], 'you opened it')
-  assert.deepEqual(v(2, 'person'), [logic.GH_NONE], 'nobody assigned')
+  assert.deepEqual(logic.GH_DIMS, ['board', 'assignee', 'author', 'repo', 'type', 'status'], 'Person is split in two (round 6d)')
+  // Assigned to: you as Me, your own login not twice, nobody as its own value; Opened by: you as Me, the author
+  assert.deepEqual(v(0, 'assignee'), [logic.GH_ME], 'assigned to you')
+  assert.deepEqual(v(0, 'author'), ['teammate'], 'opened by a teammate')
+  assert.deepEqual(v(1, 'assignee'), ['teammate'])
+  assert.deepEqual(v(1, 'author'), [logic.GH_ME], 'you opened it')
+  assert.deepEqual(v(2, 'assignee'), [logic.GH_NONE], 'nobody assigned')
+  assert.deepEqual(v(2, 'author'), [], 'no author known: no value, never nobody')
+  assert.deepEqual(logic.ghValues({ flags: ['my_pr'], gh: { type: 'pr', people: [], author: 'someone' } }, 'author'), [logic.GH_ME],
+    'a pull request of yours, your login unknown')
+  assert.deepEqual(logic.ghValues({ flags: ['mine'], gh: { people: [] } }, 'assignee'), [logic.GH_ME], 'yours even when the people are missing')
   assert.deepEqual(v(2, 'board'), ['Docs board', 'Demo board'], 'a card on two boards stands on both')
   assert.deepEqual(v(3, 'board'), [logic.GH_NONE])
   assert.deepEqual(v(3, 'status'), [], 'a row on no board has no board column')
@@ -3144,21 +3197,31 @@ test('github filter bar: the choices combine, a figure filters too, and each opt
   assert.deepEqual(shown(null), [1, 2, 3, 4, 5])
   assert.deepEqual(shown({ board: 'Demo board' }), [1, 2, 3])
   assert.deepEqual(shown({ board: 'Demo board', type: 'pr' }), [3])
-  assert.deepEqual(shown({ person: logic.GH_ME }), [1, 2])
-  assert.deepEqual(shown({ person: logic.GH_NONE }), [3, 5])
+  assert.deepEqual(shown({ assignee: logic.GH_ME }), [1])
+  assert.deepEqual(shown({ author: logic.GH_ME }), [2])
+  assert.deepEqual(shown({ assignee: logic.GH_NONE }), [3, 5])
+  assert.deepEqual(shown({ assignee: 'teammate' }), [2], 'everything assigned to one person')
+  assert.deepEqual(shown({ author: 'teammate' }), [1])
+  assert.deepEqual(shown({ assignee: 'teammate', author: logic.GH_ME }), [2], 'the two combine')
+  assert.deepEqual(shown({ assignee: 'teammate', author: 'teammate' }), [])
   assert.deepEqual(shown({ board: logic.GH_NONE }), [4])
   assert.deepEqual(shown({ status: 'Todo', repo: 'example/tools' }), [3])
   assert.deepEqual(shown({ flag: 'ask_review' }), [4])
   assert.deepEqual(shown({ flag: 'open', board: 'Docs board' }), [3, 5], 'the figure open is every row')
   assert.equal(logic.ghFiltered(null), false)
-  assert.equal(logic.ghFiltered({ board: null, person: null }), false)
+  assert.equal(logic.ghFiltered({ board: null, assignee: null, author: null }), false)
+  assert.equal(logic.ghFiltered({ author: 'teammate' }), true)
   assert.equal(logic.ghFiltered({ type: 'pr' }), true)
   const facets = logic.ghFacets(rows, { type: 'issue' }, me, { board: ['Docs board', 'Demo board'] })
   // the boards in the registry's order, no board last; the counts as if Board were open, beside Kind issue
   assert.deepEqual(facets.board.map(o => [o.value, o.n]), [['Demo board', 2]])
   // Me first, nobody last, the others by count
-  assert.deepEqual(logic.ghFacets(rows, null, me).person.map(o => [o.value, o.n]),
-    [[logic.GH_ME, 2], ['teammate', 2], ['other-dev', 1], [logic.GH_NONE, 2]])
+  assert.deepEqual(logic.ghFacets(rows, null, me).assignee.map(o => [o.value, o.n]),
+    [[logic.GH_ME, 1], ['other-dev', 1], ['teammate', 1], [logic.GH_NONE, 2]])
+  assert.deepEqual(logic.ghFacets(rows, null, me).author.map(o => [o.value, o.n]),
+    [[logic.GH_ME, 1], ['other-dev', 1], ['teammate', 1]], 'no nobody among the authors')
+  // each counts beside the other: opened by you, then who of those is assigned
+  assert.deepEqual(logic.ghFacets(rows, { author: logic.GH_ME }, me).assignee.map(o => [o.value, o.n]), [['teammate', 1]])
   assert.deepEqual(logic.ghFacets(rows, null, me, { board: ['Docs board', 'Demo board'] }).board.map(o => o.value),
     ['Docs board', 'Demo board', logic.GH_NONE])
   // a value chosen earlier that no row has any more stays listed with 0, so the choice can be seen and taken back
@@ -3170,6 +3233,12 @@ test('github filter bar: the kept choice is read back clean, per section, a brok
     { 'github/boards': { board: 'Demo board', flag: 'quiet' } })
   assert.deepEqual(logic.ghFilterKept(null), {})
   assert.deepEqual(logic.ghFilterKept({ 'a/b': {} }), {}, 'nothing chosen is not kept')
+  // a Person kept before round 6d becomes Assigned to (Me, a login, nobody: the same rows assigned); a broken one goes
+  assert.deepEqual(logic.ghFilterKept({ 'a/b': { person: 'teammate', board: 'Demo board' }, 'c/d': { person: logic.GH_ME },
+    'e/f': { person: logic.GH_NONE }, 'g/h': { person: 7 }, 'i/j': { person: 'teammate', assignee: 'other-dev' } }),
+  { 'a/b': { board: 'Demo board', assignee: 'teammate' }, 'c/d': { assignee: logic.GH_ME }, 'e/f': { assignee: logic.GH_NONE },
+    'i/j': { assignee: 'other-dev' } })
+  assert.deepEqual(logic.ghFilterKept({ 'a/b': { author: 'teammate', assignee: logic.GH_NONE } }), { 'a/b': { assignee: logic.GH_NONE, author: 'teammate' } })
   const app = read('app.js')
   assert.match(app, /ghFilter: loadGhFilter\(\)/)
   assert.match(app, /save\('bridge-cockpit\.ghFilter', /)
@@ -3377,9 +3446,10 @@ test('header and rooms take counts only from sessionCounts or agentLoad', () => 
 
 test('rooms: every quick chat in the sidebar can be removed, by a button beside the row, never inside it', () => {
   const rooms = read('views/rooms.js')
-  assert.match(rooms, /class="room-chat-row"/)
+  assert.match(rooms, /class=\$\{`room-chat-row/)
   assert.match(rooms, /class="room-x"[^`]*onClick=\$\{\(\) => c\.quickForget\(x\.id\)\}/)
-  assert.match(rooms, /x\.running \? null : html`<button type="button" class="room-x"/)   // one still answering stays
+  // one still answering stays, and an archived one (round 6d) is gone already
+  assert.match(rooms, /x\.running \|\| archived \? null : html`<button type="button" class="room-x"/)
   assert.match(read('style.css'), /\.room-chat-row:hover \.room-x/)
 })
 
@@ -3395,6 +3465,16 @@ test('listedChats: the picture of the day and chats past keep_hours stay out of 
     quick: { keep_hours: 24, convs } })
   assert.deepEqual(r.workspaces[0].chats.map(x => x.id), ['q1', 'q4', 'q5'])
   assert.match(read('views/chat.js'), /listedChats\(q\.convs, q\.keep_hours, s\.now\)/)       // the Chat tab lists the same
+})
+
+test('listedChats: a handed question counts from its handoff or what came back, as the server keeps it (quick.py _since)', () => {
+  const now = Date.UTC(2026, 9, 18, 20)
+  const h = 3600000
+  const convs = [
+    { id: 'back', started_ms: now - 40 * h, last_ms: now - 30 * h, handed: { at_ms: now - 29 * h, outcome: { text: 'Done', at_ms: now - h } } },
+    { id: 'handed', started_ms: now - 40 * h, last_ms: now - 30 * h, handed: { at_ms: now - 2 * h } },
+    { id: 'old', started_ms: now - 40 * h, last_ms: now - 30 * h, handed: { at_ms: now - 29 * h } }]
+  assert.deepEqual(logic.listedChats(convs, 24, now).map(x => x.id), ['back', 'handed'])
 })
 
 test('agents list hides conversations past keep_hours like chats', () => {
@@ -4238,44 +4318,117 @@ test('apply is disabled until one item is ticked', () => {
   assert.equal(t.canApply({ 'ws_color:workspace:2': true }, null), false)
 })
 
-// ---------------------------------------------------------------- the chat: route chip, situation, handoff status (package 5)
+// ---------------------------------------------------------------- the chat: one field, two fixed buttons (round 6d C4), handoff status (package 5)
 
-const routeTo = t => logic.routeOf(t).to
-
-test('routeOf sends a trailing question mark and question words to the quick chat', () => {
-  for (const q of ['Is the build green?', 'what waits for me', 'Wie viele Agenten laufen gerade', 'Gibt es offene Reviews',
-    'Warum hängt der Test', 'Fix the build?', 'which tabs wait']) {
-    assert.deepEqual([q, routeTo(q)], [q, 'quick'])
-  }
-  assert.equal(logic.routeOf('what waits for me').by, 'words')
-  assert.equal(logic.routeOf('Fix the build?').by, 'words')
-})
-
-test('routeOf sends German and English imperatives to an agent tab', () => {
-  for (const q of ['Fix the flaky test in the demo repo', 'Create a task for the release', 'Set up the new board',
-    'Mach den Release fertig', 'Bitte erstelle eine Aufgabe für das Review', 'Leg eine Aufgabe für den Bericht an',
-    'Räum die alten Tabs auf', 'Ändere den Titel', 'Benenn den Tab um', 'Richte das Board ein', 'please refactor the parser']) {
-    assert.deepEqual([q, routeTo(q)], [q, 'tab'])
-    assert.equal(logic.routeOf(q).by, 'words')
-  }
-})
-
-test('routeOf sends unclear text to the quick chat', () => {
-  for (const q of ['the release notes', 'Bericht von gestern', 'hello', '   ']) {
-    assert.deepEqual([q, logic.routeOf(q).to, logic.routeOf(q).by], [q, 'quick', 'default'])
-  }
-})
-
-test('routeOf honours ? and ! prefixes and strips them', () => {
-  assert.deepEqual(logic.routeOf('? fix the build'), { to: 'quick', by: 'prefix', text: 'fix the build' })
-  assert.deepEqual(logic.routeOf('!what is open'), { to: 'tab', by: 'prefix', text: 'what is open' })
-  assert.deepEqual(logic.routeOf('  Mach den Release  '), { to: 'tab', by: 'words', text: 'Mach den Release' })
-  // the word lists are language data, the same keys in both languages
+test('6d C4: the chat no longer guesses a route: no routeOf, no route word lists, no hint under the field', () => {
+  assert.equal(logic.routeOf, undefined)
   for (const lang of ['en', 'de']) {
-    const r = text.TABLES[lang].route
-    assert.ok(Array.isArray(r.orderWords) && r.orderWords.length >= 10, lang)
-    assert.ok(Array.isArray(r.questionWords) && r.questionWords.length >= 10, lang)
+    const t = text.TABLES[lang]
+    assert.equal(t.route, undefined, lang)
+    assert.equal(t.chatSolveHint, undefined, lang)
+    assert.ok(t.chatPlaceholder && !/Cmd|Ctrl|Enter/.test(t.chatPlaceholder), lang)
   }
+  assert.equal(text.TABLES.de.chatPlaceholder, 'Frage oder Auftrag')
+  assert.equal(text.TABLES.de.chatAsk, 'Fragen')
+  assert.equal(text.TABLES.de.chatSolve, 'AI machen lassen')
+})
+
+// ---------------------------------------------------------------- the questions kept a week (round 6d C1)
+
+test('6d C1: the questions say how long they stay, in days from a day on, else in hours, and nothing when kept for good', () => {
+  const de = text.TABLES.de.asks.kept
+  const en = text.TABLES.en.asks.kept
+  assert.equal(de(168), 'Fragen bleiben 7 Tage in der Liste, danach stehen sie im Archiv.')
+  assert.equal(en(24), 'Questions stay in the list for 1 day, then they stand in the archive.')
+  assert.equal(en(36), 'Questions stay in the list for 36 hours, then they stand in the archive.')
+  assert.equal(de(1), 'Fragen bleiben 1 Stunde in der Liste, danach stehen sie im Archiv.')
+  assert.equal(de(0), 'Fragen bleiben in der Liste, bis du sie entfernst.')
+  assert.equal(logic.keepHoursOf({ keep_hours: 168 }), 168)
+  assert.equal(logic.keepHoursOf({}), 24, 'the server default (config.py chat_keep_hours)')
+  assert.equal(logic.keepHoursOf(null), 24)
+})
+
+// ---------------------------------------------------------------- the Chat opens where you were (round 6d C3)
+
+test('6d C3: the room kept in this browser is read back only in its known shapes', () => {
+  assert.deepEqual(logic.roomKept('{"kind":"tab","id":"surface:12"}'), { kind: 'tab', id: 'surface:12', kept: true })
+  assert.deepEqual(logic.roomKept('{"kind":"chat"}'), { kind: 'chat', kept: true })
+  assert.deepEqual(logic.roomKept('{"kind":"ws","id":"workspace:2"}'), { kind: 'ws', id: 'workspace:2', kept: true })
+  for (const bad of [null, '', 'surface:12', '{"kind":"tab"}', '{"kind":"door","id":"x"}', '[1]', '{"kind":"tab","id":5}',
+    JSON.stringify({ kind: 'tab', id: 'x'.repeat(300) })]) {
+    assert.equal(logic.roomKept(bad), null, String(bad))
+  }
+  // what is written is the room without its mark
+  assert.equal(logic.roomToKeep({ kind: 'tab', id: 'surface:12', kept: true }), '{"kind":"tab","id":"surface:12"}')
+  assert.equal(logic.roomToKeep({ kind: 'chat' }), '{"kind":"chat"}')
+  assert.equal(logic.roomToKeep(null), null)
+})
+
+test('6d C3: a kept room that is gone gives way to the chat, a room picked by hand keeps saying it is closed', () => {
+  const tabs = { tabs: [{ ref: 'surface:7', name: 'a', state: 'waiting' }] }
+  assert.deepEqual(logic.roomShown({ ui: { room: { kind: 'tab', id: 'surface:9', kept: true } }, tabs }), { kind: 'chat' })
+  assert.deepEqual(logic.roomShown({ ui: { room: { kind: 'tab', id: 'surface:7', kept: true } }, tabs }), { kind: 'tab', id: 'surface:7', kept: true })
+  assert.deepEqual(logic.roomShown({ ui: { room: { kind: 'tab', id: 'surface:9' } }, tabs }), { kind: 'tab', id: 'surface:9' })
+  // before the first list of tabs nothing is known gone yet
+  assert.deepEqual(logic.roomShown({ ui: { room: { kind: 'tab', id: 'surface:9', kept: true } }, tabs: null }), { kind: 'tab', id: 'surface:9', kept: true })
+  assert.deepEqual(logic.roomShown({ ui: { room: null } }), { kind: 'chat' })
+  assert.deepEqual(logic.roomShown({ ui: { room: { kind: 'ws', id: 'workspace:9', kept: true } }, tabs: { ...tabs, workspaces: [] } }), { kind: 'chat' })
+})
+
+test('6d C3: with nothing kept the Chat picks once: an open or freshly answered question, else the first tab that wants you', () => {
+  const now = 1_000_000_000
+  const conv = (id, ago, a = 'An answer.') => ({ id, started_ms: now - ago, last_ms: now - ago, running: false, turns: [{ q: `q ${id}`, a, error: null }] })
+  const waiting = { tabs: [{ ref: 'surface:3', is_control: true, state: 'waiting' }, { ref: 'surface:7', name: 'x', state: 'needs-you', since_ms: now - 60000 }] }
+  const s = (convs, tabs = waiting) => ({ now, quick: { convs, keep_hours: 168 }, tabs, model: null, ui: { room: null, quickConv: null } })
+  assert.deepEqual(logic.chatLanding(s([conv('q0000000001', 5 * 60000)]), 'en'), { room: { kind: 'chat' }, conv: 'q0000000001' })
+  assert.deepEqual(logic.chatLanding(s([conv('q0000000002', 3 * 3600000, null)]), 'en'), { room: { kind: 'chat' }, conv: 'q0000000002' })
+  // answered long ago: the tab that wants you comes first
+  assert.deepEqual(logic.chatLanding(s([conv('q0000000003', 3 * 3600000)]), 'en'), { room: { kind: 'tab', id: 'surface:7' }, conv: null })
+  assert.equal(logic.chatLanding(s([], { tabs: [] }), 'en'), null)
+  // something kept or picked already: no landing
+  assert.equal(logic.chatLanding({ ...s([conv('q0000000001', 60000)]), ui: { room: { kind: 'chat' }, quickConv: null } }, 'en'), null)
+  assert.equal(logic.chatLanding({ ...s([conv('q0000000001', 60000)]), ui: { room: null, quickConv: 'q0000000001' } }, 'en'), null)
+})
+
+// ---------------------------------------------------------------- where a tab came from (round 6d C5)
+
+test('6d C5: a tab names what it came from: the question it was handed on from, a job, an inbox item or a task', () => {
+  const conv = { id: 'q00000000c5', started_ms: 1, last_ms: 2, running: false, turns: [{ q: 'Why did the bot fail?', a: 'It ran out.' }],
+    about: { kind: 'handoff', inbox: '20261028-0736-why-did-the-bot-c3d4' } }
+  const model = {
+    sections: [{ rows: [
+      { key: 'inbox:20261028-0736-why-did-the-bot-c3d4', title: 'Why did the bot fail?', inbox_key: 'q00000000c5' },
+      { key: 'inbox:20261028-0800-job-b6b6', title: 'Background job chat-bot on homebox: last run failed', inbox_key: 'worker:homebox:chat-bot' },
+      { key: 'inbox:20261028-0900-label-tidy-c1c1', title: 'Tidy the labels', inbox_key: null },
+    ] }],
+    task_rows: [{ key: 'task:demo-task', title: 'The demo task' }],
+    returns: [
+      { key: 'inbox:20261028-0736-why-did-the-bot-c3d4', item: '20261028-0736-why-did-the-bot-c3d4', title: 'Why did the bot fail?', conv: 'q00000000c5', tab: { ref: 'surface:21' } },
+      { key: 'inbox:20261028-0800-job-b6b6', item: '20261028-0800-job-b6b6', title: 'Background job chat-bot on homebox', tab: { ref: 'surface:22' } },
+      { key: 'task:other-task', item: 'other-task', title: 'Step text of the start', tab: { ref: 'surface:25' } },
+    ],
+  }
+  const s = { now: 3, model, quick: { convs: [conv] }, workers: { data: { runs: [{ host: 'homebox', id: 'chat-bot', title: 'Chat bot', state: 'last_run_failed' }] } } }
+  const of = tab => logic.tabOrigin(s, tab, 'en')
+  assert.deepEqual(of({ ref: 'surface:21', item: '20261028-0736-why-did-the-bot-c3d4' }),
+    { kind: 'ask', key: 'ask:q00000000c5', conv: 'q00000000c5', title: 'Why did the bot fail?' })
+  // the question is found by its handoff too, with no start on record
+  assert.equal(logic.tabOrigin({ ...s, model: { ...model, returns: [] } }, { ref: 'surface:29', item: '20261028-0736-why-did-the-bot-c3d4' }, 'en').kind, 'ask')
+  assert.deepEqual(of({ ref: 'surface:22', item: '20261028-0800-job-b6b6' }),
+    { kind: 'job', key: 'worker:homebox:chat-bot', title: 'Chat bot · homebox' })
+  assert.deepEqual(of({ ref: 'surface:23', item: '20261028-0900-label-tidy-c1c1' }),
+    { kind: 'item', key: 'inbox:20261028-0900-label-tidy-c1c1', title: 'Tidy the labels' })
+  assert.deepEqual(of({ ref: 'surface:24', slug: 'demo-task' }), { kind: 'task', key: 'task:demo-task', title: 'The demo task' })
+  // a start found by its tab alone: the task's own title before the step text of the start
+  assert.deepEqual(of({ ref: 'surface:25' }), { kind: 'task', key: 'task:other-task', title: 'other-task' })
+  assert.equal(of({ ref: 'surface:3', is_control: true, item: '20261028-0900-label-tidy-c1c1' }), null)
+  assert.equal(of({ ref: 'surface:26' }), null)
+  assert.equal(of(null), null)
+  // an item without a row keeps the title its start carried
+  assert.deepEqual(logic.tabOrigin({ ...s, model: { returns: [{ key: 'inbox:20261028-1000-gone-a1a1', item: '20261028-1000-gone-a1a1', title: 'Gone from the page', tab: null }] } },
+    { ref: 'surface:27', item: '20261028-1000-gone-a1a1' }, 'en'), { kind: 'item', key: 'inbox:20261028-1000-gone-a1a1', title: 'Gone from the page' })
+  for (const lang of ['en', 'de']) assert.equal(typeof text.TABLES[lang].rooms.from, 'function', lang)
+  assert.equal(text.TABLES.de.rooms.from('Tidy the labels'), 'aus: Tidy the labels')
 })
 
 const H = (over = {}) => ({ to: 'control', at_ms: 1000, status: 'queued', relay_id: 'r1', ...over })
@@ -4306,7 +4459,8 @@ test('handoffStatus maps queued, submitted, answered, offline, expired and stuck
 })
 
 test('handoffStatus maps every launch outcome', () => {
-  const st = status => logic.handoffStatus({ to: 'tab', at_ms: 1, status, inbox_id: 'i1' }, [], [])
+  // a minute after the start: no tab yet is no loss (a later moment without a tab is `gone`, below)
+  const st = status => logic.handoffStatus({ to: 'tab', at_ms: 1, status, inbox_id: 'i1' }, [], [], 60_000)
   assert.deepEqual(st('started'), { word: 'started', tone: 'info', action: null })
   assert.equal(st('running').word, 'running')
   assert.equal(st('busy').word, 'running')
@@ -4324,6 +4478,116 @@ test('handoffStatus finds the started tab by its inbox item', () => {
   }
   // a handoff still starting shows that, whatever tab carries the item
   assert.equal(logic.handoffStatus({ to: 'tab', at_ms: 1, status: 'starting', inbox_id: 'i1' }, [], tabs).word, 'starting')
+})
+
+test('handoffStatus reads what came back from the item: a result, a question, a close without a word', () => {
+  // 28.10.: the chat still said "arrived in the tab" after the tab had closed the item with its note
+  const tabs = [{ ref: 'surface:21', name: 'Fix the printer', item: 'i1' }]
+  const st = (outcome, t = []) => logic.handoffStatus({ to: 'tab', at_ms: 1, status: 'started', inbox_id: 'i1', outcome }, [], t)
+  assert.deepEqual(st({ text: 'Result: the bot runs', closed: true, at_ms: 5, asks: false }),
+    { word: 'result', tone: 'success', action: null, text: 'the bot runs', at_ms: 5 })
+  assert.deepEqual(st({ text: 'Question: close it?', closed: false, at_ms: 5, asks: true }, tabs),
+    { word: 'asks', tone: 'warning', action: 'jump', ref: 'surface:21', tab: 'Fix the printer', text: 'close it?', at_ms: 5 })
+  assert.equal(st({ text: 'Vendor wants 3.0', closed: false, at_ms: 5, asks: false }).tone, 'info')
+  assert.deepEqual(st({ text: '', closed: true, at_ms: 5, asks: false }), { word: 'closed', tone: 'success', action: null, text: '', at_ms: 5 })
+  for (const lang of ['en', 'de']) {
+    const t = text.TABLES[lang].handoff
+    assert.match(t.result('x1'), /x1/)
+    assert.match(t.asks('x2'), /x2/)
+    assert.ok(t.closed)
+  }
+  assert.equal(text.TABLES.de.handoff.result('ok'), 'Ergebnis: ok')
+  assert.equal(text.TABLES.de.handoff.asks('ok?'), 'Fragt dich: ok?')
+})
+
+test('a start whose item note asks stays a question when its tab is gone, and works once its tab works again', () => {
+  const r = { key: 'inbox:i1', item: 'i1', at_ms: 1000, stage: 'asks', tab: null, result: { kind: 'note', text: 'Question: close it?', asks: true } }
+  assert.equal(logic.liveStage(r, [], 9e9), 'asks')
+  assert.equal(logic.liveStage(r, [{ ref: 'surface:3', item: 'i1', state: 'working' }], 9e9), 'working')
+})
+
+// round 6d: questions found again. A question gets a title from what it is about, a handed one its marker
+test('askTitle: by what it is about (job and state, row, task), else the first sentence cut at a word', () => {
+  const s = { model: { sections: [{ rows: [{ key: 'inbox:i7', title: 'Renew the test certificate' }, { key: 'task:alpha', title: 'Ship the alpha' }] }] },
+    workers: { data: { runs: [{ host: 'mini', id: 'chat-bot', title: 'chat-bot', state: 'last_run_failed' }] } } }
+  const conv = (about, q = 'Something else entirely') => ({ id: 'q0000000001', about, turns: [{ q }] })
+  assert.equal(logic.askTitle(conv({ kind: 'worker', key: 'worker:mini:chat-bot' }), s, 'de'), 'chat-bot · mini · letzter Lauf fehlgeschlagen')
+  assert.equal(logic.askTitle(conv({ kind: 'worker', key: 'worker:mini:gone' }), s, 'en'), 'gone · mini')
+  assert.equal(logic.askTitle(conv({ kind: 'row', key: 'inbox:i7', inbox: 'i7' }), s, 'en'), 'Renew the test certificate')
+  assert.equal(logic.askTitle(conv({ kind: 'handoff', inbox: 'i7' }), s, 'en'), 'Renew the test certificate')
+  assert.equal(logic.askTitle(conv({ kind: 'free', key: 'task:alpha', task: 'alpha' }), s, 'en'), 'Ship the alpha')
+  assert.equal(logic.askTitle(conv({ title: 'Named by the page' }), s, 'en'), 'Named by the page')
+  // the Stand of a failure is its day (spec 6d item 3: job, machine, state and day, never the copied trace)
+  const failed = { ...s, workers: { data: { runs: [{ host: 'mini', id: 'chat-bot', title: 'chat-bot', state: 'last_run_failed',
+    strip: [{ at: '2026-10-12T12:00:00Z', verdict: 'ok' }, { at: '2026-10-16T12:00:00Z', verdict: 'failed' }] }] } } }
+  assert.equal(logic.askTitle(conv({ kind: 'worker', key: 'worker:mini:chat-bot' }), failed, 'de'), 'chat-bot · mini · letzter Lauf fehlgeschlagen 16.10.')
+  // a question asked about a job before it carried what it is about: read from its own words, never the English trace
+  assert.equal(logic.askTitle(conv(null, 'Hintergrundjob chat-bot auf mini: letzter Lauf fehlgeschlagen. the last run of chat-bot ended with 75 Was ist zu tun und warum?'), failed, 'de'),
+    'chat-bot · mini · letzter Lauf fehlgeschlagen 16.10.')
+  assert.equal(logic.askTitle(conv(null, 'Background job other on box: last run failed. It ended with 75. What now?'), s, 'en'),
+    'other · box · last run failed')
+  // nothing known: the first sentence, or the title in guillemets a row's prompt carries, cut at a word
+  assert.equal(logic.askTitle(conv(null, 'Look at the backup. It ended with 75. What now?'), s, 'en'), 'Look at the backup.')
+  assert.equal(logic.askTitle(conv(null, 'Briefing item: «Renew the old demo certificate» («demo»). Look at it.'), s, 'en'), 'Renew the old demo certificate')
+  const long = logic.askTitle(conv(null, 'word '.repeat(40)), s, 'en')
+  assert.ok(long.length <= 60 && long.endsWith('…') && !/wor…$/.test(long), long)
+})
+
+test('askOutcome and askMark: handed questions are marked in tab, done (with the outcome) or asks you', () => {
+  // the one shape quick.py handoff_outcome writes on the handed record, also read by handoffStatus
+  assert.equal(logic.askOutcome({}), null)
+  assert.equal(logic.askOutcome({ handed: { outcome: { text: '', closed: false, at_ms: 1, asks: false } } }), null)
+  assert.deepEqual(logic.askOutcome({ handed: { outcome: { text: 'Result: Restarted the job', closed: true, at_ms: 5, asks: false } } }),
+    { text: 'Restarted the job', asks: false, closed: true, at_ms: 5 })
+  assert.deepEqual(logic.askOutcome({ handed: { outcome: { text: 'Frage: Which machine?', closed: false, at_ms: 6, asks: true } } }),
+    { text: 'Which machine?', asks: true, closed: false, at_ms: 6 })
+  assert.deepEqual(logic.askOutcome({ handed: { outcome: { text: '', closed: true, at_ms: 7, asks: false } } }),
+    { text: null, asks: false, closed: true, at_ms: 7 })
+  const tabs = [{ ref: 'surface:21', name: 'Look at it', item: 'i1', state: 'working' }]
+  const back = (text, closed = true, asks = false) => ({ outcome: { text, closed, at_ms: 5, asks } })
+  const handed = (over = {}) => ({ id: 'q0000000002', turns: [{ q: 'x', a: 'y' }], handed: { to: 'tab', status: 'started', inbox_id: 'i1', ...over } })
+  assert.deepEqual(logic.askMark(handed(), tabs), { word: 'inTab', tone: 'info', text: null, ref: 'surface:21' })
+  assert.deepEqual(logic.askMark(handed(back('Nothing to do')), []), { word: 'done', tone: 'success', text: 'Nothing to do', ref: null })
+  // a note while the item is open and its tab still works is no end yet
+  assert.equal(logic.askMark(handed(back('Vendor wants 3.0', false)), tabs).word, 'inTab')
+  assert.equal(logic.askMark(handed(), [{ ...tabs[0], state: 'needs-you' }]).word, 'asksYou')
+  assert.equal(logic.askMark(handed(back('Question: Which one?', false, true)), []).word, 'asksYou')
+  assert.equal(logic.askMark(handed({ status: 'failed' }), tabs), null)
+  assert.equal(logic.askMark({ id: 'q0000000003', turns: [{ q: 'x', a: 'y' }] }, tabs), null)
+})
+
+test('askList: open and handed questions first, then the answered ones; equal titles get their time', () => {
+  const now = new Date(2026, 9, 28, 9, 0).getTime()
+  const at = (h, m, day = 28) => new Date(2026, 9, day, h, m).getTime()
+  const q = (id, ms, over = {}) => ({ id, started_ms: ms, last_ms: ms, turns: [{ q: 'Job chat-bot failed. Why?', a: 'Because.' }], ...over })
+  const convs = [q('q1', at(7, 34)), q('q2', at(7, 35), { handed: { to: 'tab', status: 'started', inbox_id: 'i1' } }),
+    q('q3', at(8, 10), { turns: [{ q: 'Something new?', a: 'Yes.' }] }), q('q4', at(7, 0, 27), { running: true, turns: [{ q: 'Job chat-bot failed. Why?', a: null }] })]
+  const list = logic.askList(convs, { now, tabs: { tabs: [] } }, 'de')
+  assert.deepEqual(list.map(x => x.conv.id), ['q2', 'q4', 'q3', 'q1'])
+  assert.deepEqual(list.map(x => x.open), [true, true, false, false])
+  assert.equal(list[0].title, 'Job chat-bot failed. · heute 07:35')
+  assert.equal(list[1].title, 'Job chat-bot failed. · gestern 07:00')
+  assert.equal(list[2].title, 'Something new?')
+  assert.equal(list[3].title, 'Job chat-bot failed. · heute 07:34')
+  assert.equal(list[0].mark.word, 'inTab')
+  assert.equal(logic.askStamp(at(7, 34, 20), now, 'de'), '20.10. 07:34')
+  assert.equal(logic.askStamp(at(7, 34), now, 'en'), 'today 07:34')
+})
+
+test('handoffStatus: a tab that waits on you before anything came back says so, and every word keeps the jump', () => {
+  const tabs = [{ ref: 'surface:21', name: 'Look at it', item: 'i1', state: 'needs-you' }]
+  const handed = { to: 'tab', at_ms: 1, status: 'started', inbox_id: 'i1' }
+  assert.deepEqual(logic.handoffStatus(handed, [], tabs), { word: 'asksYou', tone: 'warning', action: 'jump', ref: 'surface:21', tab: 'Look at it' })
+  const done = logic.handoffStatus({ ...handed, outcome: { text: 'Result: Done.', closed: true, at_ms: 5, asks: false } }, [], [{ ...tabs[0], state: 'working' }])
+  assert.equal(done.word, 'result')
+  assert.equal(done.action, 'jump')
+})
+
+test('the last question opened is kept in this browser, so a reload and the header find it again', () => {
+  const app = read('app.js')
+  assert.match(app, /quickConv: lastAsk\(\)/)
+  assert.match(app.match(/function lastAsk\(\) \{[\s\S]*?\n\}/)[0], /load\('bridge-cockpit\.lastAsk'/)
+  assert.match(app, /save\('bridge-cockpit\.lastAsk', id\)/)
 })
 
 test('ChatFoot never offers a one click control handoff', () => {
@@ -5338,4 +5602,131 @@ test('the describe view reaches the page live: the describe event and an action 
   assert.match(app, /model, describe: liveDescribeAfter\(s\.describe, model\), more: freshMore\(s\.more, model\)/)
   // the card reads the live view before what the row carries (views/card.js describeOf)
   assert.match(read('views/card.js'), /s\?\.describe\?\.\[key\]/)
+})
+
+test('6d fix: a handed question whose tab is gone and that brought nothing back says so, with a way to start again', () => {
+  // live 28.10.: at 08:46 the chat still said "Started, the tab is opening" for a handoff at 07:36, its chip "in its tab",
+  // while Work said "Tab gone" for the same item. Past the start's grace (returns.py GRACE_MS) with no tab, both say it
+  const at = 1_000_000
+  const handed = { to: 'tab', at_ms: at, status: 'started', inbox_id: 'i1' }
+  const late = at + 4 * 60_000
+  assert.equal(logic.handoffStatus(handed, [], [], at + 60_000).word, 'started', 'within the grace it is still starting')
+  for (const status of ['started', 'running', 'busy']) {
+    assert.deepEqual(logic.handoffStatus({ ...handed, status }, [], [], late), { word: 'gone', tone: 'warning', action: 'retry', item: 'i1' })
+  }
+  // a tab that carries it, or what came back, wins
+  assert.equal(logic.handoffStatus(handed, [], [{ ref: 'surface:2', name: 'x', item: 'i1' }], late).word, 'inTab')
+  assert.equal(logic.handoffStatus({ ...handed, outcome: { text: 'Result: ok', closed: false, at_ms: at, asks: false } }, [], [], late).word, 'result')
+  const conv = { id: 'q0000000009', turns: [{ q: 'x', a: 'y' }], handed }
+  assert.equal(logic.askMark(conv, [], at + 60_000).word, 'inTab')
+  assert.deepEqual(logic.askMark(conv, [], late), { word: 'gone', tone: 'warning', text: null, ref: null })
+  assert.equal(logic.askList([conv], { now: late, tabs: { tabs: [] } }, 'en')[0].mark.word, 'gone')
+  for (const lang of ['en', 'de']) {
+    const t = text.TABLES[lang]
+    assert.ok(t.handoff.gone && t.handoff.restart && t.handoff.openItem && t.asks.mark.gone, lang)
+  }
+  assert.equal(text.TABLES.de.asks.mark.gone, 'Tab beendet')
+})
+
+test('6d fix: no keyboard hints in the question fields and on the button that starts a tab', () => {
+  for (const lang of ['en', 'de']) {
+    const t = text.TABLES[lang]
+    for (const said of [t.quickReply, t.chatPlaceholder, t.chatSolveTitle]) {
+      assert.doesNotMatch(said, /Cmd|Ctrl|Enter|[?!] (asks|fragt|starts|startet|hands|gibt)/, `${lang}: ${said}`)
+    }
+  }
+})
+
+test('6d fix: no key named in the notes and hints a mouse reads, and one name for a new question', () => {
+  for (const lang of ['en', 'de']) {
+    const t = text.TABLES[lang]
+    for (const said of [t.hints.items.prompt.body, t.panelStartHint, t.inner.hint, t.inner.hintTour, t.inner.search]) {
+      assert.doesNotMatch(said, /Cmd|Ctrl|Enter|Esc|Space|Leertaste|\(\/\)/, `${lang}: ${said}`)
+    }
+  }
+  // the Chat page and the questions window call a new one the same, and an open question's field reads as C4 says
+  const chat = read('views/chat.js')
+  assert.doesNotMatch(chat, /t\.quickNew/)
+  assert.doesNotMatch(chat, /t\.quickReply/)
+  assert.doesNotMatch(read('views/rooms.js'), /t\.quickNew/)
+  assert.equal(text.TABLES.de.rooms.allAsks, 'Auch frühere Fragen')
+  // the model picker under the Chat's field says which button it is for: Ask has its own picker on top
+  assert.match(chat, /<\$\{LaunchPick\} s=\$\{s\} c=\$\{c\} label=\$\{t\.launch\.forSolve\} \/>/)
+  assert.equal(text.TABLES.de.launch.forSolve, 'Modell für AI machen lassen')
+  assert.match(read('views/launch.js'), /export function LaunchPick\(\{ s, c, items = \[\], label = null \}\)/)
+})
+
+// ---------------------------------------------------------------- the click origin log (round 6d, item 10)
+
+/** A stand-in for an element as the click log reads it: tag, classes, role, data-u, a parent and the selectors it
+ *  matches (this file has no DOM) */
+function el({ tag = 'div', cls = '', role = null, u = null, parent = null, sels = [], text = '' } = {}) {
+  return { nodeType: 1, tagName: tag.toUpperCase(), className: cls, parentNode: parent, textContent: text,
+    getAttribute: name => (name === 'role' ? role : name === 'data-u' ? u : name === 'class' ? cls : null),
+    matches: sel => sels.includes(sel) }
+}
+
+test('usage: a control is named by data-u or its own classes, never by its words', () => {
+  const list = el({ sels: ['.chat-list'] })
+  const row = el({ tag: 'button', cls: 'btn btn-ghost btn-xs chat-row is-on', parent: list, text: 'Telegram bot exit 75' })
+  const label = el({ tag: 'span', cls: 'btn-label', parent: row, text: 'Telegram bot exit 75' })
+  assert.equal(logic.usageControl(label), 'chat-row')                      // the button it stands in, its own class
+  assert.equal(logic.usageControl(el({ tag: 'button', cls: 'btn chat-row', u: 'chat-sort' })), 'chat-sort')
+  assert.equal(logic.usageControl(el({ tag: 'button', cls: 'btn row-12 tab-3f9a' })), 'button')   // no class with a digit
+  assert.equal(logic.usageControl(el({ cls: 'seg', role: 'tab' })), 'seg')
+  assert.equal(logic.usageControl(el({ tag: 'a', cls: 'A Title With Words' })), 'a')            // nothing that is not a name
+  assert.equal(logic.usageControl(el({ cls: 'chat-list', parent: el() })), null)               // no control: no click
+  assert.equal(logic.usageControl(null), null)
+})
+
+test('usage: the area is the innermost area of the explain overlay the click stands in', () => {
+  const s = { ui: { page: '@chat' }, layout: 'wide' }
+  const list = el({ sels: ['.chat-list'] })
+  const row = el({ tag: 'button', cls: 'chat-row', parent: list })
+  assert.equal(logic.usageArea(s, row), 'chatList')
+  assert.equal(logic.usageArea(s, el({ tag: 'button', parent: el({ sels: ['.hdr-ask'] }) })), 'ask')   // the header too
+  assert.equal(logic.usageArea(s, el({ tag: 'button', parent: el({ role: 'dialog' }) })), 'dialog')
+  assert.equal(logic.usageArea(s, el({ tag: 'button' })), '-')
+  assert.deepEqual(logic.usagePlace(s), { page: '@chat', view: '-' })
+  assert.deepEqual(logic.usagePlace({ ui: { page: 'briefing', workView: 'flow' }, work: { flow: { enabled: true } } }),
+    { page: 'briefing', view: 'flow' })
+})
+
+test('usage: clicks are counted, sent in small batches, and a verb keeps the place of the click before it', () => {
+  const sent = []
+  let now = 1000
+  const log = logic.createUsageLog({ send: events => sent.push(events), now: () => now, max: 3 })
+  const at = { page: '@chat', view: '-', area: 'chatList', control: 'chat-row' }
+  log.click({ ...at, title: 'Telegram bot exit 75' })
+  log.click(at)
+  now += 500
+  log.verb('advise')                          // half a second after the click: from there
+  now += 10_000
+  log.verb('flow_themes_run')                 // no click before it: no use of a control, not counted
+  assert.equal(sent.length, 0)
+  log.flush()
+  assert.deepEqual(sent, [[{ kind: 'click', ...at, verb: '-', n: 2 }, { kind: 'verb', ...at, verb: 'advise', n: 1 }]])
+  assert.ok(!JSON.stringify(sent).includes('Telegram'), 'a title passed by mistake is not sent')
+  log.flush()
+  assert.equal(sent.length, 1, 'nothing to send, nothing sent')
+  for (const area of ['a', 'b', 'c']) log.click({ ...at, area })
+  assert.equal(sent.length, 2, 'the batch goes once it holds max events')
+  assert.equal(sent[1].length, 3)
+  log.click({ page: '@chat' })                // a click outside any control is no use
+  log.flush()
+  assert.equal(sent.length, 2)
+})
+
+test('usage: the page sends clicks only where the server says so, and the explain window holds the field', () => {
+  // asserted as booleans: a whole file as `actual` would print it entire on a failure
+  assert.ok(/config\?\.clicks === true/.test(read('app.js')), 'app.js sends clicks only when the server says so')
+  assert.ok(/'\/api\/clicks'/.test(read('api.js')), 'api.js posts to /api/clicks')
+  assert.ok(/explainNote/.test(read('views/hints.js')), 'the explain window saves its note')
+  for (const lang of ['en', 'de']) {
+    const h = text.TABLES[lang].hints
+    for (const w of [h.noteOpen, h.notePlaceholder, h.notePick, h.noteSaved]) {
+      assert.ok(w && !/Esc|Enter|key|Taste/i.test(w), `${lang}: ${w}`)
+    }
+  }
+  assert.equal(text.TABLES.de.hints.noteOpen, 'Was stört hier?')
 })

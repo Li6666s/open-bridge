@@ -1769,6 +1769,105 @@ def test_a_row_step_that_returns_a_tab_files_it_and_starts_it(world):
     assert launch_argv(world, new_id, "go") in calls
 
 
+WORKER_RUN = {"id": "chat-bot", "title": "Chat bot", "host": "homebox", "kind": "daemon", "when": "continuous",
+              "unit": "bridge.chat-bot", "runtime": "launchd", "log": "~/.bridge/workloads/chat-bot.out",
+              "program": "/opt/bridge/skills/chat/start.sh", "program_where": "in this repository",
+              "state": "last_run_failed", "retired": False,
+              "findings": [{"state": "last_run_failed", "severity": "high", "detail": "the last run ended with 75",
+                            "hint": "read the unit's log for that run"},
+                           {"state": "in_sync", "severity": "info", "detail": "matches its stamp", "hint": ""}],
+              "strip": [{"at": "2026-10-16T07:45:56Z", "rc": 75, "verdict": "failed"}], "day": {"marks": []}}
+
+
+def write_workers(world, runs):
+    folder = world.root / ".bridge" / "resources"
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "workers-view.json").write_text(json.dumps({"schema": 1, "runs": runs}), encoding="utf-8")
+
+
+def test_analyse_in_a_tab_files_the_job_under_its_own_key_and_starts_an_advising_tab(world):
+    # the brief comes from the kept workers view, never from the page: the verb names only machine and job
+    write_workers(world, [WORKER_RUN])
+    new_id = "20261028-0736-background-job-chat-bot-a1b2"
+    world.runner.handlers["inbox.add"] = lambda argv: ok(new_id + "\n")
+    world.runner.calls.clear()
+    world.act("worker_advise", host="homebox", id="chat-bot")
+    calls = writes(world)
+    add = next(c for c in calls if world.runner.key(c) == "inbox.add")
+    assert "--key=worker:homebox:chat-bot" in add
+    assert "--summary=Background job chat-bot on homebox: last run failed" in add
+    detail = next(a for a in add if a.startswith("--detail="))
+    for part in ("chat-bot", "homebox", "bridge.chat-bot", "continuous", "/opt/bridge/skills/chat/start.sh",
+                 "in this repository", "~/.bridge/workloads/chat-bot.out", "the last run ended with 75",
+                 "read the unit's log for that run", "matches its stamp", "2026-10-16T07:45:56Z",
+                 "workflow/workloads/chat-bot.yaml", "infra/remotes/homebox.yaml", "workload", "remote", "change nothing"):
+        assert part in detail, part
+    # the click is the order to analyse: it goes on the item as the start note, so the tab never closes the item as
+    # overtaken on its own (28.10.: a tab closed a job's item after 31 s with "nothing to do")
+    assert I(world, "note", new_id, "--", "Start note: " + text_mod.EN["worker_order"]) in calls
+    assert launch_argv(world, new_id, "report", "area", "--start-note") in calls
+    # the same key again: inbox.py hands back the same item, so the second click starts (or finds) that one, and its
+    # start note is there already
+    world.runner.handlers["inbox.list"] = lambda argv: ok([{"id": new_id, "state": "open", "key": "worker:homebox:chat-bot"}])
+    world.app.inbox_cache = (0.0, None)
+    world.clock.advance(20)
+    world.runner.calls.clear()
+    world.act("worker_advise", host="homebox", id="chat-bot")
+    again = writes(world)
+    assert "--key=worker:homebox:chat-bot" in next(c for c in again if world.runner.key(c) == "inbox.add")
+    assert [world.runner.key(c) for c in again] == ["inbox.add", "workplace.launch"]
+    assert launch_argv(world, new_id, "report", "area", "--start-note") in again
+
+
+def test_analyse_in_a_tab_on_a_job_whose_item_was_dropped_opens_that_item_again(world):
+    # inbox.py keeps a dropped key dropped and hands back that item: the click is an order, so it is reopened first
+    write_workers(world, [WORKER_RUN])
+    old_id = "20261020-0900-background-job-chat-bot-e5f6"
+    world.runner.handlers["inbox.list"] = lambda argv: ok([{"id": old_id, "state": "dropped", "key": "worker:homebox:chat-bot"}])
+    world.app.inbox_cache = (0.0, None)
+    world.runner.handlers["inbox.add"] = lambda argv: ok(old_id + "\n")
+    world.runner.calls.clear()
+    world.act("worker_advise", host="homebox", id="chat-bot")
+    keys = [world.runner.key(c) for c in writes(world)]
+    assert keys.index("inbox.reopen") < keys.index("workplace.launch"), keys
+    assert launch_argv(world, old_id, "report", "area", "--start-note") in writes(world)
+
+
+def test_the_brief_of_a_job_survives_a_view_of_another_shape(world):
+    # a hand edited or older workers-view.json: every field read is guarded, the brief says "not known" instead of a 500
+    odd = {**WORKER_RUN, "when": "daily at 06:05", "strip": {"at": "x"}, "day": ["no", "dict"], "findings": "none"}
+    write_workers(world, [odd, {**WORKER_RUN, "id": "pct", "when": "daily", "day": {"marks": [{"today": True, "at_pct": "soon"}]}}])
+    world.runner.handlers["inbox.add"] = lambda argv: ok("20261028-0736-background-job-chat-bot-a1b2\n")
+    for ident in ("chat-bot", "pct"):
+        world.runner.calls.clear()
+        world.act("worker_advise", host="homebox", id=ident)
+        detail = next(a for a in next(c for c in writes(world) if world.runner.key(c) == "inbox.add") if a.startswith("--detail="))
+        assert "not known" in detail, ident
+
+
+def test_analyse_in_a_tab_refuses_a_job_the_view_does_not_hold(world):
+    write_workers(world, [WORKER_RUN, {**WORKER_RUN, "id": "old-job", "retired": True}])
+    world.runner.calls.clear()
+    refused(world, "not_applicable", "worker_advise", host="homebox", id="other")
+    refused(world, "not_applicable", "worker_advise", host="laptop", id="chat-bot")      # the job runs elsewhere
+    refused(world, "not_applicable", "worker_advise", host="homebox", id="old-job")
+    refused(world, "invalid_argument", "worker_advise", host="homebox", id="../x")
+    assert writes(world) == []
+
+
+def test_the_workers_view_names_the_item_a_job_was_filed_as(world):
+    write_workers(world, [WORKER_RUN, {**WORKER_RUN, "id": "quiet"}])
+    world.runner.handlers["inbox.list"] = lambda argv: ok([
+        {"id": "20261028-0736-background-job-chat-bot-a1b2", "state": "done", "key": "worker:homebox:chat-bot"},
+        {"id": "20261028-0900-background-job-chat-bot-c3d4", "state": "open", "key": "worker:homebox:chat-bot"},
+        {"id": "20261028-0901-other-e5f6", "state": "open", "key": "worker:laptop:quiet"}])
+    world.app.inbox_cache = (0.0, None)
+    status, _, body = world.request("GET", "/api/workers", headers=world.cookie)
+    runs = {r["id"]: r for r in json.loads(body)["view"]["runs"]}
+    assert runs["chat-bot"]["advise"] == {"inbox": "20261028-0900-background-job-chat-bot-c3d4", "state": "open"}
+    assert "advise" not in runs["quiet"]        # filed for another machine
+
+
 def test_a_row_step_the_row_does_not_offer_or_a_row_without_steps_is_refused(world):
     world.runner.calls.clear()
     for args, code in (({"index": 0, "action": "won"}, "not_applicable"), ({"index": 1, "action": "turned_down"}, "not_applicable"),
@@ -2236,7 +2335,8 @@ def test_tab_jump_send_go_on_close(world):
                              W(world, "send", "surface:7", "--", "please continue"),
                              W(world, "send", "surface:13", "--", "Keep going."),
                              W(world, "close", "surface:8")]
-    for verb, ref in (("tab_go_on", "surface:8"), ("tab_close", "surface:13"), ("tab_send", "surface:12")):
+    # round 6d: any tab that neither works nor asks closes, so the refused close is one at work
+    for verb, ref in (("tab_go_on", "surface:8"), ("tab_close", "surface:11"), ("tab_send", "surface:12")):
         with pytest.raises(ActionError) as err:
             world.act(verb, tab_ref=ref, **({"text": "x"} if verb == "tab_send" else {}))
         assert err.value.code == "not_applicable"
@@ -2318,11 +2418,12 @@ def test_every_post_path_but_reload_leaves_exactly_one_audit_line_without_texts(
             ("/api/flow/attach", {"key": "task:demo-task", "name": f"{marker}.txt", "data": "aGk="}, "flow_attach"),
         ]
         # every POST path the server knows is in the list above, so a new endpoint cannot skip its line;
-        # reload and presence change no record and send nothing on, and presence fires on every tab switch
+        # reload and presence change no record and send nothing on, and presence fires on every tab switch; clicks
+        # keeps its own log beside this one (usage.jsonl, test_cockpit_usage.py)
         known = set(re.findall(r'path == "(/api/[a-z/]+)"', inspect.getsource(server.Handler.post)))
         known |= {p for p in re.findall(r'"(/api/jev/[a-z]+)"', inspect.getsource(jev.handle_post))}
-        assert "/api/presence" in known
-        assert known - {"/api/reload", "/api/presence"} == {path for path, _, _ in cases}
+        assert "/api/presence" in known and "/api/clicks" in known
+        assert known - {"/api/reload", "/api/presence", "/api/clicks"} == {path for path, _, _ in cases}
         for path, body, verb in cases:
             before = log.read_text().splitlines() if log.exists() else []
             status, _, data = w.post(path, body)
@@ -3989,6 +4090,28 @@ def test_a_conversation_hands_on_to_an_agent_tab_or_the_control_session(world):
     assert writes(world)[1] == launch_argv(world, new_id, "go")
 
 
+def test_the_order_of_a_handoff_goes_as_a_start_note_the_tab_reads_first(world):
+    """28.10.: "I want to analyse it more closely" stood only at the end of the item's detail and the tab closed the
+    item after 31 s without asking. Now the order is the start note on the item and the launch says so (--start-note:
+    read it first, ask before closing, workplace.py); the start knows the chat it came from"""
+    conv = answered_conv(world)
+    new_id = "20261010-1300-what-next-a1b2"
+    world.runner.handlers["inbox.add"] = lambda argv: ok(new_id + "\n")
+    world.runner.calls.clear()
+    world.act("quick_handoff", conv=conv, to="tab", text="I want to analyse it more closely")
+    calls = writes(world)
+    assert world.runner.key(calls[0]) == "inbox.add"
+    assert calls[1] == I(world, "note", new_id, "--", "Start note: I want to analyse it more closely")
+    assert calls[2] == launch_argv(world, new_id, "go", "area", "--start-note")
+    assert world.app.launches.all()[0]["conv"] == conv
+    # without an order the launch is the one it was, and no note is written
+    world.clock.advance(20)
+    world.runner.calls.clear()
+    world.act("quick_handoff", conv=conv, to="tab")
+    assert [world.runner.key(x) for x in writes(world)] == ["inbox.add", "workplace.launch"]
+    assert writes(world)[1] == launch_argv(world, new_id, "go")
+
+
 def test_a_long_order_on_a_long_conversation_reaches_the_end_whole_within_the_cap(world, monkeypatch):
     from lib.bridge_cockpit.actions import HANDOFF_MAX, HANDOFF_ORDER_MAX
     from lib.bridge_cockpit.text import EN
@@ -4714,6 +4837,21 @@ def test_every_launch_outcome_is_recorded_and_manual_nothing_partly_failed_can_b
     assert res["handed"]["status"] == outcome
 
 
+@pytest.mark.parametrize("outcome", ["busy", "running"])
+def test_an_order_for_a_tab_already_on_its_way_is_one_start_note_and_says_so(world, monkeypatch, outcome):
+    """The order goes on the item once, as the start note: a second raw note of the same words read back as the tab's
+    result (handoff_outcome). A tab that runs already is told by the same note as one that is still starting"""
+    conv = answered_conv(world)
+    new_id = "20261010-1300-what-next-a1b2"
+    world.runner.handlers["inbox.add"] = lambda argv: ok(new_id + "\n")
+    monkeypatch.setattr(world.app.actions, "launch", lambda *a, **k: outcome)
+    world.runner.calls.clear()
+    res = world.act("quick_handoff", conv=conv, to="tab", text="Then push it.")
+    notes = [c for c in writes(world) if world.runner.key(c) == "inbox.note"]
+    assert notes == [I(world, "note", new_id, "--", "Start note: Then push it.")]
+    assert text_mod.EN["handoff_order_late"].split(":")[0] in res["note"]
+
+
 def test_a_real_launch_without_a_driver_is_recorded_as_manual(world):
     conv = answered_conv(world)
     world.runner.handlers["inbox.add"] = lambda argv: ok("20261010-1300-what-next-a1b2\n")
@@ -5173,6 +5311,146 @@ def test_the_waiting_tab_of_an_executed_item_can_be_closed(world):
     assert writes(world) == [W(world, "close", "surface:14")]
 
 
+def test_tab_behind_names_only_the_open_task_and_the_open_item(tmp_path):
+    from lib.bridge_cockpit.returns import tab_behind
+    item = "20261017-1238-some-item-abcd"
+    events = tmp_path / "work" / "inbox" / item / "events"
+    events.mkdir(parents=True)
+    task = tmp_path / "work" / "tasks" / "a-task"
+    task.mkdir(parents=True)
+    (task / "STATUS.md").write_text("x", encoding="utf-8")
+    stream = tmp_path / "work" / "streams" / "a-stream"
+    stream.mkdir(parents=True)
+    (stream / "STATUS.md").write_text("x", encoding="utf-8")
+    assert tab_behind(tmp_path, {"slug": "a-task", "item": item}) == {"task": "a-task", "item": item}
+    # a stream never ends, a task folder that is not there is nothing, a bad name is nothing
+    assert tab_behind(tmp_path, {"slug": "a-stream"}) is None
+    assert tab_behind(tmp_path, {"slug": "gone-task"}) is None
+    assert tab_behind(tmp_path, {"slug": "../x", "item": "../y"}) is None
+    assert tab_behind(tmp_path, {}) is None
+    # an item that ended is no longer behind the tab
+    (events / "20261017T105000Z-00-host-close.yaml").write_text("verb: close\n", encoding="utf-8")
+    assert tab_behind(tmp_path, {"slug": "a-task", "item": item}) == {"task": "a-task", "item": None}
+
+
+def tab_on(world, **fields):
+    """The workplace lists one more tab, waiting at its prompt (surface:20), polled at once"""
+    tab = {"name": "behind tab", "workspace": "Demo", "ref": "surface:20", "ws_ref": "workspace:2", "state": "waiting",
+           "id": "TAB-20", **fields}
+    world.runner.handlers["workplace.status"] = lambda argv: ok(STATUS + [tab])
+    world.app.tabs.poll()
+    return {t["ref"]: t for t in world.app.tabs.state(world.app.collector.view)["tabs"]}
+
+
+def test_the_tab_state_says_what_stands_behind_a_tab(world):
+    tabs = tab_on(world, slug="demo-task", item=YES_ID)
+    assert tabs["surface:20"]["behind"] == {"task": "demo-task", "item": YES_ID}
+    assert tabs["surface:13"]["behind"] is None             # wait-task has no folder under work/tasks/
+    assert tabs["surface:3"]["behind"] is None              # the control tab stands for nothing
+
+
+def test_a_tab_known_by_its_name_has_the_task_of_its_session_behind_it(world, tmp_path):
+    # most tabs carry no slug or item (bound by their name): the task comes from the session linked in it, as the
+    # page reads it (rooms.js taskOfTab), so Done and close tab stands there too and closes that task
+    now_ms = time.time() * 1000
+    world.clock.now = now_ms
+    world.app.sessions.base = claude_home(tmp_path, world.root, now_ms)
+    world.runner.handlers["eww.-o"] = lambda argv: ok(f"claude CMUX_SURFACE_ID={SURF} X=1\n")
+    tab_on(world, id=SURF)
+    world.act("session_link", session=SID, slug="demo-task")
+    tabs = {t["ref"]: t for t in world.app.tabs.state(world.app.collector.view)["tabs"]}
+    assert tabs["surface:20"]["behind"] == {"task": "demo-task", "item": None}
+    world.runner.calls.clear()
+    world.act("tab_done", tab_ref="surface:20")
+    assert [world.runner.key(c) for c in writes(world)] == ["task.close", "workplace.close"]
+
+
+def test_how_long_a_tab_waits_outlives_a_restart_of_the_server(world):
+    # 28.10.: every line of Waiting for you read "waiting 0 min" after a restart, the walk order with it
+    from lib.bridge_cockpit.tabs import TabPoller
+    world.app.tabs.poll()
+    first = {t["ref"]: t["since_ms"] for t in world.app.tabs.state(world.app.collector.view)["tabs"]}
+    world.clock.now += 6 * 60_000
+    world.app.tabs = TabPoller(world.app)        # the server started again on the same state folder
+    world.app.tabs.poll()
+    again = {t["ref"]: t["since_ms"] for t in world.app.tabs.state(world.app.collector.view)["tabs"]}
+    assert again["surface:13"] == first["surface:13"] and again["surface:13"] < world.clock.now - 5 * 60_000
+    # a tab whose state changed meanwhile starts again from now
+    world.runner.handlers["workplace.status"] = lambda argv: ok([dict(t, state="working") if t["ref"] == "surface:13" else t
+                                                                 for t in STATUS])
+    world.app.tabs = TabPoller(world.app)
+    world.app.tabs.poll()
+    assert {t["ref"]: t["since_ms"] for t in world.app.tabs.state(world.app.collector.view)["tabs"]}["surface:13"] == world.clock.now
+
+
+def test_tab_close_takes_any_quiet_tab_but_not_one_that_works_asks_or_is_the_control(world):
+    world.runner.calls.clear()
+    world.act("tab_close", tab_ref="surface:13")           # waiting, nothing filed, nothing settled
+    world.act("tab_close", tab_ref="surface:12")           # back at its shell
+    assert writes(world) == [W(world, "close", "surface:13"), W(world, "close", "surface:12")]
+    for ref in ("surface:11", "surface:7", "surface:3"):    # works, asks (a dialog), the control tab
+        with pytest.raises(ActionError) as err:
+            world.act("tab_close", tab_ref=ref)
+        assert err.value.code == "not_applicable", ref
+
+
+def test_tab_close_leaves_a_waiting_tab_that_asks_a_question(world):
+    world.runner.handlers["workplace.screen"] = lambda argv: ok({"text": "⏺ Shall I go on?\n"})
+    world.app.asks_enabled = True
+    world.app.tabs.poll()
+    assert world.app.tabs.asks_now().get("surface:13")
+    with pytest.raises(ActionError) as err:
+        world.act("tab_close", tab_ref="surface:13")
+    assert err.value.code == "not_applicable"
+
+
+def test_tab_close_takes_a_waiting_tab_whose_last_words_ask_nothing(world):
+    # every waiting tab has its last words read off the screen; only a question, options or a draft ask
+    # (model.py is_idle), so a tab that said it is done closes (28.10.: the close stood nowhere live)
+    world.runner.handlers["workplace.screen"] = lambda argv: ok({"text": "⏺ Done, the report is filed.\n"})
+    world.app.asks_enabled = True
+    world.app.tabs.poll()
+    assert world.app.tabs.asks_now().get("surface:13")
+    world.runner.calls.clear()
+    world.act("tab_close", tab_ref="surface:13")
+    assert writes(world) == [W(world, "close", "surface:13")]
+
+
+def test_tab_done_closes_the_task_and_the_item_the_way_done_does_then_the_tab(world):
+    tab_on(world, slug="demo-task", item=YES_ID)
+    world.runner.calls.clear()
+    res = world.act("tab_done", tab_ref="surface:20")
+    calls = writes(world)
+    keys = [world.runner.key(c) for c in calls]
+    assert keys == ["task.close", "inbox.close", "workplace.close"], keys
+    # the same argv as Done of Work (settle, task.py close): status done, folder moved, board, log row
+    assert calls[0][:6] == K(world, "close", "demo-task")
+    assert calls[1][-2] == "--note" and calls[1][-1]
+    assert calls[2] == W(world, "close", "surface:20")
+    assert res["ok"] is True and "behind tab" in res["note"]
+
+
+def test_tab_done_keeps_the_tab_open_when_a_step_fails_and_says_which(world):
+    tab_on(world, slug="demo-task", item=YES_ID)
+    world.runner.handlers["task.close"] = lambda argv: fail("STATUS.md is locked")
+    world.runner.calls.clear()
+    res = world.act("tab_done", tab_ref="surface:20")
+    keys = [world.runner.key(c) for c in writes(world)]
+    assert "workplace.close" not in keys and "inbox.close" in keys     # each step is tried, the tab stays
+    assert res["ok"] is False and "behind tab" in res["note"] and world.row("task:demo-task")["title"] in res["note"]
+
+
+def test_tab_done_needs_something_behind_the_tab(world):
+    tab_on(world)
+    with pytest.raises(ActionError) as err:
+        world.act("tab_done", tab_ref="surface:20")
+    assert err.value.code == "not_applicable"
+    for ref in ("surface:11", "surface:3"):                   # a tab at work, the control tab
+        with pytest.raises(ActionError) as err:
+            world.act("tab_done", tab_ref=ref)
+        assert err.value.code == "not_applicable", ref
+
+
 # ---------------------------------------------------------------- the model an agent starts with (launch.py)
 
 LAUNCH_CFG = ("cockpit:\n  enabled: true\n  language: en\n  relay: true\n  launch_model:\n    enabled: true\n{more}"
@@ -5464,6 +5742,25 @@ def test_a_chat_untouched_for_a_day_goes_to_the_archive(world):
     assert [c["id"] for c in json.loads((world.app.state_dir / "quick.json").read_text())] == [fresh]
 
 
+def test_the_page_reads_the_questions_archived_in_the_last_days(world):
+    world.runner.handlers["claude.p"] = lambda argv: claude_answer("ok", 0.001)
+    old = json.loads(world.post("/api/ask", {"kind": "free", "args": {"text": "gestern"}, "via": "quick"})[2])["conv"]
+    wait_quick(world)
+    world.clock.advance(25 * 3600)
+    gone = json.loads(world.post("/api/ask", {"kind": "free", "args": {"text": "weg damit"}, "via": "quick"})[2])["conv"]
+    wait_quick(world)
+    world.act("quick_forget", conv=gone)                       # one the person took off stays off
+    archive = lambda q="": json.loads(world.request("GET", f"/api/chats/archive{q}", headers=world.cookie)[2])  # noqa: E731
+    got = archive("?days=7")
+    assert got["ok"] is True and [c["id"] for c in got["convs"]] == [old]
+    assert got["convs"][0]["archived"] == {"why": "expired", "at_ms": int(world.clock())}
+    assert got["convs"][0]["turns"][0]["q"] == "gestern"
+    assert archive("?days=bogus")["convs"] == got["convs"]     # a word that is no number reads the default
+    world.clock.advance(8 * 86400)
+    assert archive("?days=7")["convs"] == []                   # past the window
+    assert [c["id"] for c in archive("?days=99")["convs"]] == [old]   # at most the longest window
+
+
 def test_an_expiry_the_archive_refuses_is_tried_again_only_after_an_hour(world, monkeypatch):
     world.runner.handlers["claude.p"] = lambda argv: claude_answer("ok", 0.001)
     conv = json.loads(world.post("/api/ask", {"kind": "free", "args": {"text": "alt"}, "via": "quick"})[2])["conv"]
@@ -5526,6 +5823,24 @@ def test_place_is_only_core_and_only_for_a_quick_free_question(world):
 
 def test_the_page_learns_how_long_a_chat_stays(world):
     assert world.app.quick.state()["keep_hours"] == 24
+
+
+def test_a_week_of_chat_keep_hours_keeps_a_question_six_days_and_archives_it_after_the_week(tmp_path):
+    """Round 6d C1: the questions stay a week where the instance sets chat_keep_hours: 168, and the page is told so"""
+    w = World(tmp_path, config="cockpit:\n  enabled: true\n  language: en\n  chat_keep_hours: 168\n")
+    try:
+        w.runner.handlers["claude.p"] = lambda argv: claude_answer("ok", 0.001)
+        conv = json.loads(w.post("/api/ask", {"kind": "free", "args": {"text": "was ist offen?"}, "via": "quick"})[2])["conv"]
+        wait_quick(w)
+        assert w.app.quick.state()["keep_hours"] == 168
+        w.clock.advance(6 * 24 * 3600)
+        assert [c["id"] for c in w.app.quick.state()["convs"]] == [conv]
+        w.clock.advance(24 * 3600 + 60)
+        assert w.app.quick.state()["convs"] == []
+        _, rows = archived(w, "quick")
+        assert [(r["conv"]["id"], r["why"]) for r in rows] == [(conv, "expired")]
+    finally:
+        w.close()
 
 
 def test_a_removed_agent_conversation_is_archived(world):
@@ -7097,6 +7412,51 @@ def test_a_chat_from_an_info_row_finds_its_inbox_item(world):
     assert sweep(world) is False and conv_of(world, other)
 
 
+def test_a_question_on_a_job_row_is_built_from_the_view_and_names_the_row(world):
+    write_workers(world, [WORKER_RUN])
+    conv = chat_on(world, "worker", host="homebox", id="chat-bot")
+    c = conv_of(world, conv)
+    assert c["about"] == {"kind": "worker", "key": "worker:homebox:chat-bot", "inbox": None}
+    # the question in the page's language first, the finding as the job wrote it (often English) quoted after it
+    assert c["turns"][0]["q"] == ("Background job chat-bot on homebox: last run failed. What should be done, and why? "
+                                  "The finding as the job reports it: «the last run ended with 75»")
+    # an item the job was filed as (Analyse in a tab) is what the chat waits for
+    world.runner.handlers["inbox.list"] = lambda argv: ok([{"id": YES_ID, "state": "open", "key": "worker:homebox:chat-bot"}])
+    world.app.inbox_cache = (0.0, None)
+    assert conv_of(world, chat_on(world, "worker", host="homebox", id="chat-bot"))["about"]["inbox"] == YES_ID
+    status, _, body = world.post("/api/ask", {"kind": "worker", "args": {"host": "homebox", "id": "gone"}, "via": "quick"})
+    assert status == 409 and json.loads(body)["error"]["code"] == "stale_row"
+
+
+def test_a_question_on_a_job_row_handed_on_keeps_its_row(world):
+    """28.10.: a question asked on the job row, then "Let AI do it": the chat named only the new item and the row lost
+    its question and its marker. The handed item is added to what the chat is about, the row's key stays"""
+    write_workers(world, [WORKER_RUN])
+    conv = chat_on(world, "worker", host="homebox", id="chat-bot")
+    new_id = "20261010-1300-what-next-a1b2"
+    world.runner.handlers["inbox.add"] = lambda argv: ok(new_id + "\n")
+    world.act("quick_handoff", conv=conv, to="tab", text="I want to analyse it more closely")
+    assert conv_of(world, conv)["about"] == {"kind": "worker", "key": "worker:homebox:chat-bot", "inbox": new_id}
+    # an item the chat names already stays what it is about
+    assert world.app.quick.set_about(conv, {"kind": "handoff", "inbox": "20261010-1400-other-c3d4"}) is False
+    # a chat about nothing yet takes the handoff as it is
+    free = answered_conv(world)
+    world.act("quick_handoff", conv=free, to="tab")
+    assert conv_of(world, free)["about"] == {"kind": "handoff", "inbox": new_id}
+
+
+def test_a_question_on_a_job_row_takes_the_finding_in_one_short_line(world):
+    # a finding may carry a log excerpt: its control characters go and it is cut, so the question and its title stay short
+    write_workers(world, [{**WORKER_RUN, "findings": [{"state": "last_run_failed", "severity": "high",
+                                                       "detail": "line one\nline two\x07 " + "x" * 2000, "hint": ""}]}])
+    q = conv_of(world, chat_on(world, "worker", host="homebox", id="chat-bot"))["turns"][0]["q"]
+    assert "\n" not in q and "\x07" not in q and len(q) < 700, len(q)
+    # without a detail there is no double space
+    write_workers(world, [{**WORKER_RUN, "findings": []}])
+    q = conv_of(world, chat_on(world, "worker", host="homebox", id="chat-bot"))["turns"][0]["q"]
+    assert "  " not in q, q
+
+
 def test_a_chat_on_a_task_row_leaves_when_the_task_moves_to_done(world):
     conv = chat_on(world, "follow_up", key="task:other-task")
     assert conv_of(world, conv)["about"] == {"kind": "follow_up", "key": "task:other-task", "task": "other-task"}
@@ -7186,6 +7546,12 @@ def test_a_handed_chat_leaves_with_its_inbox_item(world):
     world.clock.advance(QUIET)
     assert sweep(world) is False
     end_item(world, new_id, world.app.clock() - 60_000, "executed")
+    # a handed chat carries what came back, and stays cockpit.chat_keep_hours after the end to be read
+    sweep(world)
+    assert conv_of(world, conv)["handed"]["outcome"]["closed"] is True
+    world.clock.advance(23 * 3600)
+    assert sweep(world) is False and conv_of(world, conv)
+    world.clock.advance(3600)
     assert sweep(world) is True and conv_of(world, conv) is None
     # a chat that already has its row keeps that one when it is handed on
     row_conv = chat_on(world, "row", key=f"inbox:{YES2_ID}")
@@ -7196,18 +7562,58 @@ def test_a_handed_chat_leaves_with_its_inbox_item(world):
 
 def test_an_info_chat_without_an_item_takes_the_item_it_is_handed_on_as(world):
     """An info row nobody filed gives its chat an `about` without an item: handed to a tab, the chat is about
-    the inbox item the handoff filed, and leaves with it like any handed chat"""
+    the inbox item the handoff filed as well, and leaves with it like any handed chat"""
     world.runner.handlers["inbox.list"] = lambda argv: ok([])
     world.app.inbox_cache = (0.0, None)
     conv = chat_on(world, "info", page="systems", section="upstream", index=0)
     assert conv_of(world, conv)["about"]["inbox"] is None
     new_id = "20261010-1500-info-chat-a1b2"
     world.runner.handlers["inbox.add"] = lambda argv: ok(new_id + "\n")
+    key = conv_of(world, conv)["about"]["key"]
     world.act("quick_handoff", conv=conv, to="tab")
-    assert conv_of(world, conv)["about"] == {"kind": "handoff", "inbox": new_id}
+    # the row's own key stays beside the item, so the row still finds its question (review SRV-1)
+    assert conv_of(world, conv)["about"] == {"kind": "info", "key": key, "inbox": new_id}
     world.clock.advance(QUIET)
     end_item(world, new_id, world.app.clock() - 60_000, "executed")
+    world.clock.advance(24 * 3600)
     assert sweep(world) is True and conv_of(world, conv) is None
+
+
+def note_item(world, item, at_ms, text):
+    """A note event of an inbox item, the way inbox.py writes it"""
+    events = world.root / "work" / "inbox" / item / "events"
+    events.mkdir(parents=True, exist_ok=True)
+    stamp = dt.datetime.fromtimestamp(at_ms / 1000, dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    (events / f"{stamp}-05-tab-note.yaml").write_text(f"verb: note\nby: tab\ntext: {json.dumps(text)}\n", encoding="utf-8")
+
+
+def test_a_handed_chat_learns_what_came_back_from_its_item(world):
+    """28.10.: the close note stood only on the closed item, the chat still said "arrived in the tab". The sweep reads
+    the item's events onto the chat (`handed.outcome`): the newest note, closed or open, and when; a question asks.
+    The person's own start note is no outcome"""
+    conv = answered_conv(world)
+    new_id = "20261010-1300-what-next-a1b2"
+    world.runner.handlers["inbox.add"] = lambda argv: ok(new_id + "\n")
+    world.act("quick_handoff", conv=conv, to="tab", text="look closer")
+    now = world.app.clock()
+    note_item(world, new_id, now + 1000, "Start note: look closer")
+    world.clock.advance(60)
+    sweep(world)
+    assert "outcome" not in conv_of(world, conv)["handed"]
+    note_item(world, new_id, now + 30_000, "Question: close it, the bot runs fine?")
+    assert sweep(world) is True       # nothing left, but the pages are told what changed
+    out = conv_of(world, conv)["handed"]["outcome"]
+    assert out == {"text": "Question: close it, the bot runs fine?", "closed": False, "asks": True,
+                   "at_ms": out["at_ms"]} and abs(out["at_ms"] - (now + 30_000)) < 1000
+    assert sweep(world) is False      # read again, the same: nothing to tell
+    end_item(world, new_id, now + 50_000)
+    note_item(world, new_id, now + 49_000, "Result: the bot runs, nothing to change")
+    sweep(world)
+    out = conv_of(world, conv)["handed"]["outcome"]
+    assert out["closed"] is True and out["asks"] is False and out["text"] == "Result: the bot runs, nothing to change"
+    # kept: the quiet time counts from the end, and a handed chat stays a day after it
+    world.clock.advance(QUIET)
+    assert conv_of(world, conv)
 
 
 def test_settle_verbs_trigger_the_sweep_on_the_next_poll(world):
@@ -8651,3 +9057,186 @@ def test_a_page_task_carries_its_status_from_the_task_list(tmp_path):
         assert rows["task:parked"]["status"] == "backlog"
     finally:
         w.close()
+
+
+# ---------------------------------------------------------------- a finding marked seen ("Seen", round 6d)
+
+def put_workers(world, detail: str, at: str = "2026-10-07T07:45:56Z") -> None:
+    folder = world.root / ".bridge" / "resources"
+    folder.mkdir(parents=True, exist_ok=True)
+    run = {"id": "chat-bot", "host": "mini", "kind": "daemon", "state": "last_run_failed", "severity": "high",
+           "findings": [{"state": "last_run_failed", "severity": "high", "detail": detail, "hint": ""},
+                        {"state": "in_sync", "severity": "info", "detail": "matches its stamp", "hint": ""}],
+           "strip": [{"at": at, "rc": 75, "verdict": "failed", "key": "chat-bot"}]}
+    (folder / "workers-view.json").write_text(json.dumps({"schema": 1, "runs": [run, {"id": "calm", "host": "mini"}]}),
+                                              encoding="utf-8")
+
+
+def served_runs(world) -> dict:
+    status, _, body = world.request("GET", "/api/workers", headers=world.cookie)
+    assert status == 200
+    return {r["id"]: r for r in json.loads(body)["view"]["runs"]}
+
+
+def test_a_job_finding_seen_stays_calm_until_it_changes(world):
+    put_workers(world, "the last run of chat-bot ended with 75 at 2026-10-07T07:45:56+00:00")
+    assert "acked" not in served_runs(world)["chat-bot"]
+    world.act("finding_ack", key="worker:mini:chat-bot")
+    runs = served_runs(world)
+    assert runs["chat-bot"]["acked"]["day"] and "acked" not in runs["calm"]
+    # kept in the shared record beside the other decisions, so a restart and every machine keep it
+    assert any(p.name.endswith("-ack.yaml") for p in (world.root / "work" / "cockpit" / "settled").glob("*.yaml"))
+    # a NEW failure has another fingerprint: red again
+    put_workers(world, "the last run of chat-bot ended with 1 at 2026-10-08T10:00:00+00:00", at="2026-10-08T10:00:00Z")
+    assert "acked" not in served_runs(world)["chat-bot"]
+    put_workers(world, "the last run of chat-bot ended with 75 at 2026-10-07T07:45:56+00:00")
+    assert "acked" in served_runs(world)["chat-bot"]
+    world.act("finding_unack", key="worker:mini:chat-bot")       # "show again"
+    assert "acked" not in served_runs(world)["chat-bot"]
+    refused(world, "stale_row", "finding_ack", key="worker:mini:nothing")
+    refused(world, "invalid_argument", "finding_ack", key="worker:../x")
+
+
+def test_a_finding_seen_stays_seen_while_only_its_age_grows(world):
+    # an overdue job's detail counts the seconds since its last line, a check row its hours: that alone is no news
+    put_workers(world, "chat-bot last wrote a line 4210s ago and its declared cadence is 300s")
+    world.act("finding_ack", key="worker:mini:chat-bot")
+    put_workers(world, "chat-bot last wrote a line 4570s ago and its declared cadence is 300s")
+    assert "acked" in served_runs(world)["chat-bot"]
+    ops = {"id": "ops", "title": "Ops", "sections": [
+        {"id": "probes", "kind": "command", "title": "Probes", "status": "ok", "alarm": True, "bad": 1, "weight": 1,
+         "total": 1, "empty": "all green", "items": [{"id": "copy", "title": "Copy", "detail": "last copy 3 h ago", "tone": "warn"}]}]}
+    with_pages(world, ops)
+    world.act("finding_ack", key="item:ops/probes/copy")
+    world.app.collector.view["pages"] = [p for p in world.app.collector.view["pages"] if p["id"] != "ops"]
+    ops["sections"][0]["items"][0]["detail"] = "last copy 5 h ago"
+    model = with_pages(world, ops)
+    it = next(p for p in model["pages"] if p["id"] == "ops")["sections"][0]["items"][0]
+    assert it["tone"] == "dim" and it["acked"]["tone"] == "warn"
+
+
+def test_a_page_finding_seen_leaves_the_badge_and_the_alarm_until_it_changes(world):
+    ops = {"id": "ops", "title": "Ops", "sections": [
+        {"id": "probes", "kind": "command", "title": "Probes", "status": "ok", "alarm": True, "bad": 1, "weight": 1,
+         "total": 1, "empty": "all green", "items": [{"id": "disk", "title": "Disk", "detail": "92 % full", "tone": "bad"}]}]}
+    model = with_pages(world, ops)
+    key = "item:ops/probes/disk"
+    assert [a["count"] for a in model["alarms"] if a["page_id"] == "ops"] == [1]
+    world.act("finding_ack", key=key)
+    model = world.app.collector.model
+    pg = next(p for p in model["pages"] if p["id"] == "ops")
+    it = pg["sections"][0]["items"][0]
+    assert it["tone"] == "dim" and it["acked"]["tone"] == "bad" and it["acked"]["day"]
+    assert pg["sections"][0]["bad"] == 0 and pg["badge"]["kind"] != "bad"
+    assert not [a for a in model["alarms"] if a["page_id"] == "ops"]
+    # the finding changed: red again
+    world.app.collector.view["pages"] = [p for p in world.app.collector.view["pages"] if p["id"] != "ops"]
+    ops["sections"][0]["items"][0]["detail"] = "99 % full"
+    model = with_pages(world, ops)
+    assert [a["count"] for a in model["alarms"] if a["page_id"] == "ops"] == [1]
+    world.act("finding_ack", key=key)
+    world.act("finding_unack", key=key)
+    assert [a["count"] for a in world.app.collector.model["alarms"] if a["page_id"] == "ops"] == [1]
+
+
+def test_shown_again_names_the_row_by_its_title_also_without_an_id(world):
+    ops = {"id": "ops", "title": "Ops", "sections": [
+        {"id": "probes", "kind": "command", "title": "Probes", "status": "ok", "alarm": True, "bad": 1, "weight": 1,
+         "total": 1, "empty": "all green", "items": [{"title": "Disk of the archive", "detail": "92 % full", "tone": "bad"}]}]}
+    model = with_pages(world, ops)
+    key = next(p for p in model["pages"] if p["id"] == "ops")["sections"][0]["items"][0]["key"]
+    world.act("finding_ack", key=key)
+    res = world.act("finding_unack", key=key)
+    assert "Disk of the archive" in res["note"] and "/h" not in res["note"]
+
+
+def close_item(world, item_id: str, *, key: str, summary: str, note: str, at: str = "2026-10-08T06:36:47+00:00"):
+    item = world.root / "work" / "inbox" / item_id
+    (item / "events").mkdir(parents=True)
+    (item / "item.yaml").write_text(yaml_dump({"schema_version": 1, "created": "2026-10-08T07:36", "from": "watcher",
+                                               "kind": "alert", "summary": summary, "key": key}), encoding="utf-8")
+    (item / "events" / "20261008T063647Z-00-mac-close.yaml").write_text(
+        yaml_dump({"verb": "close", "by": "mac", "at": at, "text": note}), encoding="utf-8")
+
+
+def yaml_dump(data: dict) -> str:
+    import yaml
+    return yaml.safe_dump(data, sort_keys=False, allow_unicode=True)
+
+
+def test_closing_the_item_of_a_job_marks_its_finding_seen_with_the_close_note(world):
+    put_workers(world, "the last run of chat-bot ended with 75 at 2026-10-07T07:45:56+00:00")
+    close_item(world, "20261008-0736-job-chat-bot-a1b2", key="worker:mini:chat-bot",
+               summary="Background job chat-bot on mini: last run failed", note="exit 75 was a restart, nothing to do")
+    world.app.ack_closed_findings()
+    run = served_runs(world)["chat-bot"]
+    assert run["acked"]["note"] == "exit 75 was a restart, nothing to do"
+    # undone by hand, the same close does not mark it again
+    world.act("finding_unack", key="worker:mini:chat-bot")
+    world.app.ack_closed_findings()
+    assert "acked" not in served_runs(world)["chat-bot"]
+
+
+def test_closing_an_item_that_was_already_there_marks_its_finding_seen_on_the_next_pass(world):
+    # inbox.py close writes into <id>/events/, which leaves the item folder's own time as it was: the pass reads
+    # the events folders too, so a close of an existing item is seen without another item changing
+    put_workers(world, "the last run of chat-bot ended with 75 at 2026-10-07T07:45:56+00:00")
+    close_item(world, "20261008-0736-job-chat-bot-a1b2", key="worker:mini:chat-bot",
+               summary="Background job chat-bot on mini: last run failed", note="exit 75 was a restart, nothing to do")
+    events = world.root / "work" / "inbox" / "20261008-0736-job-chat-bot-a1b2" / "events"
+    close = next(events.iterdir())
+    body = close.read_text(encoding="utf-8")
+    close.unlink()
+    item = events.parent
+    stamp = item.stat().st_mtime_ns
+    world.app.ack_closed_findings()
+    assert "acked" not in served_runs(world)["chat-bot"]
+    os.utime(events, ns=(stamp - 10_000_000_000, stamp - 10_000_000_000))
+    (events / close.name).write_text(body, encoding="utf-8")
+    os.utime(item, ns=(stamp, stamp))
+    world.app.ack_closed_findings()
+    assert served_runs(world)["chat-bot"]["acked"]["note"] == "exit 75 was a restart, nothing to do"
+
+
+def test_a_handoff_question_about_a_job_counts_like_its_own_item(world):
+    put_workers(world, "the last run of chat-bot ended with 75 at 2026-10-07T07:45:56+00:00")
+    close_item(world, "20261008-0736-question-c3d4", key="web:q0123456789",
+               summary="Background job chat-bot on mini: last run failed. What should be done, and why?",
+               note="a planned restart")
+    world.app.ack_closed_findings()
+    assert served_runs(world)["chat-bot"]["acked"]["note"] == "a planned restart"
+
+
+def test_a_close_before_the_failure_does_not_mark_it_seen(world):
+    put_workers(world, "the last run of chat-bot ended with 1 at 2026-10-08T09:00:00+00:00", at="2026-10-08T09:00:00Z")
+    close_item(world, "20261008-0736-job-chat-bot-e5f6", key="worker:mini:chat-bot",
+               summary="Background job chat-bot on mini", note="older trouble")
+    world.app.ack_closed_findings()
+    assert "acked" not in served_runs(world)["chat-bot"]
+
+
+def test_another_item_that_only_names_the_job_and_its_machine_does_not_mark_it_seen(world):
+    put_workers(world, "the last run of chat-bot ended with 75 at 2026-10-07T07:45:56+00:00")
+    close_item(world, "20261008-0736-chat-bot-on-mini-halted-a7b8", key="watcher:chat-bot",
+               summary="chat-bot on mini halted", note="another matter")
+    world.app.ack_closed_findings()
+    assert "acked" not in served_runs(world)["chat-bot"]
+
+
+def test_closing_the_item_analyse_in_a_tab_filed_marks_the_job_seen_and_keeps_its_item_on_the_row(world):
+    # the analysis files under worker:<host>:<id>, the key a close is read by: its close note greys the job
+    run = {**WORKER_RUN, "strip": [{"at": "2026-10-07T07:45:56Z", "rc": 75, "verdict": "failed"}]}
+    write_workers(world, [run])
+    new_id = "20261008-0736-background-job-chat-bot-a1b2"
+    world.runner.handlers["inbox.add"] = lambda argv: ok(new_id + "\n")
+    world.act("worker_advise", host="homebox", id="chat-bot")
+    add = next(c for c in writes(world) if world.runner.key(c) == "inbox.add")
+    key = next(a for a in add if a.startswith("--key="))[len("--key="):]
+    close_item(world, new_id, key=key, summary="Background job chat-bot on homebox: last run failed",
+               note="exit 75 was a planned restart")
+    world.runner.handlers["inbox.list"] = lambda argv: ok([{"id": new_id, "state": "done", "key": key}])
+    world.app.inbox_cache = (0.0, None)
+    world.app.ack_closed_findings()
+    served = served_runs(world)["chat-bot"]
+    assert served["acked"]["note"] == "exit 75 was a planned restart"
+    assert served["advise"] == {"inbox": new_id, "state": "done"}

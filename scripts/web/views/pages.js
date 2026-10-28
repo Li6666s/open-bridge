@@ -17,9 +17,9 @@ import { T, language } from '../text.js'
 import { TriageGist } from '../triage.js'
 import { KindTag, OriginTag, PageItemActions, RowBar } from './day.js'
 import { Lines } from './detail.js'
-import { ReturnChip } from './home.js'
+import { ReturnChip, RowAsk } from './home.js'
 import { rowClickOpens, useFocusOnOpen } from './overlays.js'
-import { Btn, SkipFix, Chip, Dot, Empty, Icon, MarkChip, PrioChip, StateLine, VerdictChip, usePopover, useRoving, useTween } from './parts.js'
+import { Btn, SeenBtn, SkipFix, Chip, Dot, Empty, Icon, MarkChip, PrioChip, StateLine, VerdictChip, usePopover, useRoving, useTween } from './parts.js'
 import { GitHubBoard, GitHubList, ghShows } from './github.js'
 import { WORKERS_PAGE, folderOf, subPagesOf } from './nav.js'
 import { DatesAgenda } from './dates.js'
@@ -176,7 +176,7 @@ function InfoRow({ it, page, section, s, c, byKey, scale = 0, lead = null, queue
         ${it.starting ? html`<${Chip} token="info">${t.startingTab}<//>` : null}
         <${ReturnChip} s=${s} rowKey=${[itemKey, it.task ? `task:${it.task}` : null]} />
       </div>
-      ${detail ? html`<div class="info-detail muted">${detail}</div>` : null}
+      ${detail || it.acked ? html`<div class="info-detail muted">${[detail, it.acked && t.findingSeen.on(it.acked.day, it.acked.note)].filter(Boolean).join(' · ')}</div>` : null}
       ${it.meter ? html`<${MeterBar} meter=${it.meter} scale=${scale} tone=${tone} />` : null}
       ${open && (it.lines ?? []).length ? html`<${Lines} lines=${it.lines} />` : null}
     </td>
@@ -184,8 +184,8 @@ function InfoRow({ it, page, section, s, c, byKey, scale = 0, lead = null, queue
       ${it.link?.kind === 'web' ? html`<a class="btn btn-ghost btn-xs" href=${it.link.href} target="_blank" rel="noopener noreferrer">
         <${Icon} name="external" size=${14} /><span class="btn-label">${t.openLink}</span></a>` : null}
       ${it.link?.kind === 'file' ? html`<${Btn} size="xs" variant="ghost" icon="copy" cls="act-quiet" title=${it.link.path} onClick=${() => c.copy(it.link.path)}>${t.copyPath}<//>` : null}
-      <${PageItemActions} it=${it} s=${s} c=${c} />
-      ${it.ask ? html`<${Btn} size="xs" variant="ghost" cls="act-quiet" onClick=${() => c.ask('info', { page, section, index: it.index })}>${t.btnAsk}<//>` : null}
+      <${PageItemActions} it=${it} s=${s} c=${c} /><${SeenBtn} k=${it.key} acked=${it.acked} loud=${tone === 'bad' || tone === 'warn'} c=${c} />
+      ${it.ask ? html`<${RowAsk} s=${s} c=${c} rowKey=${it.key} onAsk=${() => c.ask('info', { page, section, index: it.index })} />` : null}
       ${(it.lines ?? []).length ? html`<${Btn} size="xs" variant="ghost" cls=${open ? '' : 'act-quiet'} pressed=${open} onClick=${() => setOpen(!open)}>${t.btnLines}<//>` : null}
       ${it.actions?.length && it.row_id ? html`<${RowSteps} it=${it} page=${page} section=${section} s=${s} c=${c} as=${steps} />` : null}
       ${actionRow(it, byKey) && (it.inbox || it.task) ? html`<${RowBar} row=${actionRow(it, byKey)} s=${s} c=${c} tab=${it.tab} pin=${false} />` : null}
@@ -527,7 +527,7 @@ export function PageSection({ page, section, s, c }) {
   else if (section.view === 'agenda' && section.kind === 'calendar') body = html`<${DatesAgenda} items=${items} page=${page} section=${section} s=${s} c=${c} />`
   else if (section.view === 'groups') body = html`<${GroupsView} items=${items} page=${page.id} section=${section.id} c=${c} />`
   // a github-work section on its board view: the GitHub list (views/github.js), not the general table
-  else if (section.view === 'board' && gh) body = html`<${GitHubList} items=${items} page=${page.id} section=${section} s=${s} c=${c} byKey=${byKey} />`
+  else if (section.view === 'board' && gh) body = html`<${GitHubList} items=${items} page=${page.id} section=${section} s=${s} c=${c} byKey=${byKey} filter=${ghFilter} setFilter=${setGhFilter} me=${ghMyLogin(all)} />`
   else if (section.view === 'mosaic') body = html`<${MosaicView} items=${items} page=${page.id} section=${section.id} c=${c} />`
   else if (gaugeSection(items)) {
     body = html`<ul class="gtiles">${items.map(it => html`<${GaugeTile} key=${it.index} it=${it} page=${page.id} section=${section.id} c=${c} />`)}</ul>`

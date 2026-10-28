@@ -207,12 +207,23 @@ export function Dot({ token, pulse }) {
   return html`<span class=${`dot tk-${token}${pulse ? ' dot-pulse' : ''}`} aria-hidden="true"></span>`
 }
 
-export function Btn({ variant = 'secondary', size = 'sm', onClick, disabled, busy, title, pressed, children, label, icon, cls = '' }) {
-  return html`<button type="button" class=${`btn btn-${variant} btn-${size} ${cls}`} onClick=${onClick}
+/** A button; `u` names it for the click log (logic.js usageControl) where its classes cannot */
+export function Btn({ variant = 'secondary', size = 'sm', onClick, disabled, busy, title, pressed, children, label, icon, cls = '', u }) {
+  return html`<button type="button" class=${`btn btn-${variant} btn-${size} ${cls}`} data-u=${u} onClick=${onClick}
     disabled=${disabled || busy} aria-busy=${busy ? 'true' : undefined} title=${title} aria-label=${label}
     aria-pressed=${pressed === undefined ? undefined : String(!!pressed)}>
     ${icon ? html`<${Icon} name=${icon} />` : null}${children ? html`<span class="btn-label">${children}</span>` : null}
   </button>`
+}
+
+/** "Seen" on a finding (a job, worker:<host>:<id>, or a page row): grey until it changes; on a seen one its
+ *  "Show again". A button like the ones beside it (Analyse in a tab, Ask), never a bare word. Nothing where there
+ *  is no finding to mark (`loud` false and not seen) */
+export function SeenBtn({ k, acked, loud, c }) {
+  const t = T().findingSeen
+  if (!acked && !loud) return null
+  return acked ? html`<${Btn} size="xs" variant="secondary" u="seen-undo" onClick=${() => c.ackFinding(k, false)}>${t.undo}<//>`
+    : html`<${Btn} size="xs" variant="secondary" u="seen" title=${t.title} onClick=${() => c.ackFinding(k, true)}>${t.btn}<//>`
 }
 
 /** "Let AI do it" for a briefing section that cannot run on this machine: files the reason as a decision and

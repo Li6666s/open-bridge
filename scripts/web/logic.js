@@ -360,9 +360,10 @@ export function ghSortRows(rows, by) {
     : (by === 'priority' ? prioRank(a.gh?.priority) - prioRank(b.gh?.priority) : 0) || state(a) - state(b) || at(b).localeCompare(at(a)))
 }
 
-// the GitHub page's filter bar (round 6c, views/github.js): Board, Person, Repository, Kind and Board status, one
-// choice each, combined with the figure picked; GH_ME stands for you, GH_NONE for no board and for nobody assigned
-export const GH_DIMS = ['board', 'person', 'repo', 'type', 'status']
+// the GitHub page's filter bar (round 6c, views/github.js): Board, Assigned to, Opened by (round 6d: the one Person
+// split in two), Repository, Kind and Board status, one choice each, combined with the figure picked; GH_ME stands
+// for you, GH_NONE for no board and for nobody assigned
+export const GH_DIMS = ['board', 'assignee', 'author', 'repo', 'type', 'status']
 export const GH_ME = '@me'
 export const GH_NONE = '-'
 
@@ -389,8 +390,8 @@ export function ghStatusWords(items) {
 }
 
 /** The values a row has in one dimension: the boards it stands on (no board as GH_NONE; an older server names the
- *  board only as the group, unless that group is the repository), Me and the people assigned or who opened it
- *  (nobody assigned as GH_NONE), its repository, its kind, and its column on a board */
+ *  board only as the group, unless that group is the repository), the people assigned (you as Me, nobody as GH_NONE),
+ *  who opened it (you as Me, none when the server does not say), its repository, its kind, and its column on a board */
 export function ghValues(it, dim, me = null) {
   const g = it.gh ?? {}
   const board = g.board !== undefined ? g.board : (it.group && it.group !== g.repo ? it.group : null)
@@ -398,11 +399,15 @@ export function ghValues(it, dim, me = null) {
   if (dim === 'repo') return g.repo ? [g.repo] : []
   if (dim === 'type') return [g.type ?? 'issue']
   if (dim === 'status') return board && g.status ? [ghStatusKey(g.status)] : []
-  const people = g.people ?? []
   const flags = it.flags ?? []
-  const mine = flags.includes('mine') || flags.includes('my_pr') || g.by_me === true || (!!me && (people.includes(me) || g.author === me))
-  const others = [...new Set([...people, ...(g.author ? [g.author] : [])])].filter(p => p !== me)
-  return [...(mine ? [GH_ME] : []), ...others, ...(people.length ? [] : [GH_NONE])]
+  if (dim === 'author') {
+    const mine = flags.includes('my_pr') || g.by_me === true || (!!me && g.author === me)
+    return mine ? [GH_ME] : g.author ? [g.author] : []
+  }
+  const people = g.people ?? []
+  const mine = flags.includes('mine') || (!!me && people.includes(me))
+  const others = [...new Set(people)].filter(p => p !== me)
+  return [...(mine ? [GH_ME] : []), ...others, ...(people.length || mine ? [] : [GH_NONE])]
 }
 
 /** A row passes the filter: it carries the figure picked (open is every row) and, in each dimension chosen, the
@@ -437,11 +442,13 @@ export function ghFacets(items, f, me = null, order = {}) {
 }
 
 /** The filters kept in this browser, read back clean: per section ("page/section") the dimensions and the figure
- *  that hold a text; anything else, and a section with nothing chosen, is dropped */
+ *  that hold a text; anything else, and a section with nothing chosen, is dropped. A Person kept before round 6d
+ *  becomes Assigned to (Me, a login and nobody pick the same rows assigned there), unless that is chosen already */
 export function ghFilterKept(raw) {
   const out = {}
-  for (const [key, f] of Object.entries(raw && typeof raw === 'object' ? raw : {})) {
-    if (!/^[^/]+\/[^/]+$/.test(key) || !f || typeof f !== 'object') continue
+  for (const [key, kept0] of Object.entries(raw && typeof raw === 'object' ? raw : {})) {
+    if (!/^[^/]+\/[^/]+$/.test(key) || !kept0 || typeof kept0 !== 'object') continue
+    const f = typeof kept0.person === 'string' && kept0.assignee == null ? { ...kept0, assignee: kept0.person } : kept0
     const kept = Object.fromEntries([...GH_DIMS, 'flag'].filter(d => typeof f[d] === 'string' && f[d]).map(d => [d, f[d].slice(0, 120)]))
     if (Object.keys(kept).length) out[key] = kept
   }
@@ -607,13 +614,18 @@ const SIDEBAR_STATE = { waiting: 'waiting', 'needs input': 'needs-you', running:
  *  another Bridge's clone, and the quick chats in the control workspace; then the other Bridges on this
  *  machine that have no workspace, and the A2A agents. A workspace the list does not name (or no list
  *  at all) still shows from its tabs, marked known: false */
+/** When a chat last moved, as the server keeps it (quick.py _since): its last answer or question, its handoff, or
+ *  what came back from it */
+export const chatSince = x => Math.max(x.last_ms ?? x.started_ms ?? 0, x.handed?.at_ms ?? 0, x.handed?.outcome?.at_ms ?? 0)
+
 /** The chats a list shows, quick chats and A2A conversations alike: none with a place of its own (the start page's
- *  core and a file's suggested next step: their panels show them, a new one replaces the last) and none untouched past keep_hours (the server archives it with its
- *  next look); one still answering, or an A2A task its owner still holds, always */
+ *  core and a file's suggested next step: their panels show them, a new one replaces the last) and none untouched past keep_hours
+ *  (chatSince, so a handed question whose result came back stays; the server archives it with its next look); one still
+ *  answering, or an A2A task its owner still holds, always */
 export function listedChats(convs, keepHours, nowMs) {
   const cutoff = keepHours > 0 && Number.isFinite(nowMs) ? nowMs - keepHours * 3600000 : null
   return (convs ?? []).filter(x => !x.place && (x.running || x.turns?.at(-1)?.waiting || cutoff == null
-    || (x.last_ms ?? x.started_ms) >= cutoff))
+    || chatSince(x) >= cutoff))
 }
 
 export function roomsOf(s) {
@@ -1281,13 +1293,16 @@ const WORKER_TONE = { in_sync: 'ok', observed: 'ok', intentionally_absent: 'dim'
 
 /** A run's state as a tone: ok, warn, bad, dim; anything unknown is warn, never silently ok */
 export function workerTone(run) {
-  if (run?.retired) return 'dim'
+  // a finding marked seen (`acked`, server.py workers_with_acks) is grey until it changes
+  if (run?.retired || run?.acked) return 'dim'
   return WORKER_TONE[run?.state] ?? (run?.state ? 'warn' : 'ok')
 }
 
 /** The severity of a run's worst finding as the engine files it (high, medium, info), or null: the run's own
  *  `severity` where the view names one, else read off its findings */
 export function jobSeverity(run) {
+  // seen as it stands: no outage and no upkeep, so no red tile, no badge and no alarm count it
+  if (run?.acked) return 'info'
   if (typeof run?.severity === 'string' && run.severity && run.severity !== 'none') return run.severity
   const sev = (run?.findings ?? []).map(f => f?.severity)
   return ['high', 'medium', 'info'].find(x => sev.includes(x)) ?? null
@@ -1324,6 +1339,14 @@ export function runTimes(run, now) {
   const starts = [...when.matchAll(/\bat (\d\d):(\d\d)\b/g)]
     .map(m => new Date(day.getFullYear(), day.getMonth(), day.getDate(), Number(m[1]), Number(m[2])).getTime())
   return { last, next: starts.filter(x => x > now).sort((a, b) => a - b)[0] ?? null }
+}
+
+/** The newest quick chat a row was asked in: the conversation whose `about.key` (quick.py) is the row's key, a job's
+ *  worker:<host>:<id> or a page row's item:<page>/<section>/<id>; null when the row was never asked */
+export function rowConv(convs, key) {
+  if (!key) return null
+  return (convs ?? []).filter(c => c?.about?.key === key)
+    .sort((a, b) => (b.last_ms ?? b.started_ms ?? 0) - (a.last_ms ?? a.started_ms ?? 0))[0] ?? null
 }
 
 /** The background jobs by machine: the always-on machines first (`hosts`, the ones the view was drawn for), then
@@ -1438,7 +1461,7 @@ export function filterWorkers(runs, { q = '', kind = null, sphere = null, state 
   const needle = q.trim().toLowerCase()
   return (runs ?? []).filter(r => (!kind || r.kind === kind) && (!sphere || r.sphere === sphere)
     && (!state || r.state === state) && (!host || r.host === host)
-    && (!attention || (r.findings ?? []).some(serious))
+    && (!attention || (!r.acked && (r.findings ?? []).some(serious)))
     // an outage as jobCounts counts it (the engine's high), what the red tile of Background jobs opens on
     && (!outage || jobSeverity(r) === 'high')
     && (!needle || `${r.id} ${r.title ?? ''} ${r.purpose ?? ''} ${r.system ?? ''} ${jobWords(r)}`.toLowerCase().includes(needle)))
@@ -1717,17 +1740,55 @@ export function railOn(s, hidden = s?.ui?.railHidden) {
   return railShown(s?.ui?.page, s?.rooms?.layout, hidden) && !(s?.ui?.page === 'briefing' && workViewIn(s) === 'flow')
 }
 
+/** Whether a tab may close (round 6d): it neither works nor asks (waiting at its prompt with no question, options
+ *  or draft read off its screen, asksSomething, or back at its shell; a settled one asks nothing any more, as the server's quiet rule has
+ *  it), it is no control tab, and the driver closes tabs; `can(right)` as canTab. The server holds the same rule
+ *  (actions_tabs.py closable) */
+export function tabCloses(tab, can, settled = false) {
+  return !!tab && !tab.is_control && (tab.state === 'waiting' || tab.state === 'shell') && !(asksSomething(tab.ask) && !settled && !tab.settled)
+    && can('close')
+}
+
+/** Where a waiting tab stands, in one line for its entry under Waiting for you (round 6d C2): its workspace, then the
+ *  first line of what it asks, else its last words; two tabs of one name (two "Claude Code") tell apart by it */
+export function waitLage(tab) {
+  const line = previewText(String(tab?.ask?.text ?? '').split('\n').find(x => x.trim()) ?? '') || previewText(tab?.last)
+  return [tab?.workspace, line].filter(Boolean).join(' · ')
+}
+
+/** Whether the words read off a waiting tab's screen ask anything (model.py asks_something): a question (yes or no,
+ *  a question mark at the end), options, or a draft in its prompt. Every waiting tab has its last words read, so
+ *  words alone ask nothing; a tab that said it is done closes */
+export function asksSomething(ask) {
+  return !!ask && !!(ask.yes_no || ask.options?.length || ask.draft || /\?\s*$/.test(ask.text ?? ''))
+}
+
+/** The close of a tab wherever a point or a card has one (views/detail.js TabClose), null where it may not close
+ *  (tabCloses). `done`: an open task or inbox item stands behind it (the server's `behind`), so Done and close the
+ *  tab leads and Close tab only stands beside it; `unseen`: something came back from it (it filed a row, or a start
+ *  of it holds a result) and nothing behind it is settled yet (its item closed, its task done, here or by its start),
+ *  so a close asks first; `keys` the row keys of what stands behind it */
+export function tabCloseOffer(tab, s) {
+  const settled = !!tab?.settled || (!!tab && settledRefs(s?.model?.returns, s?.tabs?.tabs, s?.now || Date.now()).has(tab.ref))
+  if (!tabCloses(tab, v => canTab(s, v), settled)) return null
+  const keys = [tab.behind?.task ? `task:${tab.behind.task}` : null, tab.behind?.item ? `inbox:${tab.behind.item}` : null].filter(Boolean)
+  const back = !!tab.filed_by || (s?.model?.returns ?? []).some(r => r.tab?.ref === tab.ref && r.result?.text)
+  return { done: keys.length > 0, unseen: back && !settled, keys }
+}
+
 /** The one next step a slim tab card offers, as action keys: answer a question, go on, close a tab
  *  that filed its result or whose start is settled, else go to the tab; `can(right)` says what this cockpit
- *  may do with a tab (canTab) */
+ *  may do with a tab (canTab). Round 6d: a tab that may close (tabCloses) offers the close beside going on or
+ *  going to it, so `close` stands for the one close of every place (views/detail.js TabClose) */
 export function tabNextStep(tab, can, settled = false) {
   const own = !tab.is_control
   const finished = !!tab.filed_by || settled
+  const closes = tabCloses(tab, can, settled)
   if (tab.state === 'needs-you' && can('key')) return ['yes', 'no']
-  if (tab.state === 'waiting' && own && finished && can('close')) return ['close']
-  if (tab.state === 'waiting' && own && !tab.filed_by) return ['go_on']
-  if (can('focus')) return ['jump']
-  return can('screen') ? ['view'] : []
+  if (tab.state === 'waiting' && own && finished && closes) return ['close']
+  if (tab.state === 'waiting' && own && !tab.filed_by) return closes ? ['go_on', 'close'] : ['go_on']
+  const way = can('focus') ? ['jump'] : can('screen') ? ['view'] : []
+  return closes ? [...way, 'close'] : way
 }
 
 /** The time a page section names beside its title: only when its source measured at another time than
@@ -2827,6 +2888,8 @@ export const RETURN_STAGES = ['started', 'working', 'asks', 'result', 'done']
 export function liveStage(r, tabs, nowMs) {
   if (r.stage === 'result' || r.stage === 'done') return r.stage
   const mine = (tabs ?? []).filter(t => !t.is_control && (t.ref === r.tab?.ref || t.slug === r.item || t.item === r.item))
+  // a question it left on its item (returns.py `asks`) stands without a tab too, until its tab works again
+  if (r.result?.asks && !mine.some(t => t.state === 'working')) return 'asks'
   if (mine.some(t => t.state !== 'working')) return r.stage === 'idle' && !mine.some(t => t.state === 'needs-you') ? 'idle' : 'asks'
   if (mine.length) return 'working'
   return nowMs - r.at_ms < 180000 ? 'started' : 'lost'
@@ -3111,35 +3174,31 @@ export function askContext(s, lang = 'de') {
   return out.length <= CONTEXT_MAX ? out : ''
 }
 
-// ---------------------------------------------------------------- the chat's one input: where Enter goes
-
-/** Where a text typed into the chat goes: `quick` (a read-only answer here) or `tab` (an agent tab that may
- *  act), and why: a leading ? or ! (`prefix`, stripped), the first words (`words`: a trailing ? or a
- *  question word asks, an order word starts a tab, in English and German), or `default` (unclear asks).
- *  The word lists are language data in text.js (route) */
-export function routeOf(raw) {
-  const text = String(raw ?? '').trim()
-  if (text.startsWith('?')) return { to: 'quick', by: 'prefix', text: text.slice(1).trim() }
-  if (text.startsWith('!')) return { to: 'tab', by: 'prefix', text: text.slice(1).trim() }
-  const lists = key => Object.values(TABLES).flatMap(t => t.route?.[key] ?? []).map(w => w.toLowerCase())
-  const filler = new Set(lists('fillerWords'))
-  let words = text.toLowerCase().replace(/[.,:;!?]+/g, ' ').split(/\s+/).filter(Boolean)
-  while (words.length > 1 && filler.has(words[0])) words = words.slice(1)
-  // a list entry of two words matches the first two, or its first word alone (German puts the particle last:
-  // "leg eine Aufgabe an")
-  const hit = list => list.some(w => w === words[0] || w === words.slice(0, 2).join(' ') || (w.includes(' ') && w.split(' ')[0] === words[0]))
-  if (text.endsWith('?') || hit(lists('questionWords'))) return { to: 'quick', by: 'words', text }
-  if (hit(lists('orderWords'))) return { to: 'tab', by: 'words', text }
-  return { to: 'quick', by: 'default', text }
-}
+// ---------------------------------------------------------------- the status line of a chat handed on
 
 const HANDOFF_FAILED = new Set(['failed', 'partly', 'aborted', 'error', 'rejected'])
+// the launch outcomes after which a tab works on what it was handed
+const TAB_LIVE = new Set(['started', 'running', 'busy'])
+// the head of a note on an item, which the status line names in its own words
+const NOTE_HEAD_RE = /^\s*(?:Result|Ergebnis|Question|Frage)\s*:\s*/i
+// how long a start without a tab counts as starting (returns.py GRACE_MS, liveStage): later, its tab is gone
+const START_GRACE_MS = 180000
+// how many days of archived questions the Chat's "all of the last days" reads (GET /api/chats/archive)
+export const ASK_ARCHIVE_DAYS = 7
+
+/** A tab start handed on whose tab is gone: no tab carries its item, and its grace is over. A record without
+ *  its time cannot tell, so it is not gone */
+const tabGone = (handed, tab, nowMs) => !tab && TAB_LIVE.has(handed.status) && typeof handed.at_ms === 'number'
+  && nowMs - handed.at_ms >= START_GRACE_MS
 
 /** The status line of a chat that was handed on (quick.py `handed`, or the page's own record of a chat_tab
  *  reply): `word` is a key of text.js handoff, `tone` a state token, `action` what a button beside it does
  *  (retry, jump to the tab, ask_via_tab). The control route reads its relay record; the tab route finds the
- *  tab that carries the inbox item. null without a record */
-export function handoffStatus(handed, relayRecords, tabs) {
+ *  tab that carries the inbox item, and once something came back from that item (askOutcome of
+ *  `handed.outcome`, quick.py handoff_outcome) says it: its question, its result, or a close without a word.
+ *  A tab that waits on you before anything came back says that; a start whose tab is gone with nothing back says
+ *  that too (`gone`, as Work's "Tab gone"), with a new start and its item (`item`). null without a record */
+export function handoffStatus(handed, relayRecords, tabs, nowMs = Date.now()) {
   if (!handed?.status) return null
   const out = (word, tone, action = null, extra = {}) => ({ word, tone, action, ...extra })
   if (handed.status === 'starting') return out('starting', 'info')
@@ -3159,13 +3218,206 @@ export function handoffStatus(handed, relayRecords, tabs) {
     return out('failed', 'danger', 'retry')
   }
   const tab = handed.inbox_id ? (tabs ?? []).find(t => t?.item === handed.inbox_id) : null
-  if (tab && ['started', 'running', 'busy'].includes(handed.status)) return out('inTab', 'success', 'jump', { ref: tab.ref, tab: tab.name })
+  const jump = tab ? ['jump', { ref: tab.ref, tab: tab.name }] : [null, {}]
+  const back = askOutcome({ handed })
+  if (back) {
+    const said = { text: back.text ?? '', at_ms: back.at_ms }
+    if (back.asks) return out('asks', 'warning', jump[0], { ...jump[1], ...said })
+    if (said.text) return out('result', back.closed ? 'success' : 'info', jump[0], { ...jump[1], ...said })
+    if (back.closed) return out('closed', 'success', jump[0], { ...jump[1], ...said })
+  }
+  if (tab?.state === 'needs-you' && TAB_LIVE.has(handed.status)) return out('asksYou', 'warning', ...jump)
+  if (tab && TAB_LIVE.has(handed.status)) return out('inTab', 'success', ...jump)
+  if (tabGone(handed, tab, nowMs)) return out('gone', 'warning', 'retry', { item: handed.inbox_id ?? null })
   if (handed.status === 'started') return out('started', 'info')
   if (handed.status === 'running' || handed.status === 'busy') return out('running', 'info')
   if (handed.status === 'manual') return out('manual', 'warning')
   if (handed.status === 'nothing') return out('nothing', 'warning', 'retry')
   if (HANDOFF_FAILED.has(handed.status)) return out('failed', 'danger', 'retry')
   return out('failed', 'danger', 'retry')
+}
+
+// ---------------------------------------------------------------- questions found again (round 6d)
+
+/** What came back from the item a question was handed on as: quick.py handoff_outcome writes it onto the
+ *  conversation's `handed` record as { text, closed, at_ms, asks }. `text` without its head ("Result:",
+ *  "Question:"), null when the item closed without a word. null while nothing came back */
+export function askOutcome(conv) {
+  const raw = conv?.handed?.outcome
+  if (!raw || typeof raw !== 'object') return null
+  const text = String(raw.text ?? '').replace(NOTE_HEAD_RE, '').trim() || null
+  if (!text && !raw.closed && !raw.asks) return null
+  return { text, asks: raw.asks === true, closed: raw.closed === true, at_ms: raw.at_ms ?? null }
+}
+
+/** The marker of a handed question in every list: `asksYou` (its tab asks you, or came back with a question),
+ *  `done` (its item closed, or it came back while no tab works on it any more; `text` its outcome), `inTab`
+ *  (its tab took it and works), `gone` (its tab ended, or never came, and nothing came back); null for a question
+ *  never handed on, or one whose start failed. `ref` the tab that carries it, while there is one */
+export function askMark(conv, tabs, nowMs = Date.now()) {
+  const handed = conv?.handed
+  if (!handed || handed.to !== 'tab') return null
+  const tab = handed.inbox_id ? (tabs ?? []).find(t => t?.item === handed.inbox_id) ?? null : null
+  const outcome = askOutcome(conv)
+  const ref = tab?.ref ?? null
+  const live = TAB_LIVE.has(handed.status)
+  if (outcome?.asks || (!outcome && tab?.state === 'needs-you' && live)) return { word: 'asksYou', tone: 'warning', text: outcome?.text ?? null, ref }
+  if (outcome && (outcome.closed || !tab)) return { word: 'done', tone: 'success', text: outcome.text, ref }
+  if (!outcome && tabGone(handed, tab, nowMs)) return { word: 'gone', tone: 'warning', text: null, ref }
+  return live || outcome ? { word: 'inTab', tone: 'info', text: outcome?.text ?? null, ref } : null
+}
+
+/** "heute 07:34", "gestern 07:34", "20.10. 07:34": when a question was asked, for titles that read alike */
+export function askStamp(ms, nowMs, lang) {
+  if (typeof ms !== 'number' || !Number.isFinite(ms)) return ''
+  const w = (TABLES[lang] ?? TABLES.en).asks
+  const d = new Date(ms)
+  const hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`
+  if (isoDate(ms) === isoDate(nowMs)) return `${w.today} ${hm}`
+  if (isoDate(ms) === isoDate(nowMs - DAY)) return `${w.yesterday} ${hm}`
+  return chatStamp(ms, nowMs, lang)
+}
+
+const WORKER_KEY = /^worker:([^:]+):(.+)$/
+
+// the words a question about a job opens with (text.py ask_worker, both languages): its id, machine and state
+const WORKER_ASK = /^(?:Background job|Hintergrundjob) (\S+) (?:on|auf) ([^\s:]+): ([^.]{1,60})\./
+
+/** The day of a job's newest failure (its strip), short: 16.10. (de), 10/16 (en); null without one */
+function failedDay(run, lang) {
+  const at = (run?.strip ?? []).filter(e => e?.verdict === 'failed' || e?.verdict === 'expired').map(e => Date.parse(e.at))
+    .filter(Number.isFinite).sort((a, b) => b - a)[0]
+  if (at === undefined) return null
+  const d = new Date(at)
+  return String(lang).startsWith('de') ? `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.` : `${d.getMonth() + 1}/${d.getDate()}`
+}
+
+/** The title of a question: what it is about (a job with its machine, its state and the day of its failure, the
+ *  row or task it was asked on, the inbox item it became; a question about a job from before it carried that, by
+ *  its opening words), else its first sentence, or the title in guillemets a row's prompt carries, cut at a word */
+export function askTitle(conv, s, lang) {
+  const about = conv?.about && typeof conv.about === 'object' ? conv.about : {}
+  const said = WORKER_ASK.exec(String(conv?.turns?.[0]?.q ?? '').trim())
+  const job = WORKER_KEY.exec(about.key ?? '') ?? (said ? [null, said[2], said[1]] : null)
+  if (job) {
+    const [, host, id] = job
+    const run = (s?.workers?.data?.runs ?? []).find(r => r?.host === host && r?.id === id)
+    const state = run?.state ?? about.state
+    const words = (TABLES[lang] ?? TABLES.en).workerState ?? {}
+    const word = state ? words[state] ?? state : said && !about.key ? said[3].trim() : null
+    // the day only where the state is the failure (a job in order since keeps no old date)
+    const day = word && (state === 'last_run_failed' || !state) ? failedDay(run, lang) : null
+    return [run?.title || id, host, word && day ? `${word} ${day}` : word].filter(Boolean).join(' · ')
+  }
+  if (typeof about.title === 'string' && about.title.trim()) return short(about.title, 80)
+  const rows = indexRows(s?.model)
+  for (const key of [about.key, about.task && `task:${about.task}`, about.inbox && `inbox:${about.inbox}`]) {
+    const title = key ? rows.get(key)?.title : null
+    if (title) return short(title, 80)
+  }
+  const text = String(conv?.turns?.[0]?.q ?? '').replace(/\s+/g, ' ').trim()
+  const quoted = /«([^»]{3,})»/.exec(text)
+  return short(quoted ? quoted[1] : text.split(/(?<=[.!?])\s/)[0], 60)
+}
+
+/** The questions a list shows, each with its title, marker and whether it is open (answering, unanswered or
+ *  handed on): the open ones first, then the answered, the newest first in each. Titles that read alike carry
+ *  when they were asked */
+export function askList(convs, s, lang) {
+  const tabs = s?.tabs?.tabs
+  const out = (convs ?? []).map(conv => {
+    const mark = askMark(conv, tabs, s?.now || Date.now())
+    const last = conv.turns?.at(-1)
+    return { conv, title: askTitle(conv, s, lang), mark, open: !!(conv.running || mark || (last && !last.a && !last.error)) }
+  })
+  const seen = new Map()
+  for (const x of out) seen.set(x.title, (seen.get(x.title) ?? 0) + 1)
+  for (const x of out) if (seen.get(x.title) > 1) x.title = `${x.title} · ${askStamp(x.conv.started_ms, s?.now, lang)}`
+  const at = x => x.conv.last_ms ?? x.conv.started_ms ?? 0
+  return out.sort((a, b) => (b.open ? 1 : 0) - (a.open ? 1 : 0) || at(b) - at(a))
+}
+
+/** How many hours a question stays in the list (quick.py state keep_hours, cockpit.chat_keep_hours); 24 when
+ *  the server did not say, its own default (config.py) */
+export const keepHoursOf = quick => (Number.isFinite(quick?.keep_hours) ? quick.keep_hours : 24)
+
+// the rooms of the Chat as cmux a browser keeps (round 6d C3), and how long a question counts as just answered
+const KEPT_ROOMS = new Set(['tab', 'ws', 'bridge', 'chat'])
+const FRESH_ANSWER_MS = 3600000
+
+/** The room this browser kept (localStorage bridge-cockpit.chatRoom), read back only in its known shapes and
+ *  marked `kept`: a kept room that is gone gives way to the chat (roomShown). null for anything else */
+export function roomKept(raw) {
+  let v
+  try { v = JSON.parse(raw) } catch { return null }
+  if (!v || typeof v !== 'object' || Array.isArray(v) || !KEPT_ROOMS.has(v.kind)) return null
+  if (v.kind === 'chat') return { kind: 'chat', kept: true }
+  return typeof v.id === 'string' && v.id && v.id.length <= 200 ? { kind: v.kind, id: v.id, kept: true } : null
+}
+
+/** What this browser keeps of a picked room: the room without its mark, or null */
+export function roomToKeep(room) {
+  if (!room || !KEPT_ROOMS.has(room.kind)) return null
+  return JSON.stringify(room.kind === 'chat' ? { kind: 'chat' } : { kind: room.kind, id: room.id })
+}
+
+/** The room the right side shows: the one picked, else the chat. One kept from before a reload whose tab,
+ *  workspace or Bridge is gone shows the chat; one picked by hand stays and says it is closed */
+export function roomShown(s) {
+  const room = s?.ui?.room ?? null
+  if (!room) return { kind: 'chat' }
+  if (!room.kept) return room
+  const gone = room.kind === 'tab' ? Array.isArray(s.tabs?.tabs) && !s.tabs.tabs.some(x => x.ref === room.id)
+    : room.kind === 'ws' ? Array.isArray(s.tabs?.workspaces) && !roomsOf(s).workspaces.some(w => w.key === room.id)
+    : room.kind === 'bridge' ? Array.isArray(s.rooms?.bridges) && !s.rooms.bridges.some(b => b.id === room.id)
+    : false
+  return gone ? { kind: 'chat' } : room
+}
+
+/** Where the Chat opens once when nothing is kept or picked (round 6d C3): a question that is open or was
+ *  answered within the hour, else the first tab that wants you; null for nothing, or when a room or a question
+ *  is picked already. { room, conv } */
+export function chatLanding(s, lang) {
+  if (s?.ui?.room || s?.ui?.quickConv) return null
+  const now = s?.now || Date.now()
+  const asks = askList(listedChats(s?.quick?.convs, s?.quick?.keep_hours, now), s, lang)
+  const fresh = asks.find(x => x.open || now - (x.conv.last_ms ?? x.conv.started_ms ?? 0) < FRESH_ANSWER_MS)
+  if (fresh) return { room: { kind: 'chat' }, conv: fresh.conv.id }
+  const ref = walkRefs(s?.tabs?.tabs)[0]
+  return ref ? { room: { kind: 'tab', id: ref }, conv: null } : null
+}
+
+// an inbox item's id (inbox.py: date, time, slug, hash); a start on anything else is a task's
+const INBOX_ITEM_RE = /^\d{8}-\d{4}-/
+
+/** Where a tab came from (round 6d C5): the start that opened it (model.returns, by its tab, else by its item
+ *  or task), the question it was handed on from (the start's conv, or the question handed on as its item), the
+ *  job, inbox item or task behind it. { kind: ask | job | item | task, key, title, conv? }, null for the control
+ *  session and a tab of nothing known */
+export function tabOrigin(s, tab, lang) {
+  if (!tab || tab.is_control) return null
+  const returns = s?.model?.returns ?? []
+  const own = tab.item ?? tab.slug ?? null
+  const start = returns.find(r => r.tab?.ref === tab.ref) ?? (own ? returns.find(r => r.item === own) : null) ?? null
+  const item = tab.item ?? (start && INBOX_ITEM_RE.test(start.item ?? '') ? start.item : null)
+  const convs = [...(s?.quick?.convs ?? []), ...(s?.chatArchive?.convs ?? [])]
+  const conv = (start?.conv ? convs.find(x => x.id === start.conv) : null)
+    ?? (item ? convs.find(x => x.handed?.inbox_id === item || (x.about?.kind === 'handoff' && x.about?.inbox === item)) : null)
+  if (conv) return { kind: 'ask', key: `ask:${conv.id}`, conv: conv.id, title: askTitle(conv, s, lang) }
+  const rows = indexRows(s?.model)
+  if (item) {
+    const row = rows.get(`inbox:${item}`)
+    const job = WORKER_KEY.exec(row?.inbox_key ?? '')
+    if (job) {
+      const [key, host, id] = job
+      const run = (s?.workers?.data?.runs ?? []).find(r => r?.host === host && r?.id === id)
+      return { kind: 'job', key, title: `${run?.title || id} · ${host}` }
+    }
+    return { kind: 'item', key: `inbox:${item}`, title: short(row?.title ?? start?.title ?? item, 80) }
+  }
+  const slug = tab.slug ?? (start && !INBOX_ITEM_RE.test(start.item ?? '') ? start.item : null)
+  if (!slug) return null
+  return { kind: 'task', key: `task:${slug}`, title: short(rows.get(`task:${slug}`)?.title ?? slug, 80) }
 }
 
 const VERDICT_KEYS = { first: ['zuerst', 'first'], then: ['dann', 'then'], later: ['kann warten', 'can wait'] }
@@ -3446,7 +3698,7 @@ export function tickerStatus(s, now, kinds = TICKER_KINDS) {
   }
   // 21 the background jobs
   for (const run of s?.workers?.data?.runs ?? []) {
-    if (run.retired) continue
+    if (run.retired || run.acked) continue
     const lastRun = (run.strip ?? []).at(-1)
     // an outage is news in red; upkeep the engine files medium is no news at all, only a run without a severity
     // keeps the orange of its state
@@ -3861,6 +4113,91 @@ export function hintsFor(s) {
  *  filled in, any other as it stands */
 export function hintText(words, vars = []) {
   return typeof words?.body === 'function' ? { ...words, body: words.body(...vars) } : words
+}
+
+// ---------------------------------------------------------------- the click origin log (round 6d, item 10)
+
+// which control was used from which place, never what about: the page, its view, the area of the explain overlay the
+// click stood in and the control's name from the code, counted and sent in small batches (POST /api/clicks, usage.jsonl
+// on the server, counted by scripts/cockpit-usage.py); only while the server's bootstrap says clicks: true
+export const USAGE_FLUSH_MS = 30000
+export const USAGE_VERB_MS = 2000      // a verb this soon after a click was sent by it
+const USAGE_MAX = 40
+const USAGE_CONTROL = new Set(['button', 'a', 'input', 'select', 'summary', 'label', 'textarea'])
+const USAGE_ROLES = new Set(['button', 'tab', 'menuitem', 'option', 'switch', 'checkbox', 'radio', 'link'])
+// classes that say how a control looks or stands, not which it is
+const USAGE_PLAIN = /^(btn|is-|has-|on$|off$|active$|small$|muted$|mono$|tone-|st-|sr-only$)/
+const USAGE_NAME = /^@?[A-Za-z][A-Za-z0-9_-]{0,47}$/
+
+/** The page and view a click is counted on: the work tab's view, the start page's view, else none (as /api/seen) */
+export function usagePlace(s) {
+  const page = s?.ui?.page ?? '-'
+  const view = page === 'briefing' ? workViewIn(s) : page === '@start' ? homeView(homeChosen(s?.model, s?.home)) : null
+  return { page, view: typeof view === 'string' && USAGE_NAME.test(view) ? view : '-' }
+}
+
+/** The name of the control a click stands in: its data-u, else up to two of its own classes (none that says how it
+ *  looks, none with a digit), else its role or tag. Never its words. null where the click hit no control */
+export function usageControl(target) {
+  for (let n = target; n && n.nodeType === 1; n = n.parentNode) {
+    const tag = String(n.tagName ?? '').toLowerCase()
+    const role = n.getAttribute?.('role') ?? null
+    const u = n.getAttribute?.('data-u') ?? null
+    if (!USAGE_CONTROL.has(tag) && !USAGE_ROLES.has(role) && !u) continue
+    if (u && USAGE_NAME.test(u)) return u
+    const own = String(n.getAttribute?.('class') ?? n.className ?? '').split(/\s+/)
+      .filter(c => c && USAGE_NAME.test(c) && !/\d/.test(c) && !USAGE_PLAIN.test(c) && c === c.toLowerCase())
+    if (own.length) return own.slice(0, 2).join('.')
+    return role && USAGE_NAME.test(role) ? role : tag || null
+  }
+  return null
+}
+
+/** The innermost area of the explain overlay (hintsFor: the page's, then the header's) the click stands in; a dialog
+ *  without one says dialog; else '-' */
+export function usageArea(s, target) {
+  const hints = hintsFor(s)
+  for (let n = target; n && n.nodeType === 1; n = n.parentNode) {
+    for (const h of hints) {
+      try { if (n.matches?.(h.target)) return h.id } catch { /* a selector this browser does not know */ }
+    }
+    if (n.getAttribute?.('role') === 'dialog') return 'dialog'
+  }
+  return '-'
+}
+
+/** The page's click log: click({page, view, area, control}) and verb(name) count, flush() sends what was counted as
+ *  one batch, and a batch of `max` different events goes by itself. Only the named fields are kept, so a title
+ *  handed in by mistake never leaves the page. A verb without a click just before it is no use of a control */
+export function createUsageLog({ send, now = Date.now, max = USAGE_MAX }) {
+  let counts = new Map()
+  let last = null
+  const name = v => (typeof v === 'string' && v ? v : '-')
+  function flush() {
+    if (!counts.size) return
+    const events = [...counts.values()]
+    counts = new Map()
+    send(events)
+  }
+  const add = ev => {
+    const key = [ev.kind, ev.page, ev.view, ev.area, ev.control, ev.verb].join('|')
+    const had = counts.get(key)
+    counts.set(key, had ? { ...had, n: had.n + 1 } : { ...ev, n: 1 })
+    if (counts.size >= max) flush()
+  }
+  return {
+    click(at) {
+      if (!at || name(at.control) === '-') return
+      const ev = { kind: 'click', page: name(at.page), view: name(at.view), area: name(at.area), control: name(at.control), verb: '-' }
+      last = { ev, at: now() }
+      add(ev)
+    },
+    verb(verb) {
+      if (!last || now() - last.at > USAGE_VERB_MS || typeof verb !== 'string') return
+      add({ ...last.ev, kind: 'verb', verb })
+    },
+    flush,
+  }
 }
 
 const HINT_MARGIN = 12    // the notes keep this far off the screen's edges

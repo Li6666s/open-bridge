@@ -21,6 +21,28 @@ EN: dict = {
     # prompt templates
     "ask_about": "Briefing item: {title}{where}. Take a look and suggest the next step. Nothing goes out without my yes.",
     "ask_info": "{section}: {title}{extra}. Take a look and suggest the next step. Nothing goes out without my yes.",
+    # a background job of the workers view (actions_pages.py worker_brief): the question on its row, the item and
+    # the brief Analyse in a tab files, the job's state in words (as text.js workerState)
+    "ask_worker": "Background job {id} on {host}: {state}. What should be done, and why?",
+    "ask_worker_detail": " The finding as the job reports it: «{detail}»",
+    "worker_summary": "Background job {id} on {host}: {state}",
+    "worker_brief": ("Analyse the background job {id} on {host} and advise: read and propose, change nothing.\n\n"
+                     "Job: {title} ({id}), kind {kind}, schedule {when}\nMachine: {host}\nUnit: {unit} ({runtime})\n"
+                     "Program: {program}\nLog: {log}\nLast run: {last}\nNext run: {next}\nFindings:\n{findings}\n\n"
+                     "Read workflow/workloads/{id}.yaml. Use the workload and remote skills (infra/remotes/{host}.yaml) to "
+                     "check the unit and its log live on {host}. Name the cause, propose a fix, and change nothing: no "
+                     "restart, no provisioning, no edit, until I say yes."),
+    "worker_finding": "{state}: {detail}{hint}",
+    "worker_hint": " (advised: {hint})",
+    "worker_unknown": "not known",
+    "worker_state": {"last_run_failed": "last run failed", "in_sync": "in order", "observed": "observed",
+                     "intentionally_absent": "parked", "absent": "missing", "disabled": "switched off",
+                     "drifted": "differs", "inventory_missing": "no inventory entry", "source_drift": "source changed",
+                     "inventory_stale": "inventory stale", "not_provisioned": "never installed", "unknown": "unknown",
+                     "not reported": "not reported"},
+    "btn_worker_advise": "Analyse in a tab",
+    # the start note of Analyse in a tab: the click is an order, so the tab never closes the item on its own
+    "worker_order": "Analyse and propose, change nothing. Do not close this item on your own; ask before you close it.",
     "follow_up": "Draft a short follow-up message for: {title}{why}. Draft only, do not send anything.",
     "overview_head": "My briefing state from the dashboard ({at}): {headline}",
     "overview_tail": "Sort it briefly: what comes first, what can go, what do I hand to a tab. No action without my yes.",
@@ -145,7 +167,7 @@ EN: dict = {
     "nothing_to_start": "nothing to start",
     "nothing_to_do": "nothing to do",
     "starting_already": "{title} is already starting",
-    "handoff_order_late": "The tab for this chat is already starting: your addition is now a note on its inbox item; type it into the tab too",
+    "handoff_order_late": "The tab for this chat is already on its way: your addition is now a note on its inbox item; type it into the tab too",
     "waits_for_role": "waiting for {name}",
     "prev_role": "the previous role",
     "all_roles_started": "all roles started",
@@ -160,6 +182,8 @@ EN: dict = {
     "merge_heading": "Merged from {slug}", "merged": "{names} merged into {title}",
     "merge_failed": "Could not merge {title}: {err}", "merge_undone": "Merge of {title} taken back",
     "run_seen": "Checked: the result of {name} ({slug})",
+    # a finding marked seen ("Seen"): grey until it changes, and its undo
+    "finding_seen": "Seen: {title}, grey until the finding changes", "finding_shown": "Shown again: {title}",
     "btn_resume": "Go on in the session",
     "runs_on_note": "Runs on, look again {until}",
     "running_again": "{slug} is worked on again",
@@ -176,6 +200,8 @@ EN: dict = {
     "key_sent": "{name}: {said}",
     "tab_closed": "Tab \"{name}\" closed",
     "close_failed": "Closing failed: {err}",
+    "tab_done_closed": "Tab \"{name}\" done and closed",
+    "tab_done_partial": "Tab \"{name}\" stays open: not done yet: {missed}",
     "sent_to": "to {name}: {text}",
     "send_failed": "Sending failed: {err}",
     "organize_system": ("You tidy up the workspaces and tabs of a terminal for one person. The data below lists them: "
@@ -311,6 +337,34 @@ EN: dict = {
                   "running": "A question is being answered already. Try again in a moment.",
                   "too_big": "The records do not fit into one question. Search more narrowly.",
                   "failed": "The AI gave no usable answer: {why}"},
+    # scripts/cockpit-usage.py: the proposals it leaves for /bridge-learn, one per candidate of the click origin log, and
+    # the sentence of "What bothers you here?" in the explain window. Places and controls are the code's own names
+    "usage": {
+        "title": {"unused_page": "Cockpit: {place} was not opened",
+                  "unused_area": "Cockpit: {area} on {place} was not used",
+                  "unused_control": "Cockpit: {control} in {area} on {place} was not used",
+                  "left_at_once": "Cockpit: {place} is left again at once",
+                  "back_and_forth": "Cockpit: back and forth between {place}"},
+        "finding": {"unused_page": "{place} was opened {before} times before {start}, and not once from {start} to {end}.",
+                    "unused_area": "{place} was opened {views} times from {start} to {end}; nobody clicked in {area}.",
+                    "unused_control": "{control} in {area} on {place} was clicked {before} times before {start}, and not "
+                                      "once from {start} to {end}, while {area} had {clicks} clicks.",
+                    "left_at_once": "{place} was opened {views} times from {start} to {end}, and {left} times left "
+                                    "again within {seconds} seconds, before anything was done there.",
+                    "back_and_forth": "From {start} to {end} the page went from one to the other and back {times} "
+                                      "times, each step within {seconds} seconds: {place}."},
+        "next": {"unused_page": "Hide it at your place for two weeks, then delete it or keep it (decision 3).",
+                 "unused_area": "Hide the area at your place for two weeks, then delete it or keep it (decision 3).",
+                 "unused_control": "Hide the control at your place for two weeks, then delete it or keep it (decision 3).",
+                 "left_at_once": "Look at what is expected there and is not found: a wrong way in, or a page that "
+                                 "should show it at first sight.",
+                 "back_and_forth": "Look at what one page needs from the other: perhaps it belongs on one of them."},
+        "finding_head": "Finding", "next_head": "Proposal", "where_head": "Where",
+        "where": "Page {page}, view {view}, area {area}, control {control}.",
+        "recount": "Count again with this command:",
+        "note_title": "Cockpit: what bothers here, on {place}",
+        "note_from": "Written in the explain window on {date}.",
+    },
     "jev": {
         "who": "the user", "who_subject": "the user", "today": "today", "tasks": "tasks",
         "about": "{who_subject}, works with a team and with AI agents",
@@ -334,8 +388,9 @@ EN: dict = {
     "returns": {"head": "With AI", "start": "agent started from the cockpit ({mode})",
            "mode": {"go": "let AI do it", "report": "advise", "context": "collect context"},
            "filed": "answer filed, {text} ({key})", "lost": "the tab ended without a word",
-           # the head of the note an agent leaves on its task when it is through (a task's result line)
-           "result": "Result"},
+           # the head of the note an agent leaves on its task when it is through (a task's result line), and of the
+           # note that asks the person something (workplace.py asks for it, returns.py reads it as a question)
+           "result": "Result", "question": "Question"},
     # the words of a card (card.py): a user story as one sentence, the next step an inbox item or a row asks
     # for, and how an item closes on its own (its closes_when probe, the same words as text.js `probe`)
     "card": {"story": "As {as}, I want {want}, so that {so_that}.",
@@ -363,6 +418,25 @@ DE: dict = {
 
     "ask_about": "Briefing-Punkt: {title}{where}. Schau es dir an und schlag den nächsten Schritt vor. Nichts nach außen ohne mein Ja.",
     "ask_info": "{section}: {title}{extra}. Schau es dir an und schlag den nächsten Schritt vor. Nichts nach außen ohne mein Ja.",
+    "ask_worker": "Hintergrundjob {id} auf {host}: {state}. Was ist zu tun und warum?",
+    "ask_worker_detail": " Der Befund, wie der Job ihn meldet: «{detail}»",
+    "worker_summary": "Hintergrundjob {id} auf {host}: {state}",
+    "worker_brief": ("Analysiere den Hintergrundjob {id} auf {host} und berate: lesen und vorschlagen, nichts ändern.\n\n"
+                     "Job: {title} ({id}), Art {kind}, Zeitplan {when}\nRechner: {host}\nUnit: {unit} ({runtime})\n"
+                     "Programm: {program}\nLog: {log}\nLetzter Lauf: {last}\nNächster Lauf: {next}\nBefunde:\n{findings}\n\n"
+                     "Lies workflow/workloads/{id}.yaml. Prüfe mit den Skills workload und remote (infra/remotes/{host}.yaml) "
+                     "die Unit und ihr Log live auf {host}. Nenne die Ursache, schlag eine Lösung vor und ändere nichts: kein "
+                     "Neustart, keine Einrichtung, keine Änderung, bis ich ja sage."),
+    "worker_finding": "{state}: {detail}{hint}",
+    "worker_hint": " (empfohlen: {hint})",
+    "worker_unknown": "nicht bekannt",
+    "worker_state": {"last_run_failed": "letzter Lauf fehlgeschlagen", "in_sync": "in Ordnung", "observed": "beobachtet",
+                     "intentionally_absent": "geparkt", "absent": "fehlt", "disabled": "abgeschaltet",
+                     "drifted": "weicht ab", "inventory_missing": "ohne Inventar", "source_drift": "Quelle geändert",
+                     "inventory_stale": "Inventar veraltet", "not_provisioned": "nie installiert", "unknown": "unbekannt",
+                     "not reported": "nicht gemeldet"},
+    "btn_worker_advise": "Im Tab analysieren",
+    "worker_order": "Analysieren und vorschlagen, nichts ändern. Schließe diesen Eintrag nicht selbst; frag, bevor du ihn schließt.",
     "follow_up": "Entwirf eine kurze Nachfass-Nachricht für: {title}{why}. Nur als Entwurf, nichts senden.",
     "overview_head": "Mein Briefing-Stand aus dem Dashboard ({at}): {headline}",
     "overview_tail": "Ordne kurz ein: was zuerst, was kann weg, was gebe ich an einen Tab ab. Keine Aktion ohne mein Ja.",
@@ -483,7 +557,7 @@ DE: dict = {
     "nothing_to_start": "nichts zu starten",
     "nothing_to_do": "nichts zu tun",
     "starting_already": "{title} startet schon",
-    "handoff_order_late": "Der Tab zu diesem Chat startet schon: dein Zusatz steht jetzt als Notiz am Posteingangseintrag; schreib ihn auch in den Tab",
+    "handoff_order_late": "Der Tab zu diesem Chat ist schon unterwegs: dein Zusatz steht jetzt als Notiz am Posteingangseintrag; schreib ihn auch in den Tab",
     "waits_for_role": "wartet auf {name}",
     "prev_role": "die vorige Rolle",
     "all_roles_started": "alle Rollen gestartet",
@@ -498,6 +572,7 @@ DE: dict = {
     "merge_heading": "Zusammengeführt aus {slug}", "merged": "{names} in {title} zusammengeführt",
     "merge_failed": "{title} ließ sich nicht zusammenführen: {err}", "merge_undone": "Zusammenführung von {title} zurückgenommen",
     "run_seen": "Geprüft: das Ergebnis von {name} ({slug})",
+    "finding_seen": "Gesehen: {title}, grau, bis sich der Befund ändert", "finding_shown": "Wieder angezeigt: {title}",
     "btn_resume": "In der Sitzung weitermachen",
     "runs_on_note": "Läuft noch, nachsehen {until}",
     "running_again": "{slug} ist wieder dran",
@@ -514,6 +589,8 @@ DE: dict = {
     "key_sent": "{name}: {said}",
     "tab_closed": "Tab „{name}“ geschlossen",
     "close_failed": "Schließen ging nicht: {err}",
+    "tab_done_closed": "Tab „{name}“ erledigt und geschlossen",
+    "tab_done_partial": "Tab „{name}“ bleibt offen, noch nicht erledigt: {missed}",
     "sent_to": "an {name}: {text}",
     "send_failed": "Senden fehlgeschlagen: {err}",
     "organize_system": ("Du räumst die Workspaces und Tabs eines Terminals für eine Person auf. Die Daten unten nennen sie: "
@@ -652,6 +729,32 @@ DE: dict = {
                   "running": "Es wird schon eine Frage beantwortet. Gleich noch einmal versuchen.",
                   "too_big": "Die Akten passen nicht in eine Frage. Enger suchen.",
                   "failed": "Die AI gab keine brauchbare Antwort: {why}"},
+    "usage": {
+        "title": {"unused_page": "Cockpit: {place} wurde nicht geöffnet",
+                  "unused_area": "Cockpit: {area} auf {place} wurde nicht benutzt",
+                  "unused_control": "Cockpit: {control} in {area} auf {place} wurde nicht benutzt",
+                  "left_at_once": "Cockpit: {place} wird gleich wieder verlassen",
+                  "back_and_forth": "Cockpit: hin und her zwischen {place}"},
+        "finding": {"unused_page": "{place} wurde vor dem {start} {before} Mal geöffnet, vom {start} bis {end} kein Mal.",
+                    "unused_area": "{place} wurde vom {start} bis {end} {views} Mal geöffnet, in {area} hat niemand geklickt.",
+                    "unused_control": "{control} in {area} auf {place} wurde vor dem {start} {before} Mal geklickt, vom "
+                                      "{start} bis {end} kein Mal, während {area} {clicks} Klicks hatte.",
+                    "left_at_once": "{place} wurde vom {start} bis {end} {views} Mal geöffnet und {left} Mal innerhalb "
+                                    "von {seconds} Sekunden wieder verlassen, bevor dort etwas geschah.",
+                    "back_and_forth": "Vom {start} bis {end} ging es {times} Mal von der einen Seite zur anderen und "
+                                      "zurück, jeder Schritt innerhalb von {seconds} Sekunden: {place}."},
+        "next": {"unused_page": "Bei dir zwei Wochen ausblenden, dann löschen oder behalten (Entscheidung 3).",
+                 "unused_area": "Den Bereich bei dir zwei Wochen ausblenden, dann löschen oder behalten (Entscheidung 3).",
+                 "unused_control": "Den Knopf bei dir zwei Wochen ausblenden, dann löschen oder behalten (Entscheidung 3).",
+                 "left_at_once": "Prüfen, was dort erwartet und nicht gefunden wird: ein falscher Weg hinein, oder eine "
+                                 "Seite, die es auf den ersten Blick zeigen sollte.",
+                 "back_and_forth": "Prüfen, was die eine Seite von der anderen braucht: vielleicht gehört es auf eine von beiden."},
+        "finding_head": "Befund", "next_head": "Vorschlag", "where_head": "Wo",
+        "where": "Seite {page}, Ansicht {view}, Fläche {area}, Knopf {control}.",
+        "recount": "Nachzählen mit diesem Befehl:",
+        "note_title": "Cockpit: was hier stört, auf {place}",
+        "note_from": "Geschrieben im Erklären-Fenster am {date}.",
+    },
     "jev": {
         "who": "dem Nutzer", "who_subject": "der Nutzer", "today": "heute", "tasks": "aufgaben",
         "about": "{who_subject}, arbeitet mit einem Team und mit KI-Agenten",
@@ -675,7 +778,7 @@ DE: dict = {
     "returns": {"head": "Bei der AI", "start": "Agent gestartet aus dem Cockpit ({mode})",
            "mode": {"go": "AI machen lassen", "report": "Beraten", "context": "Infos sammeln"},
            "filed": "Antwort abgelegt, {text} ({key})", "lost": "Tab beendet ohne Rückmeldung",
-           "result": "Ergebnis"},
+           "result": "Ergebnis", "question": "Frage"},
     "card": {"story": "Als {as} möchte ich {want}, damit {so_that}.",
              "next": {"decide": "entscheiden", "answer": "beantworten", "yes": "dein Ja geben", "read": "lesen",
                       "check": "Ergebnis prüfen", "closes": "schließt sich selbst, wenn {probe}",

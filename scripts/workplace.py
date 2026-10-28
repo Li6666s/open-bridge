@@ -135,22 +135,36 @@ INBOX_OVERTAKEN = (
     " If the item is already done, overtaken, or answered by facts you can check yourself, note the finding "
     "with its sources and close it without asking: python3 scripts/inbox.py close {id} --note '<what settled "
     "it>'. The person undoes that with python3 scripts/inbox.py reopen {id}.")
-INBOX_REPORT_PROMPT = (
+# Closing the item of a background job (key worker:<host>:<id>, or a question about one) marks the job's
+# finding seen in the cockpit: grey until it changes (bridge_cockpit/server.py ack_closed_findings).
+INBOX_JOB_SEEN = (
+    " If the item is about a background job, closing it marks that job's finding seen in the cockpit: grey "
+    "until the job fails anew. So say in the close note what you found and why the finding needs nothing more.")
+INBOX_REPORT_HEAD = (
     "You are the tab for inbox item {id}. Read it with python3 scripts/inbox.py show {id} and the task it "
     "names, if any. Then print at most eight lines: what it is, what would settle it, and whether you "
     "could do that without asking. Note what you found on the item with python3 scripts/inbox.py note {id} "
-    "'<finding>'." + INBOX_OVERTAKEN + " Otherwise change nothing; wait, and on 'go on' take the next step. "
-    "Never close a tab or a workspace.")
-INBOX_GO_PROMPT = (
+    "'<finding>'.")
+INBOX_REPORT_END = " Otherwise change nothing; wait, and on 'go on' take the next step. Never close a tab or a workspace."
+INBOX_REPORT_PROMPT = INBOX_REPORT_HEAD + INBOX_OVERTAKEN + INBOX_REPORT_END
+INBOX_GO_HEAD = (
     "You are the tab for inbox item {id}. Read it with python3 scripts/inbox.py show {id} and the task it "
     "names, if any. " + GO_TAIL + " Whenever you stop to ask or to show a draft, first put the question or "
     "the draft on the item with python3 scripts/inbox.py note {id} '<text>': the cockpit sees the item, not "
-    "this chat. When it is settled, close the item with python3 scripts/inbox.py close "
-    "{id} --note '<what settled it>'." + INBOX_OVERTAKEN + " Local follow-ups that only write down what is "
-    "already decided (a plan, STATUS.md, the log) make yourself and name them in the close note. Ask only for "
-    "a decision that is still the person's, for anything that leaves this machine, or for what cannot be "
-    "undone. The click that started you releases the close even when the item says gate: only-you or "
+    "this chat; begin a question with 'Question:'.")
+INBOX_ASK_ONLY = (
+    " Ask only for a decision that is still the person's, for anything that leaves this machine, or for what "
+    "cannot be undone.")
+INBOX_GO_PROMPT = (
+    INBOX_GO_HEAD + " When it is settled, close the item with python3 scripts/inbox.py close "
+    "{id} --note '<what settled it>'." + INBOX_OVERTAKEN + INBOX_JOB_SEEN + " Local follow-ups that only write "
+    "down what is already decided (a plan, STATUS.md, the log) make yourself and name them in the close note." +
+    INBOX_ASK_ONLY + " The click that started you releases the close even when the item says gate: only-you or "
     "closer: person, as long as you decide nothing new. Never close a tab or a workspace.")
+# With the person's order (a start note) the base prompt keeps no word about closing: INBOX_ORDER_TAIL says how
+# the tab ends instead, so the two never disagree (28.10.: the overtaken rule closed an item the order asked about)
+INBOX_REPORT_ORDERED = INBOX_REPORT_HEAD + " Change nothing; wait, and on 'go on' take the next step. Never close a tab or a workspace."
+INBOX_GO_ORDERED = INBOX_GO_HEAD + INBOX_ASK_ONLY + " Never close a tab or a workspace."
 CONTEXT_PROMPT = (
     "You are the tab that finds the missing context for {what}. Read it first ({read}). Then search for "
     "what a person picking it up would need and cannot see there: its rows in work/log.md (grep), related "
@@ -417,6 +431,14 @@ def team_tab_names(task_label: str, slug: str, team: dict, role: dict) -> tuple[
     return f"{task_label} · {team['label']} {role['name']}", f"{slug}--{team['id']}-{role['id']}"
 
 
+# With the person's sentence a tab never closes the item on its own (28.10.: a chat handed on with "I want to
+# analyse it more closely" was closed after 31 s as overtaken): the result goes onto the item, a close is asked for.
+# The head of the question is the one returns.py reads as a question (QUESTION_HEADS).
+INBOX_ORDER_TAIL = (
+    " The person gave you an order for this start, so do not close the item on your own, not even when it looks "
+    "done or overtaken: put your result on the item with python3 scripts/inbox.py note {id} 'Result: <what you "
+    "found>', and ask before closing, since a proposal to close is a question: python3 scripts/inbox.py note {id} "
+    "'Question: <what you propose>'. Close it only once the person said so." + INBOX_JOB_SEEN)
 START_NOTE_HEAD = ("The person gave you a sentence for this start: it is the newest note that begins with "
                    "'Start note:' on this item ({where}). Read it before anything else; it comes before everything else "
                    "below when the two disagree. ")
@@ -425,9 +447,13 @@ START_NOTE_HEAD = ("The person gave you a sentence for this start: it is the new
 def launch_prompt(kind: str, mode: str, item: str, status_path: str = "", start_note: bool = False) -> str:
     """ASCII-only prompt for one launched tab (cmux re-encodes non-ASCII; the agent reads details itself).
     start_note: the person wrote a sentence for this start onto the item (task.py / inbox.py note, UTF-8);
-    the prompt only points at it, so the words reach the agent unchanged."""
+    the prompt only points at it, so the words reach the agent unchanged, and an inbox tab then asks before it closes:
+    its prompt drops every rule to close on its own (INBOX_GO_ORDERED, INBOX_REPORT_ORDERED)."""
     if start_note:
         where = status_path if kind == "task" else f"python3 scripts/inbox.py show {item}"
+        if kind == "inbox" and mode != "context":
+            base = (INBOX_GO_ORDERED if mode == "go" else INBOX_REPORT_ORDERED).format(id=item)
+            return START_NOTE_HEAD.format(where=where) + base + INBOX_ORDER_TAIL.format(id=item)
         return START_NOTE_HEAD.format(where=where) + launch_prompt(kind, mode, item, status_path)
     if mode == "context":
         if kind == "task":

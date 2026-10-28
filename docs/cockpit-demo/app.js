@@ -18,7 +18,7 @@ import {
   tabWalkView, walkRefs, inProject, AREA_PAGES, areaScope, scopeKeep, scopeRow, escapeStep, keyScope, fileClick, scopedFileQueue, TOUR_VERSION, tourIndex, tourOffered, tourSteps, queueLiveKeys, queueView, dayQueue, workViewIn, flowPageFor, flowMode,
   focusIndex, liveDescribeAfter, homeChosen, homeListParts, homeQueue, homeView, openStream, mergePages, commandSearch, workViewWrites, focusStep,
   canTab, flowArm, flowSettings, prepRunner, themesAsker, flowEarlyKept, flowWhere, prioOn, workViewGo, workViewsIn, ghFilterKept,
-  FILES_PAGE, filesMoved,
+  FILES_PAGE, filesMoved, ASK_ARCHIVE_DAYS, roomKept, USAGE_FLUSH_MS, createUsageLog, usageArea, usageControl, usagePlace,
 } from './logic.js'
 import { T, language, setControl, setLanguage } from './text.js'
 
@@ -104,6 +104,19 @@ function loadGhFilter() {
   }
 }
 
+/** The room of the Chat this viewer had open last (round 6d C3, views/nav.js keeps it on every pick), marked as
+ *  kept: one that is gone by now shows the chat (logic.js roomShown). A convenience, never state */
+function lastRoom() {
+  return roomKept(load('bridge-cockpit.chatRoom', null))
+}
+
+/** The last question this viewer opened (round 6d), so a reload and the header's Ask find it again; a
+ *  convenience, never state: a question the server no longer has opens a new one */
+function lastAsk() {
+  const v = load('bridge-cockpit.lastAsk', null)
+  return typeof v === 'string' && /^q[0-9a-f]{10}$/.test(v) ? v : null
+}
+
 // ---------------------------------------------------------------- store
 
 function createStore(initial) {
@@ -173,9 +186,6 @@ const store = createStore({
     dossierAt: null, filesWalk: false, filesQ: '', filesState: 'open', filesKind: null,
     // a file opened from the search beside that queue (its slug), and the suggested next step asked in one: { slug, conv }
     dossierOpen: null, suggest: null,
-    // the shelf of every file behind the queue that lists its files (cockpit.files_scope all), null: none picked;
-    // fileShelfReveal: picked from the line of what the queue leaves out, so the shelves come into view once
-    fileShelf: null, fileShelfReveal: false,
     // the Work through page (views/flow.js): where it stands in its queue (held by the card's id), the chip that
     // filters it, the jump to a tab the return card asks about ({key, ref, title, at, armed}, kept in memory only, so
     // a reload brings no old card back), the row Advise answered ({key, conv}) and how many it decided since load
@@ -199,7 +209,7 @@ const store = createStore({
     // under their board, both kept in this browser
     ghFilter: loadGhFilter(), ghGroup: load('bridge-cockpit.ghGroup', 'on') !== 'off',
     settingsSection: load('bridge-cockpit.settingsSection', 'start'),
-    busy: {}, snapshotText: null, openMsg: null, tabView: null, room: null, quickConv: null, agentPeer: null, agentConv: null, agentMode: 'question', agentsListHidden: load('bridge-cockpit.agentsList', 'shown') === 'hidden',
+    busy: {}, snapshotText: null, openMsg: null, tabView: null, room: lastRoom(), quickConv: lastAsk(), asksAll: false, agentPeer: null, agentConv: null, agentMode: 'question', agentsListHidden: load('bridge-cockpit.agentsList', 'shown') === 'hidden',
     // the area the Chat as cmux shows, its work or the A2A agents (views/nav.js chatAreaOf); kept in this browser
     chatArea: load('bridge-cockpit.chatArea', 'work') === 'a2a' ? 'a2a' : 'work',
     railHidden: load('bridge-cockpit.rail', 'shown') === 'hidden',
@@ -227,6 +237,15 @@ const store = createStore({
   records: null,
   // the files tab's question to the AI (verb files_ask): { status: loading|ok|error, data, error }; null: none asked
   filesAsk: null,
+  // the questions archived in the last days (/api/chats/archive), read once "all" is asked for: { status, convs }
+  chatArchive: null,
+})
+
+// a question opened is kept as the last one; a new chat keeps the one before for the next reload
+let keptAsk = store.get().ui.quickConv
+store.subscribe(s => {
+  const id = s.ui.quickConv
+  if (id && id !== keptAsk) { keptAsk = id; save('bridge-cockpit.lastAsk', id) }
 })
 
 const setUi = patch => store.set(s => ({ ...s, ui: { ...s.ui, ...(typeof patch === 'function' ? patch(s.ui) : patch) } }))
@@ -517,6 +536,11 @@ const handlers = {
     if (tr?.done && !s.tour?.done && s.ui.tour) ctl.tourClose()
     store.set(x => ({ ...x, tour: tr ?? x.tour }))
   },
+  // a finding marked seen or shown again, here, in another browser or by an inbox item closed for a job: the
+  // page rows come with the next model, the jobs with the workers view read again
+  acks() {
+    if (store.get().workers.data) ctl.loadWorkers()
+  },
   // the start page's choice of tiles, made in this or another browser
   home(h) {
     store.set(s => ({ ...s, home: h ?? s.home }))
@@ -669,7 +693,9 @@ async function ask(kind, args = {}) {
   const ui = store.get().ui
   return withBusy(`ask:${kind}`, kind, async () => {
     const onChat = ui.page === CHAT_PAGE && !ui.tabView
-    const conv = kind === 'free' && (ui.tabView === '@ask' || onChat) ? ui.quickConv : null
+    // one kept from before a reload that the server has archived since is no conversation to go on in
+    const known = (store.get().quick?.convs ?? []).some(x => x.id === ui.quickConv)
+    const conv = kind === 'free' && (ui.tabView === '@ask' || onChat) && known ? ui.quickConv : null
     // a free question carries what the page shows right now, as data beside it (the core asks without it)
     const context = kind === 'free' ? askContext(store.get(), language()) : ''
     const res = await api.ask(kind, context ? { ...args, context } : args, { via: 'quick', model: ui.quickModel, ...(conv ? { conv } : {}), ...quickKeys(ui) })
@@ -1095,6 +1121,10 @@ const ctl = {
     if (r) setUi(ui => ({ agentConv: ui.agentConv === conv ? null : ui.agentConv }))
     return !!r
   },
+  // "Seen" on a finding (a job, worker:<host>:<id>, or a page row): grey until it changes; and its "show again"
+  async ackFinding(key, on) {
+    if (await act(on ? 'finding_ack' : 'finding_unack', { key }) && key.startsWith('worker:')) await ctl.loadWorkers()
+  },
   loadWorkers: async () => {
     store.set(s => ({ ...s, workers: { ...s.workers, status: s.workers.data ? 'ok' : 'loading' } }))
     const res = await api.get('/api/workers')
@@ -1122,6 +1152,9 @@ const ctl = {
   dossierWalk: (id, i) => setUi({ dossierAt: { id, i }, dossierOpen: null, filesWalk: true }),
   // the files tab back on its search, the walk off and no record open
   filesHome: () => setUi({ filesWalk: false, dossierOpen: null }),
+  // a record of the list on the left opens beside it, the walk off: its Next and Previous walk that list (round 6d);
+  // a closed one by its folder, since a slug can be open and closed at once
+  openRecord: (slug, path) => setUi({ dossierOpen: String(path ?? '').startsWith('work/done/') ? path : slug, filesWalk: false }),
   // the records of its start: read again when a minute old, the last ones shown meanwhile
   async loadRecords() {
     const had = store.get().records
@@ -1319,8 +1352,6 @@ const ctl = {
   },
   // a chip behind the queue lists its files (views/dossier.js Shelves); null folds the list. `reveal`: picked from
   // the line of what the queue leaves out, far above, so the shelves scroll into view and the chip takes the focus
-  setFileShelf: (k, reveal = false) => setUi({ fileShelf: k ?? null, fileShelfReveal: Boolean(reveal && k) }),
-  fileShelfShown: () => setUi({ fileShelfReveal: false }),
   // the search of the files view: an answer for words no longer asked is dropped. `from` 'start': asked by the start
   // of the files tab, which shows the hits in its own list (the results above a file leave them out)
   async findFiles(q, from = null) {
@@ -1472,9 +1503,25 @@ const ctl = {
     if (await act('inbox_unmute', { id })) ctl.loadNoise()
   },
   openAsk: conv => setUi(ui => ({ tabView: '@ask', openMsg: null, quickConv: conv === undefined ? ui.quickConv : conv })),
+  // the header's Ask on the Chat (round 6d C4): no window over the chat already open, the cursor goes into its field;
+  // as cmux the chat comes to the right side first
+  askHere: () => {
+    if (chatAsWorkspaces(store.get()) && store.get().ui.room?.kind !== 'chat') ctl.pickRoom({ kind: 'chat' })
+    setTimeout(() => document.getElementById('quick-input')?.focus(), 0)
+  },
   // the chat as a tab of its own: the open conversation goes along, the window closes
   chatAsTab: () => { save('bridge-cockpit.page', CHAT_PAGE); setUi({ page: CHAT_PAGE, tabView: null, pageDetail: false }) },
   pickQuick: conv => setUi({ quickConv: conv }),
+  // "all" under the questions: every one of the last days, the archived ones read once from the server
+  showAllAsks: on => {
+    setUi({ asksAll: !!on })
+    if (on && store.get().chatArchive?.status !== 'ok') ctl.loadChatArchive()
+  },
+  loadChatArchive: async () => {
+    store.set(s => ({ ...s, chatArchive: { status: 'loading', convs: s.chatArchive?.convs ?? [] } }))
+    const res = await api.get(`/api/chats/archive?days=${ASK_ARCHIVE_DAYS}`)
+    store.set(s => ({ ...s, chatArchive: res.ok ? { status: 'ok', convs: res.data.convs ?? [] } : { status: 'error', convs: s.chatArchive?.convs ?? [] } }))
+  },
   newQuick: () => setUi({ quickConv: null }),
   // what a chat_tab start from the chat answered (inbox item and launch outcome), for its status line; the last few
   noteSent: rec => setUi(ui => ({ sent: [...(ui.sent ?? []).slice(-4), rec] })),
@@ -1533,6 +1580,9 @@ const ctl = {
   tourStart: () => setUi(ui => ({ tour: { id: 'welcome', from: ui.page }, hints: false, drawer: null, item: null, tabView: null })),
   // the explain overlay: notes over the page as it stands; drawers and the tab window close, so it sees the page
   setHints: on => setUi(on ? { hints: true, drawer: null, item: null, tabView: null } : { hints: false }),
+  // "What bothers you here?" of the explain window: the sentence with its place, kept as a proposal (verb explain_note);
+  // the window says itself that it was noted
+  explainNote: args => act('explain_note', args),
   tourGo(n) {
     const s = store.get()
     const step = tourSteps(s)[n]
@@ -1954,6 +2004,23 @@ async function boot() {
   store.set(s => ({ ...s, boot: { status: 'ok', error: null, version: b.data.version, config: b.data.config ?? {}, scratch: b.data.scratch ?? null,
     warnings: Array.isArray(b.data.config_warnings) ? b.data.config_warnings : [] } }))
   if (MOCK) pushNote({ text: T().mockNote, tone: 'info' }, { toast: false })
+
+  // the click origin log (logic.js createUsageLog): only where the server keeps it, never content; a verb a click sent
+  // carries the click's place. Sent every USAGE_FLUSH_MS while shown, and when the page goes to the background
+  if (b.data.config?.clicks === true) {
+    const usage = createUsageLog({ send: events => api.clicks(events) })
+    const action = api.action
+    api.action = (verb, args) => {
+      usage.verb(verb)
+      return action(verb, args)
+    }
+    document.addEventListener('click', e => {
+      const control = usageControl(e.target)
+      if (control) usage.click({ ...usagePlace(store.get()), area: usageArea(store.get(), e.target), control })
+    }, true)
+    setInterval(whenShown(document, usage.flush), USAGE_FLUSH_MS)
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') usage.flush() })
+  }
 
   // the page view at boot is measured in applyState, once the model and the home settings came
   openStream(api, handlers, onConn, { apply: applyState, fail: failNote })

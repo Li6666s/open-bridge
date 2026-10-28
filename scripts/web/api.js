@@ -6,7 +6,7 @@
 // the caller can treat 202 and 409 (relay offline) as answers. A network failure gives
 // status 0 and error code "network".
 
-const EVENTS = ['hello', 'state', 'view', 'view_pages', 'tabs', 'loading', 'note', 'relay', 'relay_state', 'alert', 'sessions', 'quick', 'quick_live', 'agents', 'triage', 'home', 'launch', 'ticker', 'guide', 'tour', 'describe']
+const EVENTS = ['hello', 'state', 'view', 'view_pages', 'tabs', 'loading', 'note', 'relay', 'relay_state', 'alert', 'sessions', 'quick', 'quick_live', 'agents', 'triage', 'home', 'launch', 'ticker', 'guide', 'tour', 'describe', 'acks']
 
 function failure(status, code, message) {
   return { status, ok: false, data: null, error: { code, message, field: null } }
@@ -126,6 +126,8 @@ export function createApi(transport = httpTransport()) {
     reload: fresh => transport.post('/api/reload', { fresh: !!fresh }, csrf),
     // which page or view was opened: one audit line on the server (page_view), the files view's measure
     seen: (page, view) => transport.post('/api/seen', view ? { page, view } : { page }, csrf),
+    // the click origin log: a batch of {kind, page, view, area, control, verb, n}, never content (usage.jsonl)
+    clicks: events => transport.post('/api/clicks', { events }, csrf),
     inbox: id => transport.get(`/api/inbox?id=${encodeURIComponent(id)}`),
     // path: one folder of the slug (work/done/<month>/<slug>, a closed copy the search found), else the open one first
     task: (slug, path) => transport.get(`/api/task?slug=${encodeURIComponent(slug)}${path ? `&path=${encodeURIComponent(path)}` : ''}`),

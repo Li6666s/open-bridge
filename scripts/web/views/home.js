@@ -7,13 +7,13 @@ import {
   attentionTabs, duration, indexRows, short, stateToken, canTab, previewText, workPageOf, homeCatalog, homeChosen,
   homeContinue, homeProjects, homeView, inProject, meterPace, projectTone, tabOfTask, asksYou, countInProject, focusPick,
   nextEvent, untilText, liveStage, stageTone, homeRowQueue, RETURN_STAGES, greetingText, dayLabel, workPageId,
-  rowProject, homeAreas, areasCoverProjects, areaJump, homeQuota, tabStateKey, AREA_PAGES, areaScope, tickerPage,
+  rowProject, homeAreas, areasCoverProjects, areaJump, homeQuota, tabStateKey, AREA_PAGES, areaScope, tickerPage, rowConv, askMark,
 } from '../logic.js'
 import { T, language } from '../text.js'
 import { KindTag, OriginTag, RowBar, RowMeta, Section } from './day.js'
 import { GuideCard, guideTabs } from './guide.js'
 import { TabCard } from './tabs.js'
-import { DayPages, DayView } from './detail.js'
+import { DayPages, DayView, TabClose } from './detail.js'
 import { PageBadge } from './header.js'
 import {
   AGENTS_PAGE, ASK_MAX, CHAT_PAGE, CHECK_PAGE, JEV_PAGE, SESSIONS_PAGE, SETTINGS_PAGE, START_PAGE, WORKERS_PAGE, briefingTitle,
@@ -21,7 +21,7 @@ import {
 } from './nav.js'
 import { HomeFocusView } from './focus.js'
 import { HomeList } from './list.js'
-import { Btn, Dot, Empty, Icon, PrioChip, StateLine } from './parts.js'
+import { Btn, Chip, Dot, Empty, Icon, PrioChip, StateLine } from './parts.js'
 import { BridgeStage, leadOf, stationOf } from './stage.js'
 import { TickerBand, TickerStatusList } from './ticker.js'
 
@@ -70,7 +70,8 @@ export function ReturnCard({ r, s, c }) {
   const ago = duration((s.now || Date.now()) - r.at_ms)
   const tab = (s.tabs?.tabs ?? []).find(x => x.ref === r.tab?.ref) ?? null
   const row = indexRows(s.model).get(r.key)
-  // settled (its item closed, its task done) and its tab only waits: the tab can go
+  // settled (its item closed, its task done) and its tab only waits: the tab can go, its close leads; any other tab
+  // that neither works nor asks closes too (TabClose), less loudly
   const closable = r.live === 'done' && tab && !tab.is_control && tab.state === 'waiting' && canTab(s, 'close')
   return html`<article class=${`rcard tk-${stageTone(r.live)}`}>
     <header class="rcard-head">
@@ -87,8 +88,7 @@ export function ReturnCard({ r, s, c }) {
     ${r.live === 'lost' ? html`<p class="rcard-answer"><span class="label-caps">${h.returnStage.lost}</span> ${h.returnLostHint}</p>` : null}
     ${closable ? html`<p class="small"><${StateLine} token="success" word=${h.returnSettled} /></p>` : null}
     <div class="hcard-acts">
-      ${closable ? html`<${Btn} size="xs" variant="primary" busy=${!!s.ui.busy[tab.ref]}
-        onClick=${() => c.act('tab_close', { tab_ref: tab.ref })}>${t.btnCloseTab}<//>` : null}
+      ${tab ? html`<${TabClose} tab=${tab} s=${s} c=${c} strong=${closable} />` : null}
       ${r.result?.key ? html`<${Btn} size="xs" variant=${closable ? 'secondary' : 'primary'} onClick=${() => c.openItem(r.result.key, null)}>${h.returnOpenAnswer}<//>` : null}
       ${tab ? html`<${Btn} size="xs" variant=${r.result?.key || closable ? 'secondary' : 'primary'} onClick=${() => jumpToTab(s, c, tab.ref)}>${h.toTab}<//>
         <${Btn} size="xs" variant="ghost" onClick=${() => c.openTabView(tab.ref)}>${h.view}<//>` : null}
@@ -109,6 +109,24 @@ export function ReturnChip({ s, rowKey }) {
   if (!r || r.live === 'done') return null
   return html`<span class=${`chip chip-tk tk-${stageTone(r.live)} rchip`}><${Dot} token=${stageTone(r.live)} pulse=${r.live === 'working'} />
     <span>${T().home.returnStage[r.live]}</span></span>`
+}
+
+/** A row's ask (a job of the workers page, a page row): the question it was asked last (logic.js rowConv) as
+ *  question open, answered or without an answer, or once handed on with the marker every question list shows
+ *  (logic.js askMark: in its tab, done, asks you, tab ended), with Open, and ask again beside it; a row never
+ *  asked has only ask */
+export function RowAsk({ s, c, rowKey, onAsk, variant = 'ghost', cls = 'act-quiet' }) {
+  const t = T()
+  const conv = rowConv(s.quick?.convs, rowKey)
+  if (!conv) return html`<${Btn} size="xs" variant=${variant} cls=${cls} onClick=${onAsk}>${t.btnAsk}<//>`
+  const mark = conv.running ? null : askMark(conv, s.tabs?.tabs, s.now || Date.now())
+  // never handed on: open while it is answered or has no answer yet, failed when its last turn ended with an error
+  const last = conv.turns?.at(-1)
+  const [token, word] = conv.running ? ['info', t.askRunning] : mark ? [mark.tone, t.asks.mark[mark.word]]
+    : last?.error ? ['danger', t.askFailed] : last && !last.a ? ['info', t.askRunning] : ['success', t.askAnswered]
+  return html`<${Chip} token=${token}>${word}<//>
+    <${Btn} size="xs" variant="secondary" onClick=${() => c.openAsk(conv.id)}>${t.askOpenConv}<//>
+    <${Btn} size="xs" variant="ghost" cls="act-quiet" onClick=${onAsk}>${t.btnAskAgain}<//>`
 }
 
 /** The return channel inside a task or an inbox item: the steps, what the tab said last or its answer, and

@@ -17,6 +17,7 @@ scripts/web/ with a fixed set of extensions.
 from __future__ import annotations
 
 import collections
+import datetime as dt
 import hashlib
 import hmac
 import json
@@ -42,7 +43,7 @@ from . import details
 from .. import work_find
 from . import model as m
 from .actions import ActionError, Actions
-from .actions_base import note_go
+from .actions_base import SPEC, note_go
 from .collector import Collector
 from .daybook import DayBook
 from .returns import Launches
@@ -66,7 +67,7 @@ from .guide import Guide
 from .usage import Usage
 from .runner import Runner, RunnerRefused
 from .design import stylesheet
-from .store import WebStore, append_log, atomic_write_json
+from .store import WebStore, append_clicks, append_log, atomic_write_json
 try:                       # Jev is an optional integration: without its file it is simply off
     from . import jev
 except ImportError:
@@ -521,6 +522,19 @@ class App:
                 out[sid] = {"task": saw["task"], "how": "seen", "since_ms": saw.get("since_ms")}
         return out
 
+    def tab_tasks(self) -> dict:
+        """{tab ref: task} of the live sessions that work on one (session_tasks), the newest session of a tab
+        deciding, as the page reads it (views/rooms.js taskOfTab); the control tab is left to the caller"""
+        tasks = self.session_tasks()
+        out: dict[str, tuple] = {}
+        for x in self.sessions.state():
+            ref = (x.get("tab") or {}).get("ref")
+            task = (tasks.get(x.get("sid") or "") or {}).get("task")
+            started = x.get("started_ms") if isinstance(x.get("started_ms"), (int, float)) else 0
+            if isinstance(ref, str) and ref and task and (ref not in out or started > out[ref][0]):
+                out[ref] = (started, task)
+        return {ref: task for ref, (_, task) in out.items()}
+
     def sessions_state(self) -> dict:
         """The live sessions, each with the task it works on (session_tasks: task, task_how, task_since_ms), and
         every kept link: the page shows a task's sessions, the live ones with their tab, the ended ones to go on in"""
@@ -606,6 +620,55 @@ class App:
         """What every card is built with besides its item (card.py): the triage items and the brief proposals,
         by key. A failure here never stops the page: the cards are built without them."""
         return {"triage": self.card_triage(), "describe": self.describe_items()}
+
+    def workers_view(self) -> dict | None:
+        """The worker view the Resources section keeps (scripts/bridge-resources.py workers), None without one"""
+        try:
+            data = json.loads((self.root / ".bridge" / "resources" / "workers-view.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        return data if isinstance(data, dict) and isinstance(data.get("runs"), list) else None
+
+    def ack_closed_findings(self) -> None:
+        """A job's inbox item closed (its own, worker:<host>:<id>, or a question handed over about it) marks the
+        job's finding seen, with the close note: the person or the tab that closed it looked. Read from the
+        inbox folder itself, again only when an item changed: its folder or its events/ folder, where inbox.py
+        writes a close (a file added there leaves the item folder's own time as it was); a failure here never
+        stops a pass"""
+        folder = self.root / "work" / "inbox"
+
+        def events_ns(path: str) -> int:
+            try:
+                return os.stat(os.path.join(path, "events")).st_mtime_ns
+            except OSError:
+                return 0
+        try:
+            sign = tuple(sorted((e.name, e.stat().st_mtime_ns, events_ns(e.path)) for e in os.scandir(folder) if e.is_dir()))
+        except OSError:
+            return
+        view = self.workers_view()
+        if sign == getattr(self, "_acks_inbox_sign", None) or view is None:
+            return
+        try:
+            from .describe import _module
+            inbox = _module("_cockpit_inbox", "inbox.py").Inbox(folder, actor="web")
+            items = []
+            for it in inbox.items():
+                closes = [e for e in it.events if e.verb in ("close", "executed")]
+                if it.state == "done" and closes:
+                    items.append({"id": it.id, "key": it.key, "summary": it.summary, "detail": it.detail,
+                                  "closed_at": closes[-1].at, "note": closes[-1].data.get("text") or ""})
+            now = dt.datetime.fromtimestamp(self.clock() / 1000, dt.timezone.utc)
+            found = m.closed_acks(items, view, self.store.acks_read(), now)
+        except Exception as exc:  # noqa: BLE001 - an unreadable inbox leaves the findings as they are
+            self.log_error(f"acks from the inbox: {exc!r}")
+            return
+        self._acks_inbox_sign = sign
+        for key, fp, note, item_id in found:
+            self.store.ack(key, fp, note, item_id)
+        if found:
+            self.collector.rebuild()
+            self.broadcast("acks", {"keys": sorted({k for k, *_ in found})})
 
     def card_triage(self) -> dict:
         try:
@@ -921,7 +984,7 @@ class Handler(BaseHTTPRequestHandler):
                                  "config": {"port": app.port, "relay": cfg.relay, "tabs_seconds": cfg.tabs_seconds,
                                             "full_minutes": cfg.full_minutes, "voice": cfg.voice, "target": cfg.target,
                                             "control": cfg.control, "profile": cfg.profile,
-                                            "areas": list(cfg.areas)}})
+                                            "areas": list(cfg.areas), "clicks": bool(getattr(cfg, "usage_clicks", True))}})
         elif path == "/api/state":
             self.send_json(200, app.state_payload())
         elif path == "/api/events":
@@ -939,6 +1002,10 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/history":
             # what the dashboard closed, dropped, settled or hid, newest first, each with its undo
             self.send_json(200, {"ok": True, "entries": app.history.state()})
+        elif path == "/api/chats/archive":
+            # the questions archived in the last days, for "all" under the questions (round 6d), read only
+            days = int(one("days")) if one("days").isdigit() else 7
+            self.send_json(200, {"ok": True, "convs": app.quick.archived(days)})
         elif path == "/api/agents":
             # the A2A peers with what their cards say (fetched in the background) and the conversations;
             # fresh=1 is the page's "check again": every card is fetched, also one inside its CARD_TTL
@@ -947,13 +1014,12 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/workers":
             # the full worker view the Resources section keeps (scripts/bridge-resources.py workers), read only
             # a Bridge without one (no workers declared) is no error: view null, and the page shows no Worker tab
-            path_ = app.root / ".bridge" / "resources" / "workers-view.json"
-            try:
-                data = json.loads(path_.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                data = None
-            ok = isinstance(data, dict) and isinstance(data.get("runs"), list)
-            self.send_json(200, {"ok": True, "view": data if ok else None})
+            # a job filed by Analyse in a tab names its item, so its row shows that tab (actions_pages.py), and a job
+            # whose finding was marked seen carries `acked` (model.workers_with_acks)
+            data = app.workers_view()
+            if data:
+                app.actions.worker_items(data["runs"])
+            self.send_json(200, {"ok": True, "view": m.workers_with_acks(data, app.store.acks()) if data else None})
         elif path == "/api/ticker":
             # the news ticker as the page gets it in the state payload and the `ticker` event (ticker.py)
             self.send_json(200, {"ok": True, "ticker": app.ticker.state()})
@@ -1328,6 +1394,21 @@ class Handler(BaseHTTPRequestHandler):
                     raise ActionError(400, "invalid_argument", "view must be a view id", "view")
                 app.actions.audit_line("page_view", page, view=view or "-")
                 self.send_json(200, {"ok": True})
+            elif path == "/api/clicks":
+                # the click origin log: which control from which place, a batch of names and counts into usage.jsonl
+                # beside audit.log, never a title or a text (store.clean_clicks); cockpit.usage.clicks: false, nothing
+                for name in body:
+                    if name != "events":
+                        raise ActionError(400, "invalid_argument", "unknown field", str(name)[:40])
+                if not getattr(app.cfg, "usage_clicks", True):
+                    self.send_json(200, {"ok": True, "kept": 0, "off": True})
+                    return
+                try:
+                    pages = {p.get("id") for p in (app.collector.model or {}).get("pages") or [] if isinstance(p, dict)}
+                    kept = append_clicks(app.state_dir / "usage.jsonl", body.get("events"), app.clock(), verbs=SPEC, pages=pages)
+                except ValueError as error:
+                    raise ActionError(400, "invalid_argument", str(error), "events") from None
+                self.send_json(200, {"ok": True, "kept": kept})
             elif path == "/api/flow/attach":
                 # a document attached to a point's task (verb flow_attach, under the write lock)
                 self.send_json(200, app.actions.execute("flow_attach", body))

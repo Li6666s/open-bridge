@@ -25,6 +25,8 @@ SESSION_ID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-
 TAB_REF_RE = re.compile(r"^[A-Za-z0-9%][A-Za-z0-9:%_.@/-]{0,63}\Z")
 # a workspace the same way (workspace:2 in cmux, $2 in tmux)
 WS_REF_RE = re.compile(r"^[A-Za-z0-9$%@][A-Za-z0-9:%_.@$/-]{0,63}\Z")
+# a background job and the machine it runs on as the workers view names them (workers-view.json `id`, `host`)
+WORKER_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
 TITLE_MAX = 80
 TEAM_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}\Z")
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}\Z")
@@ -40,6 +42,8 @@ DROP_REASONS = ("once", "duplicate", "family", "source")
 # typed on handing on may take of it, so some of the conversation always comes along
 HANDOFF_MAX = 3500
 HANDOFF_ORDER_MAX = 3000
+# the finding of a job a question on its row quotes (actions_chats.py ask kind worker): one line, a log excerpt cut
+WORKER_DETAIL_MAX = 300
 # what the page shows right now, sent along with a free quick question (quick.py): refused above this, never cut
 CONTEXT_MAX = 6000
 # where a free quick question may stand outside the chat lists, the newest replacing the last: the start page's core,
@@ -112,6 +116,8 @@ SPEC: dict[str, dict[str, tuple[str, bool]]] = {
                  "expect": ("tab_state", False), "name": ("tab_name", False)},
     "tab_go_on": {"tab_ref": ("tab_ref", True), "seen": ("ask_hash", False), "name": ("tab_name", False)},
     "tab_close": {"tab_ref": ("tab_ref", True)},
+    # the task and the inbox item behind a tab end as Done does (settle), then the tab closes (actions_tabs.py)
+    "tab_done": {"tab_ref": ("tab_ref", True), "by": ("by", False)},
     # a name of a tab or a workspace; task tabs and configured workspaces keep theirs (workplace.py managed_names)
     "tab_rename": {"tab_ref": ("tab_ref", True), "title": ("title", True)},
     "workspace_rename": {"ws_ref": ("ws_ref", True), "title": ("title", True)},
@@ -149,6 +155,10 @@ SPEC: dict[str, dict[str, tuple[str, bool]]] = {
     "return_forget": {"key": ("key", True)},
     # the files view: a workflow run's result checked, so it no longer waits in its task's file
     "run_seen": {"id": ("run_id", True)},
+    # a finding marked seen (a job, worker:<host>:<id>, or a page row): grey and counted nowhere until it changes,
+    # and taken back ("show again"); note: what settled it, shown beside it
+    "finding_ack": {"key": ("finding_key", True), "note": ("text", False)},
+    "finding_unack": {"key": ("finding_key", True)},
     "start_control": {},
     "snapshot_list": {},
     "ask_via_tab": {"relay_id": ("relay_id", True)},
@@ -159,6 +169,8 @@ SPEC: dict[str, dict[str, tuple[str, bool]]] = {
     "row_action": {"page": ("page_id", True), "section": ("page_id", True), "index": ("index", True),
                    "action": ("row_step", True)},
     "row_undo": {"section": ("page_id", True), "row": ("row_ref", True), "action": ("undo_token", True)},
+    # a background job of the workers view filed under worker:<host>:<id> and started as an advising tab
+    "worker_advise": {"host": ("worker_ref", True), "id": ("worker_ref", True)},
     "inbox_reopen": {"id": ("inbox_id", True), "note": ("text", False)},
     "runs_on": {"keys": ("keys", True), "until": ("date", True), "on": ("text", False)},
     "task_running": {"slug": ("slug", True)},
@@ -184,6 +196,10 @@ SPEC: dict[str, dict[str, tuple[str, bool]]] = {
     # the first-run tour: finished or skipped (v: the page's tour version), and taken back to offer it again
     "tour_done": {"how": ("tour_how", True), "v": ("index", True)},
     "tour_reset": {},
+    # "What bothers you here?" of the explain window: a sentence and the place it was opened on, kept as a proposal
+    # for /bridge-learn (scripts/cockpit-usage.py write_note); the place as the click origin log names it
+    "explain_note": {"text": ("text", True), "page": ("click_page", True), "view": ("click_name", False),
+                     "area": ("click_name", False)},
     "account_status": {"page": ("page_id", True), "section": ("page_id", True), "index": ("index", True),
                        "status": ("account_status", True)},
     "github_board": {"section": ("page_id", True), "slug": ("page_id", True), "mode": ("board_mode", True)},
@@ -198,6 +214,9 @@ ROW_STEP_RE = re.compile(r"^[a-z][a-z0-9_-]{0,39}\Z")
 UNDO_TOKEN_RE = re.compile(r"^restore:[A-Za-z0-9._~-]{1,120}\Z")
 ROW_REF_RE = re.compile(r"^[A-Za-z0-9][^\x00-\x1f]{0,199}\Z")
 PAGE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}\Z")
+# a finding that can be marked seen: a background job (worker:<host>:<id>, model.worker_key) or a page row
+FINDING_KEY_RE = re.compile(r"^(?:worker:[A-Za-z0-9][A-Za-z0-9._-]{0,79}:[A-Za-z0-9][A-Za-z0-9._-]{0,119}"
+                            r"|item:(?!(?:.*/)?\.\.(?:/|\Z))[^\x00-\x1f]{1,240})\Z")
 ASK_HASH_RE = re.compile(r"^[0-9a-f]{16}\Z")   # the hash of a tab's question (asks.py)
 TAB_STATES = ("needs-you", "waiting", "working")
 TOUR_HOW = ("finished", "skipped")   # how the first-run tour ended (store.py tour)
@@ -217,14 +236,14 @@ GO_FIELDS = {
 READ_ONLY_VERBS = frozenset({"snapshot_list", "organize_propose"})
 # only stores with their own locks (store.py, launch.py, ticker.py, guide.py): they never wait for a write that runs
 LOCAL_VERBS = frozenset({"pin", "hide", "home_tiles", "ticker_settings", "ticker_settings_reset", "launch_settings",
-                         "launch_settings_reset", "session_link", "run_seen", "guide_read", "guide_settings", "guide_settings_reset",
-                         "tour_done", "tour_reset", "flow_themes_run", "flow_theme_move", "flow_theme_new",
+                         "launch_settings_reset", "session_link", "run_seen", "finding_ack", "finding_unack", "guide_read", "guide_settings", "guide_settings_reset",
+                         "tour_done", "tour_reset", "explain_note", "flow_themes_run", "flow_theme_move", "flow_theme_new",
                          "flow_theme_rename", "flow_activity_summary", "flow_instruct", "files_ask"})
 # the layout snapshot writes nothing of the Bridge: one at a time on a lock of its own, never the write lock
 LAYOUT_VERBS = frozenset({"snapshot"})
 # saving the layout is cmux's own feature; steering a tab goes through the terminal driver and needs its verb
 CMUX_VERBS = frozenset({"snapshot", "snapshot_list"})
-NEEDS_CAP = {"tab_yes": "key", "tab_no": "key", "tab_option": "key", "tab_jump": "focus", "tab_close": "close",
+NEEDS_CAP = {"tab_yes": "key", "tab_no": "key", "tab_option": "key", "tab_jump": "focus", "tab_close": "close", "tab_done": "close",
              "tab_rename": "rename", "workspace_rename": "rename_workspace"}
 
 
