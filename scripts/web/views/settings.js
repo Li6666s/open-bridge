@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // The cockpit, the settings: one page with an area per subject (the start page, how it looks, the model an
-// agent tab starts with). Everything the start page can show is chosen here, in its area Start page.
+// agent tab starts with). Everything the start page can show is chosen here, in its area Start page; the colours
+// and the look-up card of what the help said (the signs of a row, acting, the keys, costs) stand under Appearance.
 // The rules every component keeps stand at the head of components.js.
 
 import { html, useEffect, useState } from '../vendor/htm-preact-3.1.1.module.js'
@@ -236,8 +237,31 @@ function DetailsCard({ s, c }) {
   <//>`
 }
 
+const LOOKUP_TOPICS = ['rows', 'act', 'keys', 'trust']
+
+/** To look up, one topic at a time: what the marks of a row say, how acting works, the keys (only while they are on:
+ *  mouse first, so off the card says only that they are off, the card above switches them on), what costs tokens and
+ *  what stays local. Help in the header opens it on a topic. What each part of a page is for is Explain's, in Help */
+function LookupCard({ s }) {
+  const t = T()
+  const w = t.settings
+  // the topic the header's Help picked (app.js openLookup), each pick anew; a click on the card's own switch after it
+  const [topic, setTopic] = useState(s.ui.lookupTopic ?? 'rows')
+  useEffect(() => { if (s.ui.lookupTopic) setTopic(s.ui.lookupTopic) }, [s.ui.lookupTopic, s.ui.lookupAt])
+  const body = topic === 'keys'
+    ? s.ui.shortcuts ? html`<p class="muted small">${t.commandHint}</p>
+      <dl class="keys">${t.keys.map(([k, v], i) => html`<div key=${i}><dt><kbd>${k}</kbd></dt><dd>${v}</dd></div>`)}</dl>`
+      : html`<p class="muted small">${t.keysOff}</p>`
+    : html`<dl class="help-text">${t.helpTopics[topic].map(([k, v]) => html`<div key=${k}><dt>${k}</dt><dd>${Array.isArray(v)
+      ? html`<ul class="plain help-list">${v.map(x => html`<li key=${x}>${x}</li>`)}</ul>` : v}</dd></div>`)}</dl>`
+  return html`<${Card} title=${w.lookupTitle} intro=${w.lookupIntro}>
+    <${Segmented} label=${t.help.tabsLabel} current=${topic} values=${LOOKUP_TOPICS.map(id => [id, t.help.tabs[id]])} onPick=${setTopic} />
+    <div class="lookup-pane">${body}</div>
+  <//>`
+}
+
 function LookArea({ s, c }) {
-  return html`<${ThemeCard} s=${s} c=${c} /><${KeysCard} s=${s} c=${c} /><${TourCard} s=${s} c=${c} />`
+  return html`<${ThemeCard} s=${s} c=${c} /><${KeysCard} s=${s} c=${c} /><${LookupCard} s=${s} /><${TourCard} s=${s} c=${c} />`
 }
 
 /** The first-run tour: start it now, and offer it again on the next visit once it ended */

@@ -17,7 +17,7 @@ import { DayPages, DayView } from './detail.js'
 import { PageBadge } from './header.js'
 import {
   AGENTS_PAGE, ASK_MAX, CHAT_PAGE, CHECK_PAGE, JEV_PAGE, SESSIONS_PAGE, SETTINGS_PAGE, START_PAGE, WORKERS_PAGE, briefingTitle,
-  pageOrder,
+  pageOrder, workViewNow,
 } from './nav.js'
 import { HomeFocusView } from './focus.js'
 import { HomeList } from './list.js'
@@ -143,7 +143,12 @@ export function jumpToTab(s, c, ref) {
  *  the controller has; a page that exists nowhere and a row that is gone open Today */
 export function goTo(s, c, target, el) {
   switch (target?.kind) {
-    case 'page': return c.setPage(tickerPage(s, target.id, pageOrder(s)))
+    case 'page': {
+      const done = c.setPage(tickerPage(s, target.id, pageOrder(s)))
+      // a part of the page named (the day's status on Start): brought into view once the page drew it
+      if (target.at) setTimeout(() => globalThis.document?.querySelector?.(target.at)?.scrollIntoView?.({ block: 'start' }), 80)
+      return done
+    }
     case 'item': return c.openItem(target.key, null)
     case 'tab': return jumpToTab(s, c, target.ref)
     case 'drawer': return c.setDrawer(target.id)
@@ -588,7 +593,8 @@ function HomeDesk({ s, c }) {
 }
 
 /** The bar over Work, Chat and Sessions: the area they show (✕ shows every area again) and, on Work,
- *  the star that shows only the pinned rows. Nothing on the other pages, nothing when there is no choice */
+ *  the star that shows only the pinned rows, not over Work through, which shows every open row whatever is pinned
+ *  (round 6 B). Nothing on the other pages, nothing when there is no choice */
 export function AreaBar({ s, c }) {
   const h = T().home
   const page = s.ui.page
@@ -596,7 +602,8 @@ export function AreaBar({ s, c }) {
   const chosen = homeChosen(s.model, s.home)
   const start = page === START_PAGE && (homeView(chosen) !== 'areas' || chosen.some(id => id.startsWith('d:')))
   if (!AREA_PAGES.has(page) && !start) return null
-  const work = page === 'briefing'
+  // the star of Work acts in the files tab too (areas.js areaScope), so its chip stands there as well
+  const work = (page === 'briefing' && workViewNow(s) !== 'flow') || page === '@files'
   const pins = s.home?.pins ?? []
   if (!s.ui.area && !(work && (pins.length || s.ui.pinnedOnly))) return null
   // Chat under an area without an agent tab says so and offers every area, rather than an empty page

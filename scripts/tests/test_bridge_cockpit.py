@@ -100,7 +100,7 @@ def collect_fixture(root: Path) -> dict:
             "status": [{"title": "Systems", "count": 0, "health": True}],
         },
         "pages": [
-            {"id": "systems", "title": "Systems", "sections": [
+            {"id": "systems", "title": "Systems", "subs": ["@workers", "tasks"], "sections": [
                 {"id": "checks", "kind": "command", "title": "Checks", "status": "ok", "alarm": True, "bad": 1,
                  "weight": 1, "total": 1, "items": [
                      {"id": "backup-stale", "title": "Backup older than 2 days", "detail": "drift", "tone": "bad",
@@ -109,9 +109,9 @@ def collect_fixture(root: Path) -> dict:
                  "items": [{"id": "upstream-drift", "title": "Upstream drift", "tone": "warn", "url": "file:///etc/passwd", "ask": True,
                            "actionable": True}]},
                 {"id": "accounts", "kind": "command", "title": "Accounts", "status": "ok", "weight": 1, "view": "tiles",
-                 "items": [{"title": "Azure X", "tags": {"Provider": "azure"}, "account": {"id": "azure-x", "status": "active"}},
+                 "hide_ok": True, "items": [{"title": "Azure X", "tags": {"Provider": "azure"}, "account": {"id": "azure-x", "status": "active"}},
                            {"title": "Not an account"}]}]},
-            {"id": "tasks", "title": "Tasks", "sections": [
+            {"id": "tasks", "title": "Tasks", "under": "systems", "sections": [
                 {"id": "tasks", "kind": "tasks", "title": "Tasks", "status": "ok", "items": [
                     {"title": "Demo task", "task": "demo-task", "priority": "P1", "state": "doing",
                      "url": f"file://{root}/work/tasks/demo-task/STATUS.md",
@@ -482,6 +482,19 @@ def test_parse_pages_places_cards_by_the_profile():
     # not a list: no placement, the page keeps what `overview` alone draws
     assert m.parse_pages({"pages": [{"id": "ops", "title": "B", "cards": "costs", "sections": [{"id": "a"}]}]})[0]["cards"] is None
     assert m.parse_cards([]) == []
+
+
+def test_parse_pages_keeps_where_a_page_stands_and_what_a_section_hides():
+    # `under`: the page has no tab, a tile of its parent opens it; the parent's `subs` name its sub pages in their
+    # order (text only); a section's hide_ok: drawn only while one of its rows is a finding
+    pages = m.parse_pages({"pages": [
+        {"id": "ops", "title": "Betrieb", "subs": ["@workers", "inv", 3, ""], "sections": [{"id": "a", "hide_ok": True}]},
+        {"id": "inv", "title": "Inventar", "under": "ops", "sections": [{"id": "b", "hide_ok": "yes"}]},
+        {"id": "lab", "title": "Labor", "under": 7, "subs": "inv", "sections": [{"id": "c"}]}]})
+    assert pages[0]["subs"] == ["@workers", "inv"] and pages[0]["under"] is None
+    assert pages[1]["under"] == "ops" and pages[1]["subs"] == []
+    assert pages[2]["under"] is None and pages[2]["subs"] == []
+    assert [p["sections"][0]["hide_ok"] for p in pages] == [True, False, False]
 
 
 def test_mark_and_as_of():
@@ -924,6 +937,10 @@ def test_model_shape(world):
     assert pages["systems"]["group"] == "main"
     assert pages["systems"]["overview"] is False      # the browser gets the overview switch of every page
     assert pages["systems"]["jev"] is False           # and whether it can be ordered by Jev, never the words
+    # where a page stands: under another (no tab of its own), and which sub pages a page names, in their order
+    assert pages["tasks"]["under"] == "systems" and pages["systems"]["under"] is None
+    assert pages["systems"]["subs"] == ["@workers", "tasks"] and pages["tasks"]["subs"] == []
+    assert [x["hide_ok"] for x in pages["systems"]["sections"]] == [False, False, True]
     assert model["teams"][0]["roles"][1] == {"id": "review", "name": "Review", "mode": "report"}
     dumped = json.dumps(model)
     assert "file://" not in dumped and world.app.token not in dumped and "command" not in model
@@ -1300,6 +1317,9 @@ def test_a_page_item_put_off_or_settled_no_longer_counts(world):
     assert (sec["items"], sec["count"], sec["total"], sec["bad"]) == ([], 0, 0, 0)
     assert pg["badge"]["kind"] != "bad"
     assert not [a for a in world.app.collector.model["alarms"] if a["page_id"] == "systems"]
+    # its weight goes too: the grey number of the tab counts only the two sections that still show a row
+    assert sec["weight"] == 0
+    assert pg["badge"] == {"kind": "count", "n": 2, "warn": True}
 
 
 def test_advise_later_and_settle_work_on_a_page_item(world):
@@ -3462,11 +3482,27 @@ def test_merge_keeps_clear_hygiene_and_since_of_sections_a_partial_run_left_out(
     delta = view(skipped=["github", "calendar"], since="since 08:40: 1 new", headline="partial",
                  extras={"clear": [], "hygiene": [], "workplace": "Tabs: 2"})
     out = m.merge_view(full, delta)
-    assert out["extras"] == {"clear": ["GitHub board: all clear"], "hygiene": ["Tracker x: error"], "workplace": "Tabs: 2"}
+    assert out["extras"] == {"clear": ["GitHub board: all clear"], "hygiene": ["Tracker x: error"], "tend": [], "workplace": "Tabs: 2"}
     assert out["since"] == "since 08:40: 3 new"
     again = m.merge_view(full, view(skipped=[], since="since 09:00: 0 new", headline="h",
                                     extras={"clear": [], "hygiene": [], "workplace": None}))
     assert again["extras"]["clear"] == [] and again["since"] == "since 09:00: 0 new"
+    # the facts of the housekeeping lines (`tend`) stay with their lines
+    tended = m.merge_view(view(skipped=[], extras={"clear": [], "hygiene": ["x"], "tend": [{"kind": "muted", "text": "x", "n": 2}],
+                                                   "workplace": None}),
+                          view(skipped=["github"], extras={"clear": [], "hygiene": [], "tend": [], "workplace": None}))
+    assert tended["extras"]["tend"] == [{"kind": "muted", "text": "x", "n": 2}]
+
+
+def test_the_page_model_carries_the_housekeeping_facts_beside_its_lines():
+    data = {"view": {"hygiene": ["2 muted", "odd", "x"], "tend": [{"kind": "muted", "text": "2 muted", "n": 2},
+                                                                {"kind": "no_next", "text": "odd", "n": "x", "names": ["a", 3]},
+                                                                {"kind": "untasked", "text": "x", "n": 3, "title": "GitHub", "reason": 4},
+                                                                "junk"]}}
+    tend = m.parse_view(data, True, NOW)["extras"]["tend"]
+    assert tend == [{"kind": "muted", "text": "2 muted", "n": 2, "names": [], "title": "", "reason": ""},
+                    {"kind": "no_next", "text": "odd", "n": None, "names": ["a", "3"], "title": "", "reason": ""},
+                    {"kind": "untasked", "text": "x", "n": 3, "names": [], "title": "GitHub", "reason": ""}]
 
 
 def test_server_texts_name_the_configured_control_workspace():
@@ -7835,6 +7871,153 @@ def test_find_says_so_when_the_search_fails_and_never_shows_the_token(world):
     assert world.app.token.encode() not in body
 
 
+FILES_ASK_CONFIG = ("cockpit:\n  enabled: true\n  language: en\n  files_search:\n    enabled: {on}\n    budget_per_day: {budget}\n"
+                    "    block: [Versicherung, Gesundheit]\nworkplace:\n  control:\n    name: Control\n")
+
+
+def files_ask_world(tmp_path, on="true", budget=3):
+    w = World(tmp_path, config=FILES_ASK_CONFIG.format(on=on, budget=budget))
+    put = lambda rel, text: ((w.root / rel).parent.mkdir(parents=True, exist_ok=True), (w.root / rel).write_text(text, encoding="utf-8"))
+    put("work/tasks/versicherung-bestand/STATUS.md", "---\nstatus: doing\nheadline: Policies in review\n---\nsecret policy number 42\n")
+    put("work/done/2026-09/doctor-visit/STATUS.md", "---\nstatus: done\nheadline: Gesundheit check-up\n---\nblood values\n")
+    w.runner.handlers["claude.p"] = lambda argv: ok({"type": "result", "is_error": False, "total_cost_usd": 0.002,
+                                                     "modelUsage": {"claude-haiku-5-5": {}}, "result": "",
+                                                     "structured_output": {"answer": "The demo waits.", "files": [{"n": 1, "why": "it is the demo"}]}})
+    return w
+
+
+ASKED = ["work/tasks/demo-task", "work/tasks/versicherung-bestand", "work/done/2026-09/doctor-visit"]
+
+
+def test_the_records_of_the_files_tab_come_by_folder_read_only_and_need_the_cookie(world):
+    world.runner.calls.clear()
+    status, _, body = world.request("GET", "/api/records", headers=world.cookie)
+    data = json.loads(body)
+    assert status == 200 and data["ok"] is True
+    [rec] = [r for r in data["records"] if r["slug"] == "demo-task"]
+    assert rec["path"] == "work/tasks/demo-task" and rec["title"] == "Demo task" and rec["status"] == "doing"
+    assert rec["updated"] == "2026-10-08" and rec["priority"] == "P1"
+    assert world.runner.calls == []                                               # read in place, nothing run
+    assert world.request("GET", "/api/records")[0] == 401
+
+
+def test_the_work_state_says_whether_the_files_tab_may_ask_a_model_and_what_it_holds_back(tmp_path):
+    w = files_ask_world(tmp_path)
+    try:
+        fs = w.app.work_state()["files_search"]
+        assert fs == {"enabled": True, "block": ["Versicherung", "Gesundheit"], "left": 3}
+    finally:
+        w.close()
+    off = World(tmp_path / "off")
+    try:
+        assert off.app.work_state()["files_search"] == {"enabled": False, "block": [], "left": 20}
+    finally:
+        off.close()
+
+
+def test_asking_the_records_never_sends_one_the_block_list_holds_back(tmp_path):
+    w = files_ask_world(tmp_path)
+    try:
+        before = len(w.runner.calls)
+        res = w.act("files_ask", text="Which one\nwaits?", paths=ASKED)
+        calls = w.runner.calls[before:]
+        assert [w.runner.key(c) for c in calls] == ["claude.p"]
+        prompt = calls[0][-1]
+        # what the block list names never reaches the model: not its path, title, slug or text
+        for held in ("versicherung", "Policies in review", "policy number", "doctor-visit", "Gesundheit", "blood values"):
+            assert held not in prompt, held
+        head, data, label, question = prompt.split("\n", 3)
+        [rec] = json.loads(data)["records"]
+        assert rec["n"] == 1 and rec["slug"] == "demo-task" and rec["title"] == "Demo task" and "Ship the demo." in rec["text"]
+        assert question == "Which one waits?"
+        ask = res["ask"]
+        assert ask["answer"] == "The demo waits." and ask["sent"] == 1
+        assert ask["files"] == [{"n": 1, "why": "it is the demo", "slug": "demo-task", "path": "work/tasks/demo-task", "title": "Demo task"}]
+        assert ask["held"] == {"n": 2, "words": ["Versicherung", "Gesundheit"]}
+        assert ask["model"] == "haiku" and ask["left"] == 2
+    finally:
+        w.close()
+
+
+def test_asking_the_records_is_off_by_default_within_its_budget_and_refuses_what_it_cannot_send(tmp_path):
+    w = files_ask_world(tmp_path, budget=1)
+    try:
+        # only held back records: nothing to send, no call
+        with pytest.raises(ActionError) as none:
+            w.act("files_ask", text="anything?", paths=ASKED[1:])
+        assert none.value.code == "files_ask_held" and w.runner.of("claude.p") == []
+        # a folder that is no record is left out, a path outside work/ refused before anything runs
+        with pytest.raises(ActionError) as bad:
+            w.act("files_ask", text="anything?", paths=["../etc/passwd"])
+        assert bad.value.code == "invalid_argument"
+        with pytest.raises(ActionError) as gone:
+            w.act("files_ask", text="anything?", paths=["work/tasks/no-such-task"])
+        # nothing held back, the record is gone since the page read it: the page is stale, not the block list
+        assert gone.value.code == "files_ask_stale"
+        w.act("files_ask", text="anything?", paths=ASKED[:1])
+        with pytest.raises(ActionError) as spent:
+            w.act("files_ask", text="again?", paths=ASKED[:1])
+        assert spent.value.code == "files_ask_budget" and spent.value.status == 429
+        assert len(w.runner.of("claude.p")) == 1
+    finally:
+        w.close()
+    off = files_ask_world(tmp_path / "off", on="false")
+    try:
+        with pytest.raises(ActionError) as e:
+            off.act("files_ask", text="anything?", paths=ASKED[:1])
+        assert e.value.code == "files_ask_off" and off.runner.of("claude.p") == []
+    finally:
+        off.close()
+
+
+def test_a_record_whose_text_names_a_blocked_word_is_held_back_too(tmp_path):
+    """The text that goes out (the start of STATUS.md, with its front matter and `related:`) is checked as well as its
+    area, theme, path and title: a word inside a longer one holds it too (Krankenversicherung, by Versicherung)"""
+    w = files_ask_world(tmp_path)
+    try:
+        put = lambda rel, text: ((w.root / rel).parent.mkdir(parents=True, exist_ok=True), (w.root / rel).write_text(text, encoding="utf-8"))
+        put("work/tasks/school-board/STATUS.md", "---\nstatus: doing\nheadline: Parents board\n---\nAsk about the Krankenversicherung form\n")
+        put("work/tasks/tax-prep/STATUS.md", "---\nstatus: doing\nheadline: Prep\nrelated: [versicherung-bestand]\n---\nnothing else\n")
+        before = len(w.runner.calls)
+        res = w.act("files_ask", text="which?", paths=["work/tasks/demo-task", "work/tasks/school-board", "work/tasks/tax-prep"])
+        prompt = w.runner.calls[before:][0][-1]
+        for held in ("school-board", "Krankenversicherung", "tax-prep", "versicherung-bestand"):
+            assert held not in prompt, held
+        assert res["ask"]["sent"] == 1 and res["ask"]["held"] == {"n": 2, "words": ["Versicherung"]}
+    finally:
+        w.close()
+
+
+def test_the_records_name_what_the_block_list_holds_back_so_the_page_counts_as_the_server_does(tmp_path):
+    w = files_ask_world(tmp_path)
+    try:
+        status, _, body = w.request("GET", "/api/records", headers=w.cookie)
+        by = {r["slug"]: r for r in json.loads(body)["records"]}
+        assert status == 200
+        assert by["versicherung-bestand"]["held"] == ["Versicherung"] and by["doctor-visit"]["held"] == ["Gesundheit"]
+        assert by["demo-task"]["held"] == []
+    finally:
+        w.close()
+    off = World(tmp_path / "off")
+    try:
+        recs = json.loads(off.request("GET", "/api/records", headers=off.cookie)[2])["records"]
+        assert all("held" not in r for r in recs), "no block list, nothing read for it"
+    finally:
+        off.close()
+
+
+def test_the_budget_is_read_again_once_the_lock_is_taken(tmp_path):
+    w = files_ask_world(tmp_path, budget=3)
+    try:
+        left = iter([1, 0])
+        w.app.activity.budget_left = lambda service: next(left, 0)
+        with pytest.raises(ActionError) as spent:
+            w.act("files_ask", text="anything?", paths=ASKED[:1])
+        assert spent.value.code == "files_ask_budget" and w.runner.of("claude.p") == []
+    finally:
+        w.close()
+
+
 def test_asking_a_file_names_it_for_an_open_task_and_never_for_a_closed_one(world):
     world.runner.handlers["claude.p"] = lambda argv: claude_answer("It waits on the vendor.", 0.001)
     done = world.root / "work" / "done" / "2026-09" / "gone-task"
@@ -8238,6 +8421,147 @@ def test_flow_open_without_files_counts_the_sections_and_the_hidden_rows(tmp_pat
         assert "task:parked" not in universe(model)                    # no backlog task without the files
     finally:
         w.close()
+
+
+def gh_page(*ids, extra=(), view="board", boards=True) -> dict:
+    """A GitHub page as briefing.py writes one: the section the rows of Due name as their source (`github`) on its
+    board view with a board, one actionable item per id, and any further section"""
+    sec = {"id": "github", "kind": "tracker", "title": "GitHub", "status": "ok", "view": view, "total": len(ids),
+           "items": [{"id": rid, "row_id": rid, "title": f"Issue {rid}", "actionable": True} for rid in ids]}
+    if boards:
+        sec["boards"] = [{"name": "Tool board", "slug": "tool-board", "mode": "mine", "open": len(ids)}]
+    return {"id": "github", "title": "GitHub", "sections": [sec, *extra]}
+
+
+def with_pages(world, *pages) -> dict:
+    world.app.collector.view["pages"] = [*world.app.collector.view.get("pages", []), *m.parse_pages({"pages": list(pages)})]
+    world.app.collector.rebuild()
+    return world.app.collector.model
+
+
+def page_keys(world, page: str = "github", section: str = "github") -> list[str]:
+    pg = next(p for p in world.app.collector.model["pages"] if p["id"] == page)
+    return [i["key"] for s in pg["sections"] if s["id"] == section for i in s["items"]]
+
+
+def test_the_github_list_carries_every_row_so_its_search_and_filter_see_them_all(world):
+    """G1: a section on its board view (the GitHub list, views/github.js) searches and filters every row on the page,
+    so the model carries all of them, not the first ITEM_CAP; a plain table keeps its cap and its "more n" """
+    plain = {"id": "plain", "kind": "command", "title": "Plain", "status": "ok", "total": 87,
+             "items": [{"id": f"p{n}", "title": f"Row {n}"} for n in range(87)]}
+    model = with_pages(world, gh_page(*[f"example/repo#{n}" for n in range(100, 187)], extra=[plain]))
+    gh, rest = next(p for p in model["pages"] if p["id"] == "github")["sections"]
+    assert (len(gh["items"]), gh["more"], gh["total"]) == (87, 0, 87)
+    assert (len(rest["items"]), rest["more"]) == (50, 37)
+
+
+def test_a_decision_on_a_github_row_holds_in_work_through_and_on_the_github_page(world):
+    """G2: Due and the GitHub page show one issue under two keys (ref:<id> and item:<page>/<section>/<id>, the page
+    section among the row's sources): Later, Done or Show again under either key holds under both, in "more" too"""
+    item = "item:github/github/example/repo#12"
+    model = with_pages(world, gh_page("example/repo#12", "example/repo#99"))
+    hidden = lambda: {r["key"]: (r["hidden_until"], r["settled_as"]) for r in world.app.collector.model["hidden"]}  # noqa: E731
+    assert item in page_keys(world) and "ref:example/repo#12" not in hidden()
+    open_before = model["counts"]["flow_open"]
+    # Later on the GitHub page: Work through has the issue under Later until the same day, still open
+    world.act("hide", key=item, until="2026-11-08")
+    assert item not in page_keys(world) and hidden()["ref:example/repo#12"] == ("2026-11-08", None)
+    assert world.app.collector.model["counts"]["flow_open"] == open_before
+    # Show again in Work through: back on both, nothing of it left in the store
+    world.act("unhide", key="ref:example/repo#12")
+    assert item in page_keys(world) and "ref:example/repo#12" not in hidden()
+    assert not {item, "ref:example/repo#12"} & set(world.app.store.hidden())
+    # Later in Work through: the GitHub page and its "more" leave the row out, the other row stays
+    world.act("hide", key="ref:example/repo#12", until="2026-11-08")
+    items, _ = world.app.collector.page_items("github", "github")
+    assert item not in page_keys(world) and [i["key"] for i in items] == ["item:github/github/example/repo#99"]
+    # Show again from the page's side (the undo of its Later): back on both
+    world.act("unhide", key=item)
+    assert item in page_keys(world) and "ref:example/repo#12" not in hidden()
+    # Done on the GitHub page: decided in Work through too, so it counts as open no more; Show again takes it back
+    world.app.store.dismiss(item, "done", "Issue example/repo#12")
+    world.app.collector.rebuild()
+    assert hidden()["ref:example/repo#12"] == (None, "done") and item not in page_keys(world)
+    assert world.app.collector.model["counts"]["flow_open"] == open_before - 1
+    world.act("unhide", key=item)
+    assert item in page_keys(world) and world.app.collector.model["counts"]["flow_open"] == open_before
+
+
+def test_a_decision_in_work_through_never_silences_an_alarm_or_a_command_list(world):
+    """G2 holds for an issue on a GitHub page, a tracker list: a probe on an alarm section (kind command) that lists
+    the id of a ref row of Due keeps its row, its finding and its alarm when the row is put off in Work through"""
+    ops = {"id": "ops", "title": "Ops", "sections": [
+        {"id": "github", "kind": "command", "title": "Probes", "status": "ok", "alarm": True, "bad": 1, "weight": 1,
+         "total": 1, "empty": "all probes green",
+         "items": [{"id": "example/repo#7", "title": "Backup failed", "tone": "bad", "actionable": True}]}]}
+    model = with_pages(world, ops)
+    assert [a["count"] for a in model["alarms"] if a["page_id"] == "ops"] == [1]
+    assert "item:ops/github/example/repo#7" not in world.app.collector.twins("ref:example/repo#7")
+    world.act("hide", key="ref:example/repo#7", until="2026-11-08")       # Later in Work through
+    model = world.app.collector.model
+    sec = next(p for p in model["pages"] if p["id"] == "ops")["sections"][0]
+    assert [i["key"] for i in sec["items"]] == ["item:ops/github/example/repo#7"] and sec["bad"] == 1
+    assert [a["count"] for a in model["alarms"] if a["page_id"] == "ops"] == [1]
+    # a tracker section with an alarm is no plain GitHub list either: its finding stays
+    world.app.collector.view["pages"] = [p for p in world.app.collector.view["pages"] if p["id"] != "ops"]
+    ops["sections"][0]["kind"] = "tracker"
+    with_pages(world, ops)
+    assert "item:ops/github/example/repo#7" not in world.app.collector.twins("ref:example/repo#7")
+
+
+def test_a_new_decision_replaces_what_the_twins_held(world):
+    """One decision under both keys also when each side decided once: Later on the GitHub page until A, then Later
+    again from Work through until B leaves one key in the store, and the row of Due, the page and its "more" agree
+    on B; Done from Work through after a Later on the page leaves no older Later behind for Show again"""
+    item, ref = "item:github/github/example/repo#12", "ref:example/repo#12"
+    with_pages(world, gh_page("example/repo#12", "example/repo#99"))
+    world.act("hide", key=item, until="2026-11-08")
+    world.act("hide", key=ref, until="2026-11-30")
+    assert world.app.store.hidden() == {ref: "2026-11-30"}
+    hidden = {r["key"]: r["hidden_until"] for r in world.app.collector.model["hidden"]}
+    assert hidden[ref] == "2026-11-30"
+    merged = m.with_twins(world.app.store.hidden(), world.app.collector.twin_map)
+    assert merged[item] == merged[ref] == "2026-11-30"
+    items, _ = world.app.collector.page_items("github", "github")
+    assert item not in page_keys(world) and [i["key"] for i in items] == ["item:github/github/example/repo#99"]
+    # and the other way round: shortening from the page writes the page's key only
+    world.act("hide", key=item, until="2026-11-10")
+    assert world.app.store.hidden() == {item: "2026-11-10"}
+    # Done in Work through: the page's Later goes, so Show again brings the row back on both sides at once
+    world.act("settle", keys=[ref], outcome="done")
+    assert item not in world.app.store.hidden() and ref in world.app.store.dismissed()
+    world.act("unhide", key=ref)
+    assert not world.app.store.hidden() and not world.app.store.dismissed() and item in page_keys(world)
+
+
+def test_show_again_marks_undone_only_what_it_took_back(world):
+    """Show again marks the history entry undone only under the keys whose decision it took back: an expired Later
+    of a twin keeps its history entry"""
+    item, ref = "item:github/github/example/repo#12", "ref:example/repo#12"
+    with_pages(world, gh_page("example/repo#12"))
+    world.act("hide", key=ref, until="2026-11-30")
+    assert item in world.app.collector.twins(ref)
+    undone = []
+    world.app.history.mark_undone = lambda verb, ident: undone.append((verb, ident))
+    world.act("unhide", key=ref)
+    assert undone == [("unhide", ref)]
+
+
+def test_a_due_row_names_the_github_list_it_stands_in(world):
+    """G3: a row of Due whose issue stands in a GitHub list (a section on its board view with a board or figures)
+    names that list, so Work through folds it into one line leading there; a row no such list holds names none"""
+    listed = {"id": "listed", "title": "Listed", "sections": [
+        {"id": "github", "kind": "tracker", "title": "Plain", "status": "ok",
+         "items": [{"id": "example/repo#7", "title": "Answer from the vendor", "actionable": True}]}]}
+    with_pages(world, gh_page("example/repo#12"), listed)
+    assert world.row("ref:example/repo#12")["on_board"] == {"page": "github", "section": "github"}
+    # on a plain list only: a twin for the decisions, but no GitHub list to fold into
+    assert world.row("ref:example/repo#7")["on_board"] is None
+    assert "item:listed/github/example/repo#7" in world.app.collector.twins("ref:example/repo#7")
+    # a board view without a board or a figure is no GitHub list either
+    world.app.collector.view["pages"] = [p for p in world.app.collector.view["pages"] if p["id"] != "github"]
+    with_pages(world, gh_page("example/repo#12", boards=False))
+    assert world.row("ref:example/repo#12")["on_board"] is None
 
 
 IDEA_ID = "20261020-0800-a-shelved-idea-1a2b"

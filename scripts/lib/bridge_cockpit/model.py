@@ -206,17 +206,31 @@ def parse_cal_figures(value: Any) -> dict | None:
             if free else None}
 
 
+GH_REVIEWS = ("approved", "changes_requested", "review_required")
+GH_CHECKS = ("success", "failure", "error", "pending", "expected")
+
+
 def parse_gh(value: Any) -> dict | None:
     """A GitHub row's facts (briefing_view.github_facts), checked again: the view file is input."""
     if not isinstance(value, dict):
         return None
     texts = lambda v, n: [x for x in _list(v) if isinstance(x, str)][:n]   # noqa: E731
+    pr = value.get("pr") if isinstance(value.get("pr"), dict) else None
     return {"title": as_text(value.get("title")), "repo": as_text_or_null(value.get("repo")),
             "number": value.get("number") if isinstance(value.get("number"), int) else None,
             "type": value["type"] if value.get("type") in ("pr", "draft") else "issue", "state": as_text_or_null(value.get("state")),
             "status": as_text_or_null(value.get("status")), "priority": as_text_or_null(value.get("priority")),
-            "labels": texts(value.get("labels"), 4),
-            "people": texts(value.get("people"), 3),
+            "labels": texts(value.get("labels"), 10),
+            "people": texts(value.get("people"), 10),
+            # round 6c: who opened it, the board and column it stands in, a pull request's state (the page's filters)
+            "author": as_text_or_null(value.get("author")),
+            "by_me": value.get("by_me") is True,
+            "board": as_text_or_null(value.get("board")),
+            "also_on": texts(value.get("also_on"), 3),
+            "pr": {"draft": pr.get("draft") is True,
+                   "review": pr["review"] if pr.get("review") in GH_REVIEWS else None,
+                   "checks": pr["checks"] if pr.get("checks") in GH_CHECKS else None} if pr else None,
+            "untasked": value.get("untasked") is True,
             "prs": [{"n": p["n"], "draft": p.get("draft") is True} for p in _list(value.get("prs"))
                     if isinstance(p, dict) and isinstance(p.get("n"), int)][:3],
             "task": as_text_or_null(value.get("task")), "stream": value.get("stream") is True,
@@ -318,6 +332,8 @@ def parse_pages(data: dict, tx: dict = EN) -> list[dict]:
                 "view": x.get("view") if x.get("view") in ("tiles", "mosaic", "groups", "board", "agenda") else None,
                 "cal_figures": parse_cal_figures(x.get("cal_figures")),
                 "hide_empty": x.get("hide_empty") is True,
+                # kept for what reads it on the page (an account's services, the badge), drawn only with a finding
+                "hide_ok": x.get("hide_ok") is True,
                 "steps": "buttons" if x.get("steps") == "buttons" else None,
                 "stale": as_text_or_null(x.get("stale")),
                 "boards": parse_boards(x.get("boards")),
@@ -328,6 +344,10 @@ def parse_pages(data: dict, tx: dict = EN) -> list[dict]:
         page = {"id": as_text(p.get("id")), "title": as_text(p.get("title")), "sections": sections,
                 "group": p.get("group") if p.get("group") in ("more", "work", "day") else "main", "overview": p.get("overview") is True,
                 "cards": parse_cards(p.get("cards")),
+                # where the page stands: under another (no tab, the bar of that page's folder opens it), and the sub
+                # pages a page names in their order, the cockpit's own @workers among them (briefing_view.pages)
+                "under": as_text_or_null(p.get("under")),
+                "subs": [x for x in _list(p.get("subs")) if isinstance(x, str) and x][:12],
                 # the order by Jev: the words stay on the server (jev.rank), the page only learns there is one
                 "jev": ({k: [as_text(x) for x in v] if isinstance(v := p["jev"].get(k), list) else []
                          for k in ("skip_sections", "private")} if isinstance(p.get("jev"), dict) else None)}
@@ -363,6 +383,67 @@ def item_key(page_id: str, section_id: str, info: dict) -> str:
     """The key of a page item: its source id, else a hash of its title (a row without an id still has one)"""
     rid = info.get("id") or "h" + hashlib.sha1(as_text(info.get("title")).encode("utf-8")).hexdigest()[:10]
     return f"item:{page_id}/{section_id}/{rid}"
+
+
+def page_twins(view: dict | None) -> dict[str, list[tuple[str, dict, str]]]:
+    """The page items that are a row of Due: a tracker or command row of Due is ref:<id> (briefing_view, row_key) with
+    the sections it came from as its sources, and a tracker list among them on a page (an issue on the GitHub page)
+    lists the same thing as item <id> (item_key). A command list or an alarm section never twins: a Later in Work
+    through must not take a failing probe off its page, its count and its alarm. Row key -> [(page id, section,
+    item key)], only for a row some such list holds"""
+    if not view:
+        return {}
+    listed: dict[str, list[tuple[str, dict, dict]]] = {}
+    for pg in view.get("pages") or []:
+        for s in pg.get("sections") or []:
+            if s.get("kind") != "tracker" or s.get("alarm") is True:
+                continue
+            ids = {it["id"]: it for it in s.get("items") or [] if it.get("id")}
+            if ids:
+                listed.setdefault(s.get("id"), []).append((pg.get("id"), s, ids))
+    out: dict[str, list[tuple[str, dict, str]]] = {}
+    for row in all_rows(view):
+        ref = row.get("ref")
+        if not ref or row.get("key") != f"ref:{ref}":
+            continue
+        hits = [(pid, s, item_key(pid, s["id"], ids[ref])) for sid in row.get("sources") or []
+                for pid, s, ids in listed.get(sid, ()) if ref in ids]
+        if hits:
+            out[row["key"]] = hits
+    return out
+
+
+def decision_twins(pairs: dict[str, list[tuple[str, dict, str]]]) -> dict[str, tuple[str, ...]]:
+    """The keys one decision holds for (later, done, not doing, show again): a row of Due and its page items
+    (page_twins) are one thing under several keys. Each key of such a group -> the whole group, its own key first"""
+    out: dict[str, tuple[str, ...]] = {}
+    for key, hits in pairs.items():
+        group = list(dict.fromkeys([key, *(k for _, _, k in hits)]))
+        for k in group:
+            out[k] = (k, *(g for g in group if g != k))
+    return out
+
+
+def with_twins(decided: dict, twins: dict[str, tuple[str, ...]]) -> dict:
+    """The decisions by key (hidden, dismissed, settled) with each one also under the keys of the same thing
+    (decision_twins); a key's own decision wins over its twin's"""
+    out = dict(decided)
+    for key, value in decided.items():
+        for twin in twins.get(key, ())[1:]:
+            out.setdefault(twin, value)
+    return out
+
+
+def board_places(pairs: dict[str, list[tuple[str, dict, str]]]) -> dict[str, dict]:
+    """Row key -> {page, section}: the GitHub list a row of Due stands in (page_twins), a section on its board view with
+    a board or figures (views/pages.js draws it as views/github.js GitHubList); a row in none is not in the map"""
+    out: dict[str, dict] = {}
+    for key, hits in pairs.items():
+        for pid, s, _ in hits:
+            if s.get("view") == "board" and (s.get("boards") or s.get("metrics")):
+                out[key] = {"page": pid, "section": s["id"]}
+                break
+    return out
 
 
 def launch_item(row: dict) -> str | None:
@@ -439,6 +520,12 @@ def parse_view(raw: Any, is_full: bool, now: float, tx: dict = EN) -> dict:
         "since": as_text_or_null(v.get("since")),
         "extras": {"clear": [as_text(x) for x in _list(v.get("clear"))],
                    "hygiene": [as_text(x) for x in _list(v.get("hygiene"))],
+                   # the same lines as kind and facts (briefing_view tend), for the page to word each one
+                   "tend": [{"kind": as_text(x.get("kind")), "text": as_text(x.get("text")), "n": _number(x.get("n"), None),
+                             "names": [as_text(n) for n in _list(x.get("names"))],
+                             "title": as_text(x.get("title")) if isinstance(x.get("title"), str) else "",
+                             "reason": as_text(x.get("reason")) if isinstance(x.get("reason"), str) else ""}
+                            for x in (_dict(t) for t in _list(v.get("tend"))) if x.get("kind")],
                    "workplace": as_text_or_null(v.get("workplace"))},
         "collected_at": clock_time(now),
         "collected_ms": int(now),
@@ -755,7 +842,8 @@ def merge_view(base: dict, fresh: dict) -> dict:
     fresh_extras = fresh.get("extras") or {"clear": [], "hygiene": [], "workplace": None}
     base_extras = base.get("extras") or {}
     extras = ({**fresh_extras, "clear": list(base_extras.get("clear") or []),
-               "hygiene": list(base_extras.get("hygiene") or [])} if fresh_is_partial else fresh_extras)
+               "hygiene": list(base_extras.get("hygiene") or []), "tend": list(base_extras.get("tend") or [])}
+              if fresh_is_partial else fresh_extras)
     return {
         **fresh,
         "extras": extras,

@@ -361,14 +361,18 @@ DEFAULT_PAGES = ("work", "status", "dates", "trackers", "today")
 # where a default page sits: work and status in front, the rest behind More, today's activity under the day list
 DEFAULT_PAGE_GROUP = {"work": "main", "status": "main", "dates": "more", "trackers": "more", "today": "day"}
 REST_PAGE = "more"
-PAGE_KEYS = {"id", "title", "sections", "group", "overview", "jev", "cards"}
+PAGE_KEYS = {"id", "title", "sections", "group", "overview", "jev", "cards", "under"}
+# the cockpit's own pages a profile may place under one of its pages (`{id: "@workers", under: ops}`): an id
+# and `under`, never sections; the page then has no tab, the bar of the folder it stands in opens it
+PLACED_PAGES = ("@workers",)
 # the live cards a dashboard may place after a section of a page (bridge_cockpit.model.CARD_IDS)
 PAGE_CARDS = ("costs", "usage", "noise")
 JEV_KEYS = {"skip_sections", "private"}
 # where a page sits in a dashboard's page bar: in front, or behind a "More" menu
 PAGE_GROUPS = ("main", "more", "work", "day")   # day: no tab, its sections stand under the day list;
 # work: no tab, it is the "by source" view of the work tab (the briefing), beside "what is due" and "by Jev"
-PAGE_SECTION_KEYS = {"id", "when", "detail", "link", "empty", "alarm", "badge", "view", "hide_empty", "actionable", "steps"}
+PAGE_SECTION_KEYS = {"id", "when", "detail", "link", "empty", "alarm", "badge", "view", "hide_empty", "actionable", "steps",
+                     "hide_ok"}
 # how a dashboard offers a row's own steps: one menu (default), or each as a button of its own
 PAGE_STEPS = ("menu", "buttons")
 # how a dashboard draws a section: rows in a table (default), cards, or a mosaic of every row
@@ -600,6 +604,7 @@ def _page_problems(view: dict) -> list:
     if not isinstance(pages, list):
         return out + ["view.pages must be a list of pages"]
     seen, placed = set(), {}
+    listed = {p["id"]: p for p in pages if isinstance(p, dict) and isinstance(p.get("id"), str) and p["id"]}
     for n, page in enumerate(pages, 1):
         where = f"view.pages {n}"
         if not isinstance(page, dict):
@@ -615,8 +620,15 @@ def _page_problems(view: dict) -> list:
         elif pid in seen:
             out.append(f"{where}: page {pid} listed twice")
         seen.add(pid)
+        if pid in PLACED_PAGES:
+            out += [f"{where}: unknown key {key}" for key in sorted(set(page) - {"id", "under"})]
+            out += _under_problems(page, listed, where) if "under" in page else \
+                [f"{where}: {pid} needs under (the page it stands under)"]
+            continue
         for key in sorted(set(page) - PAGE_KEYS):
             out.append(f"{where}: unknown key {key}")
+        if "under" in page:
+            out += _under_problems(page, listed, where)
         if "title" in page and not isinstance(page["title"], str):
             out.append(f"{where}: title must be text")
         if "group" in page and page["group"] not in PAGE_GROUPS:
@@ -659,7 +671,7 @@ def _page_problems(view: dict) -> list:
             detail = entry.get("detail", [])
             if not (isinstance(detail, str) or (isinstance(detail, list) and all(isinstance(d, str) for d in detail))):
                 out.append(f"{at}: detail must be a field name or a list of them")
-            for key in ("alarm", "badge", "hide_empty", "actionable"):
+            for key in ("alarm", "badge", "hide_empty", "actionable", "hide_ok"):
                 if key in entry and not isinstance(entry[key], bool):
                     out.append(f"{at}: {key} must be true or false")
             if "view" in entry and entry["view"] not in PAGE_VIEWS:
@@ -667,6 +679,25 @@ def _page_problems(view: dict) -> list:
             if "steps" in entry and entry["steps"] not in PAGE_STEPS:
                 out.append(f"{at}: steps must be one of {', '.join(PAGE_STEPS)}")
     return out
+
+
+def _under_problems(page: dict, listed: dict, where: str) -> list:
+    """`under:` of a page: another page of view.pages with a tab of its own, standing under none itself."""
+    under = page["under"]
+    if not isinstance(under, str) or not under:
+        return [f"{where}: under must be a page id"]
+    if under == page.get("id"):
+        return [f"{where}: a page cannot stand under itself"]
+    parent = listed.get(under)
+    if parent is None or under in PLACED_PAGES:
+        return [f"{where}: under names no page of view.pages: {under}"]
+    if page.get("group") in ("work", "day"):
+        return [f"{where}: under and group work or day exclude each other"]
+    if parent.get("group") in ("work", "day"):
+        return [f"{where}: under: {under} has no tab of its own (group work or day)"]
+    if "under" in parent:
+        return [f"{where}: under: {under} stands under {parent['under']} itself, one level only"]
+    return []
 
 
 def page_section_ids(view: dict) -> list:
@@ -837,8 +868,13 @@ def _rows(result: dict, profile: dict, view: dict, labels: dict, now: dt.datetim
         if isinstance(b, dict) and b.get("id") == "waiting":
             nudge_days = _int(b.get("nudge_after_days"), nudge_days, 1)
 
-    out = {"rows": {}, "order": [], "hygiene": [], "no_next": [], "muted": 0, "events": [], "workplace": None,
+    out = {"rows": {}, "order": [], "hygiene": [], "tend": [], "no_next": [], "muted": 0, "events": [], "workplace": None,
            "activity": [], "boards": [], "clear": [], "status": []}
+
+    def tend(kind: str, text: str, **facts) -> None:
+        # a housekeeping line: its text for the terminal, its kind and facts for a page that words it (`tend`)
+        out["hygiene"].append(text)
+        out["tend"].append({"kind": kind, "text": text, **facts})
 
     def items_of(s):
         # The section's own `max:` still caps what it contributes.
@@ -920,7 +956,8 @@ def _rows(result: dict, profile: dict, view: dict, labels: dict, now: dt.datetim
                                   "health": sections_cfg.get(sid, {}).get("report_ok") is True,
                                   **({"left_out": True} if s.get("left_out") else {})})
         if s.get("status") == "error":
-            out["hygiene"].append(labels["error"].format(title=s.get("title") or sid, reason=s.get("reason", "")))
+            tend("error", labels["error"].format(title=s.get("title") or sid, reason=s.get("reason", "")),
+                 title=s.get("title") or sid, reason=s.get("reason", ""))
             continue
         if not usable(s):
             continue
@@ -934,7 +971,7 @@ def _rows(result: dict, profile: dict, view: dict, labels: dict, now: dt.datetim
             # issues assigned to you that no task tracks: counted over every row, not only the capped ones
             untracked = sum(1 for i in s.get("all") or items_of(s) if i.get("untasked") is True and not muted(sid, i))
             if untracked:
-                out["hygiene"].append(labels["untasked"].format(title=title, n=untracked))
+                tend("untasked", labels["untasked"].format(title=title, n=untracked), title=title, n=untracked)
         if cfg.get("report_ok") is True and not any(
                 not muted(sid, i) and i.get("state") not in ("done", "removed") for i in items_of(s)):
             # Green says so: an empty source is otherwise indistinguishable from one that never ran.
@@ -952,8 +989,8 @@ def _rows(result: dict, profile: dict, view: dict, labels: dict, now: dt.datetim
             if rows:
                 out["activity"].append({"days": days or 7, "rows": rows})
             if s.get("skipped"):
-                out["hygiene"].append(labels["repos_skipped"].format(n=len(s["skipped"]),
-                                                                     names=", ".join(s["skipped"])))
+                tend("repos_skipped", labels["repos_skipped"].format(n=len(s["skipped"]), names=", ".join(s["skipped"])),
+                     n=len(s["skipped"]), names=list(s["skipped"]))
             continue
         if s.get("summary"):
             have = {(b.get("org"), b.get("number")) for b in out["boards"]}
@@ -965,7 +1002,7 @@ def _rows(result: dict, profile: dict, view: dict, labels: dict, now: dt.datetim
             tabs = [i for i in items_of(s) if i.get("state") != "warning"]
             for i in items_of(s):
                 if i.get("state") == "warning":
-                    out["hygiene"].append(str(i.get("title")))
+                    tend("note", str(i.get("title")))
             if tabs:
                 out["workplace"] = labels["workplace"].format(
                     n=len(tabs), new=sum(1 for t in tabs if t.get("state") == "new"),
@@ -1013,7 +1050,7 @@ def _rows(result: dict, profile: dict, view: dict, labels: dict, now: dt.datetim
             elif kind == "advise":
                 check = item.get("check")
                 if check == "wip":
-                    out["hygiene"].append(str(item.get("title")))
+                    tend("note", str(item.get("title")))
                 elif check == "quiet":
                     add(f"task:{item.get('task')}", row(sid, item, forced or "drop", item.get("title"), (), 5))
                 elif check == "collision":
@@ -1066,6 +1103,9 @@ def _rows(result: dict, profile: dict, view: dict, labels: dict, now: dt.datetim
             else:   # tracker, command
                 state = item.get("state")
                 if state in ("done", "removed"):
+                    continue
+                if item.get("others") is True:
+                    # a teammate's board card (github-work, cards: all): on its page only, never a row of Work
                     continue
                 if item.get("category") == "qa" or state == "review":
                     bucket = "do"
@@ -1159,17 +1199,22 @@ def build(result: dict, profile: dict, style: str | None = None) -> dict:
             r["new"] = r["changed"] = False
     rows.sort(key=lambda r: (URGENCY[r["bucket"]], r["rank"], str(_when(r.get("due")) or "9999")))
 
-    hygiene = list(data["hygiene"]) + [str(n) for n in result.get("housekeeping") or []]
+    # each line once as text (the terminal) and once as its kind and facts (`tend`, a page words it itself)
+    tend = list(data["tend"]) + [{"kind": "note", "text": str(n)} for n in result.get("housekeeping") or []]
     if result.get("owed"):
-        hygiene.append(labels["owed"].format(streams=", ".join(result["owed"])))
+        tend.append({"kind": "owed", "text": labels["owed"].format(streams=", ".join(result["owed"])),
+                     "names": list(result["owed"])})
     if data["no_next"]:
-        hygiene.append(labels["no_next"].format(n=len(data["no_next"]), slugs=", ".join(data["no_next"])))
+        tend.append({"kind": "no_next", "text": labels["no_next"].format(n=len(data["no_next"]), slugs=", ".join(data["no_next"])),
+                     "n": len(data["no_next"]), "names": list(data["no_next"])})
     if data["muted"]:
-        hygiene.append(labels["muted"].format(n=data["muted"]))
+        tend.append({"kind": "muted", "text": labels["muted"].format(n=data["muted"]), "n": data["muted"]})
     hidden = [r for r in rows if r["bucket"] in hidden_ids]
     if hidden:
         ids = sorted({r["bucket"] for r in hidden}, key=lambda b: URGENCY[b])
-        hygiene.append(labels["hidden"].format(n=len(hidden), ids=", ".join(ids)))
+        tend.append({"kind": "hidden", "text": labels["hidden"].format(n=len(hidden), ids=", ".join(ids)),
+                     "n": len(hidden), "names": ids})
+    hygiene = [x["text"] for x in tend]
     visible = [r for r in rows if r["bucket"] not in hidden_ids]
 
     plan_cfg: dict = view["plan"] if isinstance(view.get("plan"), dict) else {}
@@ -1181,7 +1226,7 @@ def build(result: dict, profile: dict, style: str | None = None) -> dict:
 
     width = view.get("width")
     out = {"style": style, "collected_at": result.get("collected_at"), "headline": None, "since": None,
-           "buckets": [], "hygiene": hygiene, "workplace": data["workplace"], "more": 0, "titles": titles,
+           "buckets": [], "hygiene": hygiene, "tend": tend, "workplace": data["workplace"], "more": 0, "titles": titles,
            "answer_keys": view.get("answer_keys", True) is not False,
            "show_hygiene": view.get("hygiene", "bottom") != "hide",
            "color": view.get("color", "auto"), "width": width if _pos_int(width) and width >= 40 else 100,
@@ -1968,9 +2013,13 @@ def github_facts(item: dict, now: dt.datetime) -> dict:
     """A GitHub row's facts as a dashboard draws them, one field each instead of a detail line: the plain
     title, repository and number, the normalized state and the board's own word for it, the board's priority
     (board.priority_field), labels, people, the pull requests that close it, the task that syncs it (or that none
-    does), when it last changed and how long it has been quiet."""
+    does), when it last changed and how long it has been quiet. Round 6c, for the page's filters and its rows: the
+    board it stands on and the others that hold it too, who opened it (and whether you did), every assignee and
+    label (the page shows a few and counts the rest), and a pull request's draft flag, review and checks."""
     m = GH_ID_RE.match(_text(item.get("id")))
-    people = [p for p in (item.get("assignees") or [item.get("assignee")]) if isinstance(p, str) and p][:3]
+    people = [p for p in (item.get("assignees") or [item.get("assignee")]) if isinstance(p, str) and p][:10]
+    board = item.get("board") if isinstance(item.get("board"), dict) else {}
+    pr = item.get("pr_status") if isinstance(item.get("pr_status"), dict) and item.get("type") == "pr" else None
     linked = item.get("linked_task") if isinstance(item.get("linked_task"), dict) else {}
     changed = _when(item.get("changed_at"))
     quiet = (now - changed).days if changed is not None else None
@@ -1980,7 +2029,12 @@ def github_facts(item: dict, now: dt.datetime) -> dict:
             "type": item["type"] if item.get("type") in ("pr", "draft") else "issue",
             "state": _text(item.get("state")) or None, "status": status[:40] or None,
             "priority": _text(item.get("priority"))[:20] or None,
-            "labels": [_text(x)[:40] for x in item.get("labels") or [] if _text(x)][:4], "people": people,
+            "labels": [_text(x)[:40] for x in item.get("labels") or [] if _text(x)][:10], "people": people,
+            "author": _text(item.get("author"))[:60] or None, "by_me": item.get("by_me") is True,
+            "board": _text(board.get("name"))[:80] or None,
+            "also_on": [_text(x)[:80] for x in item.get("also_on") or [] if _text(x)][:3],
+            "pr": {"draft": pr.get("draft") is True, "review": _text(pr.get("review"))[:24] or None,
+                   "checks": _text(pr.get("checks"))[:24] or None} if pr else None,
             "prs": [{"n": int(str(p["id"]).rsplit("#", 1)[-1]), "draft": bool(p.get("draft"))}
                     for p in item.get("prs") or [] if isinstance(p, dict) and str(p.get("id", "")).rsplit("#", 1)[-1].isdigit()][:3],
             "task": _text(linked.get("slug")) or None,
@@ -2013,14 +2067,28 @@ def github_metrics(items: list, done: object, now: dt.datetime) -> list:
 ACCOUNT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,79}\Z")
 
 
+TAG_MAX = 60
+
+
+def _cut_word(text: str, cap: int) -> str:
+    """`text` within `cap` characters: whole, or cut at the last space past its middle with an ellipsis, never mid word
+    (a word longer than that is cut where it must)"""
+    if len(text) <= cap:
+        return text
+    head = text[:cap - 1]
+    space = head.rfind(" ")
+    return (head[:space] if space > cap // 2 else head).rstrip(" ,;:") + "…"
+
+
 def tags_of(value: object) -> dict | None:
-    """A row's {label: value} for a dashboard's filter chips: up to 6 short strings, the rest dropped."""
+    """A row's {label: value} for a dashboard's filter chips: up to 6 short strings, the rest dropped; a long value is
+    cut at a word (_cut_word)."""
     if not isinstance(value, dict):
         return None
     out = {}
     for k, v in value.items():
         if isinstance(k, str) and isinstance(v, str) and 0 < len(k.strip()) <= 24 and v.strip():
-            out[k.strip()] = v.strip()[:60]
+            out[k.strip()] = _cut_word(v.strip(), TAG_MAX)
         if len(out) == 6:
             break
     return out or None
@@ -2096,7 +2164,10 @@ def _page_section(section: dict, entry: dict, now: dt.datetime, labels: dict, ro
             # a row's steps as buttons of their own (a machine's power switches), not behind one menu
             **({"steps": "buttons"} if entry.get("steps") == "buttons" else {}),
             # nothing to say when it is empty: a dashboard leaves the section out instead of "nothing"
-            **({"hide_empty": True} if entry.get("hide_empty") is True else {})}
+            **({"hide_empty": True} if entry.get("hide_empty") is True else {}),
+            # kept on its page for what reads it there (an account's services, the badge, the alarm), drawn
+            # only while one of its rows is a finding
+            **({"hide_ok": True} if entry.get("hide_ok") is True else {})}
 
 
 
@@ -2125,7 +2196,9 @@ def _card_problems(cards, sections, where: str) -> list:
 def pages(result: dict, profile: dict, root: Path | None = None) -> list:
     """The dashboard's pages beside the briefing: which section on which page, every row
     in the same columns. `view.pages` decides; without it a section's kind does, and a
-    section no page names lands on the rest page, so nothing collected goes unseen."""
+    section no page names lands on the rest page, so nothing collected goes unseen. A page
+    may stand under another (`under:`, no tab of its own); the parent names its sub pages
+    in `subs`, the cockpit's own pages a profile places there (PLACED_PAGES) among them."""
     view = _cfg(profile)
     labels = _labels(view, profile.get("_language"))
     marks = marks_of(view)
@@ -2133,10 +2206,15 @@ def pages(result: dict, profile: dict, root: Path | None = None) -> list:
     sections = {s.get("id"): s for s in result.get("sections") or [] if isinstance(s, dict) and s.get("id")}
     plan = []   # (id, title, [entry], group, overview, jev)
     cards = {}  # page id -> its `cards:`, passed through as written (the dashboard places them)
+    unders = []  # (id, under) in the listed order: a page, or one of the cockpit's (PLACED_PAGES), under another
     configured = view.get("pages") if isinstance(view.get("pages"), list) else None
     if configured is not None:
         for page in configured:
             if not isinstance(page, dict) or not isinstance(page.get("id"), str):
+                continue
+            if isinstance(page.get("under"), str) and page["under"]:
+                unders.append((page["id"], page["under"]))
+            if page["id"] in PLACED_PAGES:
                 continue
             entries = [{"id": e} if isinstance(e, str) else e for e in page.get("sections") or []
                        if isinstance(e, str) or (isinstance(e, dict) and isinstance(e.get("id"), str))]
@@ -2164,4 +2242,14 @@ def pages(result: dict, profile: dict, root: Path | None = None) -> list:
         if built:
             out.append({"id": pid, "title": title, "sections": built, "group": group, **({"overview": True} if overview else {}),
                         **({"jev": jev} if jev is not None else {}), **({"cards": cards[pid]} if pid in cards else {})})
+    # a page under another has no tab: the parent names its sub pages in the listed order (`subs`), a sub page
+    # without a section of its own is none, and neither side may be a page without a tab (group work or day)
+    shown = {p["id"]: p for p in out if p["group"] not in ("work", "day")}
+    below = {pid for pid, _ in unders}
+    for pid, under in unders:
+        if under in shown and under not in below and (pid in PLACED_PAGES or pid in shown) \
+                and pid not in shown[under].get("subs", []):
+            if pid in shown:
+                shown[pid]["under"] = under
+            shown[under].setdefault("subs", []).append(pid)
     return out

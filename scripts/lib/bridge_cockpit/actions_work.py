@@ -1,17 +1,44 @@
 # SPDX-License-Identifier: MIT
-"""Verbs on inbox items and tasks: start, put off, hide, drop, close, reopen, review, note, approve, teams.
+"""Verbs on inbox items and tasks: start, put off, hide, drop, close, reopen, review, note, approve, teams, and the
+files tab's question to its records.
 """
 from __future__ import annotations
 
 import json
 import os
+import threading
 
+from .. import work_find as wf
 from . import activity as act
 from . import model as m
 from .details import split_front
 from .history import REOPEN_AS, item as history_item
 from .actions_base import (DECLINED_REASONS, MERGE_MAX, SHORT_TIMEOUT, SLUG_RE, TEAM_RE, ActionError, Ctx, bad_arg,
                            row_go)
+from .quick import MODELS
+from .text import TABLES
+
+FILES_ASK_TIMEOUT = 90
+# one question to the records at a time (v_files_ask), on a lock of its own, never the write lock
+_FILES_ASKING = threading.Lock()
+
+
+def record_check(app, words: list[str], themes, path: str, slug: str, kind: str) -> dict:
+    """What the block list says of one record (cockpit.files_search.block): its front matter, title, row, theme, the
+    text a question would send (work_find.ask_text) and `held`, the words any of them holds: its area (front matter
+    and row, every area name), context, theme, path, title and that text, so a word in the body or in `related:`
+    holds it as well. A word also matches inside a longer one (Steuer holds Steuerberater and Steuerung alike): it
+    holds back more, never less. The question (v_files_ask) and the records the page lists (GET /api/records) both
+    read it, so the page counts what the server sends"""
+    whole = wf.status_text(app.root, path)      # read once, by the search's rules (no symlink, no huge file)
+    front = wf.front_from(whole)
+    title = wf.title_from(whole, slug)
+    row = {} if kind == "done" else ((app.collector.resolve(f"task:{slug}") or {}).get("out") or {})
+    theme = app.themes.theme_name(themes, f"task:{slug}")
+    text = (whole or "")[:wf.ASK_TEXT_MAX]
+    held = wf.held_by([front.get("area"), front.get("context"), row.get("area"), *(row.get("area_names") or []),
+                       theme, path, title, text], words)
+    return {"front": front, "title": title, "row": row, "theme": theme, "text": text, "held": held}
 
 
 def merge_marks(slug: str) -> tuple[str, str]:
@@ -239,11 +266,15 @@ class WorkVerbs:
         self.hide_until(ctx, self.entry(key)["row"], until)
 
     def v_unhide(self, ctx: Ctx, key: str) -> None:
+        """Show again: under the row's own key and under the keys of the same thing (collector.twins: an issue in
+        Due and on the GitHub page), wherever the decision was taken"""
         found = self.entry(key)
-        if not found["hidden"] or not self.app.store.unhide(key):
+        taken = [k for k in self.app.collector.twins(key) if self.app.store.unhide(k)] if found["hidden"] else []
+        if not taken:
             raise self.not_applicable("the row is not hidden")
         if getattr(self.app, "history", None) is not None:
-            self.app.history.mark_undone("unhide", key)
+            for k in taken:                 # only a decision taken back: an expired Later of a twin keeps its entry
+                self.app.history.mark_undone("unhide", k)
         ctx.note(self.tx["unhidden_note"].format(title=m.short(found["row"]["title"], 60)), go=row_go(found["row"]))
 
     def v_drop(self, ctx: Ctx, key: str, reason: str | None = None) -> None:
@@ -465,7 +496,8 @@ class WorkVerbs:
                 self.settle_soon(ctx)
             elif kind == "other":
                 # not collector.settle: its source still lists the row, so it would stay invisible for good;
-                # dismissed it shows under the hidden rows with "show again"
+                # dismissed it shows under the hidden rows with "show again"; a twin's older Later goes first
+                self.clear_twins(key)
                 self.app.store.dismiss(key, outcome, row["title"])
                 self.write_note(ctx, row, self.tx["close_reason"][outcome] + extra)
                 ctx.history.append({**history_item(key, row["title"], "other", outcome), **({"reason": text} if text else {})})
@@ -749,6 +781,75 @@ class WorkVerbs:
         ctx.extra["plan"] = plan
         ctx.extra["flow_ai"] = app.activity.flow_ai()
         ctx.audit_extra.update(points=plan["n"], steps=len(plan["steps"]))
+
+    # ------------------------------------------------------------ the files tab's question to its records
+
+    def v_files_ask(self, ctx: Ctx, text: str, paths: list) -> None:
+        """One question over the records the page shows (cockpit.files_search, lib/work_find.py ask_*). A record a word
+        of the block list names in its area (front matter and row), theme, path, title or the text that would go
+        (record_check) is held back before anything is built, so it never reaches the model; a folder that is no
+        record is left out, and when only such folders came the page is stale (files_ask_stale). Off by default,
+        within budget_per_day (counted in activity.py's store, read again once the lock is taken), one at a time.
+        The answer names records by number only"""
+        app = self.app
+        tx = TABLES["de" if str(getattr(app.cfg, "language", "en")).startswith("de") else "en"]["files_ask"]
+        cfg = act.block(app, "files")
+        if not cfg.get("enabled"):
+            raise ActionError(409, "files_ask_off", tx["off"])
+        words = list(cfg.get("block") or [])
+        known = {folder: (slug, kind) for slug, kind, folder in wf.known_folders(app.root)}
+        themes = app.themes.load()
+        recs, held = [], []
+        for path in paths:
+            if path not in known:
+                continue
+            slug, kind = known[path]
+            x = record_check(app, words, themes, path, slug, kind)
+            if x["held"]:
+                held.append(x["held"])
+                continue
+            front, row = x["front"], x["row"]
+            recs.append({"slug": slug, "path": path, "title": x["title"], "status": front.get("status") or kind,
+                         "area": row.get("area") or front.get("area") or front.get("context"), "theme": x["theme"],
+                         "updated": next((str(front[k])[:10] for k in ("last_updated", "closed", "created") if front.get(k)), None),
+                         "text": x["text"]})
+        held_words = [w for w in words if any(w in h for h in held)]
+        if not recs and not held:
+            raise ActionError(409, "files_ask_stale", tx["stale"])
+        if not recs:
+            raise ActionError(409, "files_ask_held", tx["held"].format(n=len(held)))
+        model = act.select_model(app, "files", act.FILES_SERVICE)
+        if model is None:
+            raise ActionError(503, "files_ask_unavailable", tx["unavailable"])
+        if app.activity.budget_left("files") <= 0:
+            raise ActionError(429, "files_ask_budget", tx["budget"])
+        if not _FILES_ASKING.acquire(blocking=False):
+            raise ActionError(409, "files_ask_running", tx["running"])
+        try:
+            # a second click that came in as the first call let go of the lock passed the read above: read it again
+            if app.activity.budget_left("files") <= 0:
+                raise ActionError(429, "files_ask_budget", tx["budget"])
+            data = [{"n": i + 1, **{k: app.scrub(str(r[k])) if r[k] else r[k] for k in ("title", "slug", "status", "area", "theme", "updated")},
+                     "text": app.scrub(r["text"])} for i, r in enumerate(recs)]
+            from .describe import language
+            system, prompt = wf.ask_prompt(app.scrub(text), data, language(app.root))
+            argv = wf.ask_argv(app.runner.claude, model, system, prompt)
+            if not wf.ask_argv_ok(argv, app.runner.claude, MODELS.values()):
+                raise ActionError(409, "files_ask_too_big", tx["too_big"], "paths")
+            run = self.describe_ctx(ctx)("claude.files", "files", argv, FILES_ASK_TIMEOUT)
+            got = wf.ask_parse(run.out if run.ok else "", len(recs))
+            app.activity.count_call("files", got["cost_usd"])
+        finally:
+            _FILES_ASKING.release()
+        ctx.audit_extra.update(records=len(recs), held=len(held))
+        if got["answer"] is None:
+            why = "the answer holds none" if run.ok else ((run.err or "").strip().splitlines()[-1:] or ["no answer"])[0]
+            raise ActionError(502, "files_ask_failed", tx["failed"].format(why=app.scrub(why)[:200]))
+        files = [{**f, "slug": recs[f["n"] - 1]["slug"], "path": recs[f["n"] - 1]["path"], "title": recs[f["n"] - 1]["title"]}
+                 for f in got["files"]]
+        ctx.extra["ask"] = app.scrub_tree({"answer": got["answer"], "files": files, "sent": len(recs),
+                                           "held": {"n": len(held), "words": held_words}, "model": act.alias(got["used"] or model),
+                                           "left": app.activity.budget_left("files"), "at_ms": int(app.clock())})
 
     def v_flow_attach(self, ctx: Ctx, key: str, name: str, data: bytes) -> None:
         """A document into the open task's deliverables/, flat, under its safe name (a taken one numbered -2 to -99),

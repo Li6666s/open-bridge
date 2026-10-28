@@ -258,10 +258,13 @@ class App:
 
     def note(self, text: str, tone: str = "info", go: dict | None = None) -> dict | None:
         """A note for every page, with where it leads when it names a place (actions_base.note_go); returns that
-        place as sent, None for none. A target the scrub would change is dropped, never sent changed."""
+        place as sent, None for none. A target the scrub would change is dropped, never sent changed. It carries
+        its date beside the time (at_ms): the history lists the notes under their day, and a server that runs past
+        midnight keeps yesterday's."""
         if not text:
             return None
-        entry = {"at": m.clock_time(self.clock()), "text": self.scrub(text), "tone": tone}
+        now = self.clock()
+        entry = {"at": m.clock_time(now), "at_ms": int(now), "text": self.scrub(text), "tone": tone}
         target = note_go(go)
         if target and all(self.scrub(v) == v for v in target.values()):
             entry["go"] = target
@@ -432,13 +435,30 @@ class App:
         page's focus leads on into the files view (cockpit.focus_to_files), which tasks are files (cockpit.files_scope),
         the Work through page (cockpit.flow: on or off, its reasons to drop, its return delay) and the views its
         switch offers (cockpit.work_views). With Work through on also who the person is (cockpit.person_name):
-        a task whose next step names them waits on nobody else"""
+        a task whose next step names them waits on nobody else. The files tab's question to its records
+        (cockpit.files_search): on or off, the words of its block list and the questions left today"""
         flow = dict(getattr(self.cfg, "flow", None) or flow_defaults())
         person = getattr(self.cfg, "person_name", None) if flow.get("enabled") is True else None
         return {"view": getattr(self.cfg, "work_view", "due"), "focus_to_files": bool(getattr(self.cfg, "focus_to_files", False)),
                 "files_scope": getattr(self.cfg, "files_scope", "active"), "flow": flow,
                 "views": list(getattr(self.cfg, "work_views", None) or WORK_VIEWS),
+                "files_search": {"enabled": bool(act.block(self, "files").get("enabled")),
+                                 "block": list(act.block(self, "files").get("block") or []),
+                                 "left": self.activity.budget_left("files")},
                 **({"person": person} if person else {})}
+
+    def records_held(self, res: dict) -> dict:
+        """The records of the files tab, each with `held`: the words of the block list that keep it from a question
+        (actions_work.record_check, the check the question makes). Only with the question on and a block list, so
+        a Bridge without either reads nothing more than the records"""
+        cfg = act.block(self, "files")
+        words = list(cfg.get("block") or [])
+        if not cfg.get("enabled") or not words:
+            return res
+        from .actions_work import record_check
+        themes = self.themes.load()
+        return {**res, "records": [{**r, "held": record_check(self, words, themes, r["path"], r["slug"], r["kind"])["held"]}
+                                   for r in res.get("records") or []]}
 
     def tour_state(self) -> dict:
         """The first-run tour: whether a first visit offers it (cockpit.tour) and how it ended, if it did"""
@@ -1018,6 +1038,11 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(200, app.scrub_tree(data))
             else:
                 self.send_error_json("unreadable", app.scrub((run.err or run.out or "the search did not answer").strip())[-200:])
+        elif path == "/api/records":
+            # the start of the files tab: every task, stream and closed task as a record (lib/work_find.py records),
+            # read in place, read only; with the question on and a block list, each with the words that hold it
+            # back (actions_work.record_check), so the page counts what a question would send as the server does
+            self.send_json(200, app.scrub_tree(app.records_held(work_find.records(app.root))))
         elif path == "/api/inbox":
             item_id = one("id")
             if not details.INBOX_ID_RE.match(item_id):

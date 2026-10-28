@@ -9,15 +9,16 @@
 
 import { html, render } from './vendor/htm-preact-3.1.1.module.js'
 import { createApi } from './api.js'
-import { AGENTS_PAGE, App, CHAT_PAGE, CHECK_PAGE, SETTINGS_PAGE, START_PAGE, WORKERS_PAGE, agentsLanding, chatAreaActions, chatAsWorkspaces, pageOrder, quickLive } from './components.js'
+import { AGENTS_PAGE, App, CHAT_PAGE, CHECK_PAGE, SETTINGS_PAGE, START_PAGE, WORKERS_PAGE, agentsLanding, chatAreaActions, chatAsWorkspaces, pageOrder, parentOf, quickLive } from './components.js'
 import {
-  CONN_GRACE_MS, DAY, dismissState, giveTwin, notesOpenedState, pushNoteState, actionFailNote, replyRefusal, attentionTabs, createFailNote, createLoaders, displayedRows, errorText, freshMore, indexRows, invalidateDetails,
+  CONN_GRACE_MS, DAY, alertToasts, dismissState, giveTwin, notesOpenedState, pushNoteState, actionFailNote, replyRefusal, attentionTabs, createFailNote, createLoaders, displayedRows, errorText, freshMore, indexRows, invalidateDetails,
   isTypingTarget, isoDate, themeOverride, modalKeyAllowed, createWithBusy, createToastTimers, letterShortcut, planBusy, toastLinger, reviewHome, nextMonday, parseShortcut, planShortcut, railOn, railShown, rowByNumber, short, startRefusal,
   upsertRecord, addFeed, feedEvents, workPageOf, withLaunch, routesToFetch, newerTicker, tickerRemember,
   applyQuickLive, quickLiveSnapshot, whenShown, pruneAnswered, organizeGroups, organizeTicks, roomsOf, askContext,
-  tabWalkView, walkRefs, inProject, AREA_PAGES, areaScope, scopeKeep, scopeRow, escapeStep, keyScope, fileOpen, scopedFileQueue, TOUR_VERSION, tourIndex, tourOffered, tourSteps, queueLiveKeys, queueView, dayQueue, workViewIn, flowPageFor, flowMode,
+  tabWalkView, walkRefs, inProject, AREA_PAGES, areaScope, scopeKeep, scopeRow, escapeStep, keyScope, fileClick, scopedFileQueue, TOUR_VERSION, tourIndex, tourOffered, tourSteps, queueLiveKeys, queueView, dayQueue, workViewIn, flowPageFor, flowMode,
   focusIndex, liveDescribeAfter, homeChosen, homeListParts, homeQueue, homeView, openStream, mergePages, commandSearch, workViewWrites, focusStep,
-  canTab, flowArm, flowSettings, prepRunner, themesAsker, flowEarlyKept,
+  canTab, flowArm, flowSettings, prepRunner, themesAsker, flowEarlyKept, flowWhere, prioOn, workViewGo, workViewsIn, ghFilterKept,
+  FILES_PAGE, filesMoved,
 } from './logic.js'
 import { T, language, setControl, setLanguage } from './text.js'
 
@@ -94,6 +95,15 @@ function loadEarly() {
   }
 }
 
+/** The filters of the GitHub page kept in this browser, per section (round 6c); a convenience, never state */
+function loadGhFilter() {
+  try {
+    return ghFilterKept(JSON.parse(load('bridge-cockpit.ghFilter', '{}')))
+  } catch {
+    return {}
+  }
+}
+
 // ---------------------------------------------------------------- store
 
 function createStore(initial) {
@@ -158,8 +168,9 @@ const store = createStore({
     workView: load('bridge-cockpit.workTab', 'due'),
     workKind: load('bridge-cockpit.workKind', null),
     theme: THEME_OVERRIDE ?? load('bridge-cockpit.theme', 'auto'), drawer: null, item: null, pane: 'day', confirm: null, askFallback: null, pageDetail: false, queue: null, focusAt: null,
-    // where the files view of the work tab stands in its queue (views/dossier.js), held by the task key
-    dossierAt: null,
+    // where the files tab stands in its queue (views/dossier.js), held by the task key; filesWalk: the walk is on
+    // (the tab starts on its search), with the words, the state (open, done, all) and the kind the start filters by
+    dossierAt: null, filesWalk: false, filesQ: '', filesState: 'open', filesKind: null,
     // a file opened from the search beside that queue (its slug), and the suggested next step asked in one: { slug, conv }
     dossierOpen: null, suggest: null,
     // the shelf of every file behind the queue that lists its files (cockpit.files_scope all), null: none picked;
@@ -184,6 +195,9 @@ const store = createStore({
     // filter of its Activity, and the plan the instruction line made of a sentence, waiting for Run
     flowTab: ['desc', 'steps', 'activity', 'related'].find(v => v === load('bridge-cockpit.flowTab', 'desc')) ?? 'desc',
     flowFilter: 'all', flowPlan: null,
+    // the GitHub page (views/github.js, round 6c): the filter bar's choice per section and whether the rows stand
+    // under their board, both kept in this browser
+    ghFilter: loadGhFilter(), ghGroup: load('bridge-cockpit.ghGroup', 'on') !== 'off',
     settingsSection: load('bridge-cockpit.settingsSection', 'start'),
     busy: {}, snapshotText: null, openMsg: null, tabView: null, room: null, quickConv: null, agentPeer: null, agentConv: null, agentMode: 'question', agentsListHidden: load('bridge-cockpit.agentsList', 'shown') === 'hidden',
     // the area the Chat as cmux shows, its work or the A2A agents (views/nav.js chatAreaOf); kept in this browser
@@ -209,6 +223,10 @@ const store = createStore({
   more: {},
   // the search of the files view (/api/find): { q, status: loading|ok|error|tooShort, data, error }; null: none
   find: null,
+  // the records of the files tab's start (/api/records): { status: loading|ok|error, data, error, at }; null: not read
+  records: null,
+  // the files tab's question to the AI (verb files_ask): { status: loading|ok|error, data, error }; null: none asked
+  filesAsk: null,
 })
 
 const setUi = patch => store.set(s => ({ ...s, ui: { ...s.ui, ...(typeof patch === 'function' ? patch(s.ui) : patch) } }))
@@ -327,7 +345,8 @@ function applyState(payload) {
     // what the day's budgets of Work through still hold: summaries and instructions (round 3)
     flow_ai: payload.flow_ai ?? s.flow_ai,
     rooms: payload.rooms ?? s.rooms,
-    notes: Array.isArray(payload.notes) ? payload.notes.slice(-20).map(n => ({ ...n, ms: 0 })) : s.notes,
+    // a note keeps its date for the history's days (server at_ms); one of an older server has none (0)
+    notes: Array.isArray(payload.notes) ? payload.notes.slice(-20).map(n => ({ ...n, ms: n.at_ms ?? 0 })) : s.notes,
   }))
   // the answers being written, whole: a page that connects in the middle of one shows all of it
   if (payload.quick_live) quickLive.set(quickLiveSnapshot(payload.quick_live))
@@ -339,6 +358,7 @@ function applyState(payload) {
 }
 
 let workOffer = true   // a visit takes the work tab's view from the config once, on its first state with one
+let filesTyping = null   // the files tab's search asks the server once typing rests (ctl.setFilesFilter)
 
 /** The view the work tab opens on, from cockpit.work_view: a config changed since this browser saw it wins once
  *  over the remembered click, after that the click holds (logic.js workViewStart) */
@@ -362,13 +382,23 @@ function offerTour() {
   if (tourOffered(s.tour) && !s.ui.tour) setUi({ tour: { id: 'welcome', from: s.ui.page } })
 }
 
-/** A stored page that the profile no longer has falls back to the Briefing ('@check' is the page's own) */
+/** A stored page that the profile no longer has falls back to the Briefing ('@check' is the page's own); a sub page
+ *  has no tab but is a page all the same (parentOf) */
 function fixPage() {
   const s = store.get()
-  if (s.model && s.ui.page === CHECK_PAGE && !pageOrder(s).includes(CHECK_PAGE)) ctl.openReview()   // the check moved onto a page
+  // the files as a view of the work tab, remembered by this browser or named by the config: a tab of their own since
+  // round 6c; the work tab keeps the view it falls back to, a visit on it lands on the files tab once
+  const moved = s.model ? filesMoved(s) : null
+  if (moved) {
+    save('bridge-cockpit.workTab', moved.view)
+    setUi({ workView: moved.view })
+    if (moved.page) ctl.setPage(moved.page)
+  } else if (s.model && s.ui.page === CHECK_PAGE && !pageOrder(s).includes(CHECK_PAGE)) ctl.openReview()   // the check moved onto a page
   else if (s.ui.page === AGENTS_PAGE && chatAsWorkspaces(s)) ctl.setPage(AGENTS_PAGE)   // as cmux the agents live in the Chat
-  else if (flowPageFor(s.ui.page)) ctl.setPage(s.ui.page)   // the page @flow of an older cockpit: the work tab in its view
-  else if (s.model && !pageOrder(s).includes(s.ui.page)) setUi({ page: 'briefing' })
+  // the page @flow of an older cockpit: the work tab in its view; a Sessions page stored before round 6, where Running
+  // now lists the sessions: Running now (meant for one release; after it the fallback below opens Today)
+  else if (flowPageFor(s.ui.page, s)) ctl.setPage(s.ui.page)
+  else if (s.model && !pageOrder(s).includes(s.ui.page) && !parentOf(s, s.ui.page)) setUi({ page: 'briefing' })
 }
 
 const handlers = {
@@ -494,10 +524,12 @@ const handlers = {
   relay_state(rs) {
     store.set(s => ({ ...s, relay: { ...s.relay, ...rs, records: s.relay.records } }))
   },
+  // a tab that starts waiting toasts while it is out of sight, else it says so in the history only; one past the
+  // hour always toasts (logic.js alertToasts)
   alert(a) {
     const t = T()
     const text = a.kind === 'tab_long' ? t.tabLongToast(a.name) : t.tabToast(a.name, t.state[a.state] ?? a.state)
-    pushNote({ text, tone: 'warn', go: { kind: 'tab', ref: a.ref } })
+    pushNote({ text, tone: 'warn', go: { kind: 'tab', ref: a.ref } }, { toast: alertToasts(store.get(), a) })
     if (a.kind === 'tab_waiting' && store.get().boot.config?.voice) {
       try {
         const u = new SpeechSynthesisUtterance(t.voiceWaiting(a.name))
@@ -779,7 +811,7 @@ const ctl = {
   ask,
   copy,
   dismissToast,
-  // the notes drawer, from the "+N more" toast: the count goes, the toasts still up stay
+  // the notes under the bell, from the "+N more" toast: the count goes, the toasts still up stay
   openNotes() {
     store.set(s => ({ ...s, ...notesOpenedState(s) }))
     setUi({ drawer: 'notes' })
@@ -793,6 +825,19 @@ const ctl = {
   },
   select(key) {
     const s = store.get()
+    // the work tab without Due shows no day column to select in (a click on a tab's name, views/tabs.js): Work
+    // through opens the row's point, entry or group of Not now, anything else the row's detail beside the page
+    const work = { ...s, ui: { ...s.ui, page: 'briefing' } }
+    const view = workViewIn(work)
+    if (view !== 'due') {
+      const to = view === 'flow' ? flowWhere(areaScope(work), key) : null
+      if (!to) return ctl.peek(key, null)
+      if (s.ui.page !== 'briefing') ctl.setPage('briefing')
+      if (to.view === 'run') return ctl.flowRun(to.id)
+      if (to.view === 'left') return ctl.flowLeft(to.id)
+      return setUi(ui => ({ flowSide: { ...(ui.flowSide ?? {}), [flowMode({ ...store.get(), ui })]: null }, flowAt: { id: to.id, i: 0 },
+        flowView: 'point', flowPicked: [], flowPlan: null }))
+    }
     setUi({ selectedKey: key, focusKey: key, pageDetail: false, pane: s.layout === 'narrow' ? 'detail' : s.ui.pane })
     if (s.ui.page !== 'briefing') setUi({ page: 'briefing' })
     if (s.layout === 'narrow') requestAnimationFrame(() => window.scrollTo(0, 0))
@@ -860,21 +905,26 @@ const ctl = {
     const s = store.get()
     // as cmux the agents have no page: their way (the band, a card, a stored page) opens the Chat on its A2A area
     id = ctl.pageFor(id)
-    // Work through was a page (@flow) and is a view of the work tab now: a stored page or a link leads there
-    const flowTo = flowPageFor(id)
+    // Work through was a page (@flow) and is a view of the work tab now: a stored page or a link leads there. Where it
+    // lists the live sessions, every way to the Sessions tab (a link, a note, the band, the tour, an area's number)
+    // leads to its Running now in the middle (round 6, logic.js flowPageFor)
+    const flowTo = flowPageFor(id, s)
     if (flowTo) {
-      save('bridge-cockpit.workTab', flowTo.view)
-      setUi({ workView: flowTo.view })
+      const go = workViewGo(s, flowTo.view)
+      if (go.save) save('bridge-cockpit.workTab', go.view)
+      setUi({ workView: go.view, ...(flowTo.flowView ? { flowView: flowTo.flowView, flowRunId: null, flowPlan: null } : {}) })
       id = flowTo.page
     }
     // a page of group day has no tab: a tile or link to it opens Today, where its sections stand
     if ((s.model?.pages ?? []).some(p => p.id === id && p.group === 'day')) id = 'briefing'
-    // the work page and the Jev tab are views of the work tab where a page of group work exists
+    // the work page and the Jev tab are views of the work tab where a page of group work exists; with By source or
+    // By Jev switched off the way lands in Work through (workViewGo, nothing stored), Jev's with Prio on the left
     const work = workPageOf(s.model?.pages)
     if (work && (id === work.id || (id === '@jev' && work.jev))) {
-      const view = id === work.id ? 'area' : 'jev'
-      save('bridge-cockpit.workTab', view)
-      setUi({ workView: view })
+      const go = workViewGo(s, id === work.id ? 'area' : 'jev')
+      if (go.save) save('bridge-cockpit.workTab', go.view)
+      setUi({ workView: go.view })
+      if (id === '@jev' && go.view === 'flow' && prioOn(s)) ctl.flowMode('prio')
       id = 'briefing'
     }
     save('bridge-cockpit.page', id)
@@ -883,13 +933,33 @@ const ctl = {
     setUi({ page: id, pageDetail: false, queue: null, drawer, pane: s.layout === 'narrow' ? 'day' : s.ui.pane, workersFilter: null })
     pageSeen(id)
   },
-  // the task check: on the page where inbox and tasks stand together (its tasks label chosen), else its own tab
+  // the task check: on the page where inbox and tasks stand together (its tasks label chosen), else its own tab,
+  // also where the work tab offers no By source (reviewHome with the views on offer); where Work through is on, its
+  // page id leads to Check tasks there (setPage, flowPageFor)
   openReview() {
-    const home = reviewHome(store.get().model?.pages, T().workOrder.kinds)
+    const s = store.get()
+    const home = reviewHome(s.model?.pages, T().workOrder.kinds, workViewsIn(s))
     if (!home) return ctl.setPage(CHECK_PAGE)
     ctl.setPage(home.page)
     ctl.setWorkKind(home.label)
-    ctl.setWorkView('area')
+    if (workViewGo(store.get(), 'area').save) ctl.setWorkView('area')
+  },
+  // a page at one of its sections, its head brought into view once drawn (Not now's line of the GitHub rows); a
+  // filter given (null: all rows) replaces the one the GitHub list of that section keeps
+  openSection(page, section, ghFilter) {
+    if (ghFilter !== undefined) ctl.setGhFilter(`${page}/${section}`, ghFilter)
+    ctl.setPage(page)
+    requestAnimationFrame(() => requestAnimationFrame(() => document.getElementById(`ps-${page}-${section}`)?.scrollIntoView({ block: 'start' })))
+  },
+  // the GitHub page's filter bar: one choice per section, kept in this browser; and the rows under their board or not
+  setGhFilter(key, f) {
+    const next = ghFilterKept({ ...store.get().ui.ghFilter, [key]: f ?? {} })
+    save('bridge-cockpit.ghFilter', JSON.stringify(next))
+    setUi({ ghFilter: next })
+  },
+  setGhGroup(on) {
+    save('bridge-cockpit.ghGroup', on ? 'on' : 'off')
+    setUi({ ghGroup: !!on })
   },
   // the Workers tab with a filter set (the machine whose workers a tile or a drawer asked for)
   openWorkers(filter) {
@@ -905,10 +975,6 @@ const ctl = {
     save('bridge-cockpit.shortcuts', on ? 'on' : 'off')
     setUi({ shortcuts: on })
   },
-  cycleTheme() {
-    const order = ['auto', 'light', 'dark']
-    ctl.setTheme(order[(order.indexOf(store.get().ui.theme) + 1) % order.length])
-  },
   setDrawer: name => setUi({ drawer: name }),
   // the settings page at one of its areas (start, look, launch), kept for the next visit
   setSettingsSection(id) {
@@ -919,6 +985,12 @@ const ctl = {
     if (id) ctl.setSettingsSection(id)
     ctl.setPage(SETTINGS_PAGE)
     setUi({ drawer: null })
+  },
+  /** A topic of the look-up card from the header's Help: Settings, Appearance, the card on that topic, in view */
+  openLookup(topic) {
+    setUi({ lookupTopic: topic, lookupAt: Date.now() })
+    ctl.openSettings('look')
+    setTimeout(() => document.querySelector('.lookup-pane')?.closest?.('.set-card')?.scrollIntoView?.({ block: 'start' }), 80)
   },
   setPane(pane) {
     setUi({ pane })
@@ -1038,14 +1110,46 @@ const ctl = {
       : { order: s.jevOrder[page]?.order ?? null, error: res.error?.message ?? 'error', running: false } } }))
     if (force && res.ok && res.data.order) ctl.setWorkView('jev')
   },
-  setWorkView: v => { save('bridge-cockpit.workTab', v); setUi({ workView: v }); pageSeen('briefing') },
-  // the files view of the work tab for this visit only (the search of the command box, the focus's way on with
-  // cockpit.focus_to_files): the saved view stays the default (it changes by a click on the switch or the config)
-  openFiles() {
-    setUi({ workView: 'dossier', dossierOpen: null })
-    ctl.setPage('briefing')   // measures the page view, the files view already set
+  // a click on the switch, or a way that names a view (jevRank, openReview): a view switched off is shown as the tab's
+  // fallback and never stored (workViewGo)
+  setWorkView: v => { const go = workViewGo(store.get(), v); if (go.save) save('bridge-cockpit.workTab', go.view); setUi({ workView: go.view }); pageSeen('briefing') },
+  // the files tab: on its search with the words of the command box (`q` text), else walking the active files (the
+  // focus's way on with cockpit.focus_to_files)
+  openFiles(q = null) {
+    setUi(typeof q === 'string' ? { dossierOpen: null, filesQ: q, filesWalk: false } : { dossierOpen: null, filesWalk: true })
+    ctl.setPage(FILES_PAGE)
   },
-  dossierWalk: (id, i) => setUi({ dossierAt: { id, i }, dossierOpen: null }),
+  dossierWalk: (id, i) => setUi({ dossierAt: { id, i }, dossierOpen: null, filesWalk: true }),
+  // the files tab back on its search, the walk off and no record open
+  filesHome: () => setUi({ filesWalk: false, dossierOpen: null }),
+  // the records of its start: read again when a minute old, the last ones shown meanwhile
+  async loadRecords() {
+    const had = store.get().records
+    if (had?.status === 'loading' || (had?.status === 'ok' && Date.now() - had.at < 60000)) return
+    store.set(s => ({ ...s, records: { status: 'loading', data: s.records?.data ?? null, error: null, at: s.records?.at ?? 0 } }))
+    const res = await api.records()
+    store.set(s => ({ ...s, records: res.ok ? { status: 'ok', data: res.data, error: null, at: Date.now() }
+      : { status: 'error', data: s.records?.data ?? null, error: errorText(res.error, T()), at: Date.now() } }))
+  },
+  // a filter of the start (its words, state, kind); new words ask the server's search too, once typing rests
+  setFilesFilter(patch) {
+    setUi(patch)
+    if (!('filesQ' in patch)) return
+    clearTimeout(filesTyping)
+    const words = String(patch.filesQ ?? '').replace(/\s+/g, ' ').trim()
+    if (words.length >= 2) filesTyping = setTimeout(() => ctl.findFiles(words, 'start'), 300)
+    else store.set(s => ({ ...s, find: null }))
+  },
+  // the question to the AI over the records the start lists, never one the block list holds back (logic.js askPlan,
+  // the server checks again); its answer stands on the start until closed
+  async askRecords(text, paths) {
+    store.set(s => ({ ...s, filesAsk: { status: 'loading', data: null, error: null } }))
+    const res = await api.action('files_ask', { text, paths })
+    if (res.status === 401) failNote(res)
+    store.set(s => ({ ...s, filesAsk: res.ok ? { status: 'ok', data: res.data?.ask ?? null, error: null }
+      : { status: 'error', data: null, error: errorText(res.error, T()) } }))
+  },
+  clearFilesAsk: () => store.set(s => ({ ...s, filesAsk: null })),
   // the Work through page: a card brought to the front by its id, a chip (its queue starts over), one more decision
   flowGo: (id, i) => setUi(ui => ({ flowAt: { id, i }, flowView: 'point', flowPlan: ui.flowAt?.id === id ? ui.flowPlan : null })),
   flowChip: chip => setUi({ flowChip: chip, flowAt: null }),
@@ -1089,6 +1193,8 @@ const ctl = {
   flowRun: id => setUi(ui => ({ flowView: 'run', flowRunId: id ?? null, flowRunFrom: ui.flowView === 'running' ? 'running' : 'overview', flowPlan: null })),
   flowRunning: () => setUi({ flowView: 'running', flowRunId: null, flowPlan: null }),
   flowLeft: reason => setUi(ui => ({ flowView: 'left', flowLeft: reason ?? null, flowLeftPicked: ui.flowLeft === reason ? ui.flowLeftPicked : [], flowPlan: null })),
+  // round 6 c: the task check in the middle, its row under Not now
+  flowCheck: () => setUi({ flowView: 'check', flowRunId: null, flowPlan: null }),
   flowLeftPick: (keys, on) => setUi(ui => {
     const picked = new Set(ui.flowLeftPicked ?? [])
     for (const k of keys ?? []) { if (on) picked.add(k); else picked.delete(k) }
@@ -1215,22 +1321,30 @@ const ctl = {
   // the line of what the queue leaves out, far above, so the shelves scroll into view and the chip takes the focus
   setFileShelf: (k, reveal = false) => setUi({ fileShelf: k ?? null, fileShelfReveal: Boolean(reveal && k) }),
   fileShelfShown: () => setUi({ fileShelfReveal: false }),
-  // the search of the files view: an answer for words no longer asked is dropped
-  async findFiles(q) {
+  // the search of the files view: an answer for words no longer asked is dropped. `from` 'start': asked by the start
+  // of the files tab, which shows the hits in its own list (the results above a file leave them out)
+  async findFiles(q, from = null) {
     const words = String(q ?? '').replace(/\s+/g, ' ').trim()
-    if (words.length < 2) return store.set(s => ({ ...s, find: { q: words, status: 'tooShort', data: null, error: null } }))
-    store.set(s => ({ ...s, find: { q: words, status: 'loading', data: s.find?.data ?? null, error: null } }))
+    if (words.length < 2) return store.set(s => ({ ...s, find: { q: words, status: 'tooShort', data: null, error: null, from } }))
+    store.set(s => ({ ...s, find: { q: words, status: 'loading', data: s.find?.data ?? null, error: null, from } }))
     const res = await api.find(words)
     if (store.get().find?.q !== words) return
-    store.set(s => ({ ...s, find: res.ok ? { q: words, status: 'ok', data: res.data, error: null }
-      : { q: words, status: 'error', data: null, error: res.error?.message ?? String(res.status) } }))
+    store.set(s => ({ ...s, find: res.ok ? { q: words, status: 'ok', data: res.data, error: null, from }
+      : { q: words, status: 'error', data: null, error: res.error?.message ?? String(res.status), from } }))
   },
   clearFind: () => store.set(s => ({ ...s, find: null })),
   // a found file opens in the queue where it stands there, else beside it (a backlog task); a closed one always
   // beside it, by its folder, since a slug can be open and closed at once
-  // under the area filter: in the filtered queue, one of another area beside it (logic.js fileOpen)
+  // under the area filter: in the filtered queue, one of another area beside it (logic.js fileOpen).
+  // Outside the files tab the click opens that tab with the record (files.js fileClick); only where the files are
+  // switched off an open task shows in the item drawer over the page (one opened from a drawer leads back to it)
   openFile(slug, path) {
-    setUi(fileOpen(store.get(), slug, path))
+    const s = store.get()
+    const to = fileClick(s, slug, path)
+    const from = s.ui.drawer === 'item' ? s.ui.item : null
+    if (to.item) return from?.key === to.item ? undefined : ctl.openItem(to.item, null, {}, from)
+    setUi(to.ui)
+    if (to.page) ctl.setPage(to.page)
   },
   closeFile: () => setUi({ dossierOpen: null }),
   // one file of a task's folder (the Files drawer), read in place; `path` the folder of a closed copy, or null
@@ -1322,7 +1436,8 @@ const ctl = {
     ctl.setArea(area)
     // the view for this visit only: the saved one stays the default (a click on the switch changes it); the
     // page view is measured once, by setPage
-    if (to?.view) setUi({ workView: to.view, ...(to.view === 'dossier' ? { dossierOpen: null } : {}) })
+    if (to?.view) setUi({ workView: to.view })
+    if (to?.page === FILES_PAGE) setUi({ dossierOpen: null, filesWalk: false })
     ctl.setPage(to?.page ?? 'briefing')
     if (to?.walk) {
       ctl.walkFrom(walkRefs((store.get().tabs?.tabs ?? []).filter(t => inProject(t, area))))
@@ -1549,11 +1664,11 @@ const ctl = {
     return runPlan(plan)
   },
   async runCommand(text) {
-    // ?words searches the files: the work tab opens on its files view with the results; every code stays as it was
+    // ?words searches the files: the files tab opens on its search with the words; every code stays as it was
     const search = commandSearch(text)
     if (search !== null) {
-      ctl.openFiles()
-      if (search) await ctl.findFiles(search)
+      ctl.openFiles(search)
+      if (search) await ctl.findFiles(search, 'start')
       return true
     }
     const codes = parseShortcut(text)
@@ -1702,9 +1817,11 @@ function onKey(e) {
     return
   }
   const key = e.key
+  // ? is Explain, the first item of Help in the header: its notes over the page (the look-up card is under Settings,
+  // Appearance, Help names its topics)
   if (key === '?') {
     e.preventDefault()
-    return setUi({ drawer: 'help' })
+    return ctl.setHints(true)
   }
   if (key === '/') {
     e.preventDefault()
@@ -1743,9 +1860,8 @@ function onKey(e) {
     const to = key === 'n' ? v.next[0] : v.prev
     return to ? ctl.walkTab(to.key, { focus: true }) : undefined
   }
-  // n / p in the files view of the work tab: the same walk its bar takes (views/dossier.js)
-  if ((key === 'n' || key === 'p') && s.ui.page === 'briefing' && !s.ui.drawer && !s.ui.pageDetail
-    && workViewIn(s) === 'dossier') {
+  // n / p in the files tab while it walks: the same walk its bar takes (views/dossier.js)
+  if ((key === 'n' || key === 'p') && s.ui.page === FILES_PAGE && s.ui.filesWalk && !s.ui.drawer && !s.ui.pageDetail) {
     const queue = scopedFileQueue(s)   // the files the view shows under its filters
     const to = focusIndex(queue, s.ui.dossierAt) + (key === 'n' ? 1 : -1)
     e.preventDefault()

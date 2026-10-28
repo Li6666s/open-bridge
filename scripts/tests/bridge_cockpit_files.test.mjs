@@ -55,7 +55,7 @@ test('files and the area filter: a found file opens where the filtered queue hol
   const queue = logic.scopedFileQueue(s)
   assert.deepEqual(queue.map(x => x.slug), ['c', 'a'])
   // a hit of the area opens in the queue at its place there; one of another area beside the queue
-  assert.deepEqual(logic.fileOpen(s, 'a', 'work/tasks/a'), { dossierAt: { id: queue[1].id, i: 1 }, dossierOpen: null })
+  assert.deepEqual(logic.fileOpen(s, 'a', 'work/tasks/a'), { dossierAt: { id: queue[1].id, i: 1 }, dossierOpen: null, filesWalk: true })
   assert.deepEqual(logic.fileOpen(s, 'b', 'work/tasks/b'), { dossierOpen: 'b' })
   assert.deepEqual(logic.fileOpen(s, 'x', 'work/done/2026-10/x'), { dossierOpen: 'work/done/2026-10/x' })
   // a new filter keeps the place of a file that stands in it, else the walk starts at its first file
@@ -63,6 +63,14 @@ test('files and the area filter: a found file opens where the filtered queue hol
   assert.deepEqual(logic.scopeKeep({ ...s, ui: { ...s.ui, dossierAt: at } }).dossierAt, at)
   assert.equal(logic.scopeKeep({ ...s, ui: { ...s.ui, area: 'ORBIT', dossierAt: at } }).dossierAt, null)
   assert.equal(logic.scopeKeep({ ...s, ui: { ...s.ui, dossierAt: null } }).dossierAt, null)
+})
+
+test('the controller opens a task\'s file the way fileClick says: the item drawer where there is no files tab, else the tab', () => {
+  // the cases themselves: the test of the files tab below (every link that opens a task's file)
+  const open = read('app.js').match(/\n {2}openFile\(slug, path\) \{[\s\S]*?\n {2}\},/)[0]
+  assert.match(open, /fileClick\(/)
+  assert.match(open, /ctl\.openItem\(/)
+  assert.match(open, /ctl\.setPage\(/)
 })
 
 // ---------------------------------------------------------------- the files view: one queue for every walk
@@ -149,8 +157,8 @@ test('a file is its task row, not a board item that names the same task', () => 
 
 test('n and p walk the files view the way its bar does, the one files queue', () => {
   const app = read('app.js')
-  const body = app.match(/\/\/ n \/ p in the files view[\s\S]*?\n  \}/)[0]
-  assert.match(body, /workViewIn\(s\) === 'dossier'/)
+  const body = app.match(/\/\/ n \/ p in the files tab[\s\S]*?\n  \}/)[0]
+  assert.match(body, /s\.ui\.page === FILES_PAGE && s\.ui\.filesWalk/)
   assert.match(body, /scopedFileQueue\(s\)/)
   assert.match(body, /focusIndex\(queue, s\.ui\.dossierAt\) \+ \(key === 'n' \? 1 : -1\)/)
   assert.match(body, /ctl\.dossierWalk\(queue\[to\]\.id, to\)/)
@@ -183,12 +191,11 @@ test('the age of a step in whole days, from a date, a date and time, or millisec
   assert.equal(logic.stepAge('not a date', now), null)
 })
 
-test('the work tab offers the files view beside the others, never as its default', () => {
+test('the work tab no longer offers the files view: a remembered one falls back, the default stays Due', () => {
   const work = { id: 'work', group: 'work', jev: true }
   const ready = { enabled: true, ready: true }
-  assert.deepEqual(logic.workViews(work, ready), ['due', 'area', 'jev', 'dossier'])
-  assert.deepEqual(logic.workViews(null, ready), ['due', 'dossier'])
-  assert.equal(logic.workViewOf('dossier', null, ready), 'dossier')
+  assert.deepEqual(logic.workViews(null, ready), ['due'])
+  assert.equal(logic.workViewOf('dossier', null, ready), 'due')
   assert.equal(logic.workViewOf(undefined, work, ready), 'due')
 })
 
@@ -269,10 +276,10 @@ test('files: the command box searches before it parses codes, and a suggestion s
   const app = read('app.js')
   const run = app.slice(app.indexOf('async runCommand(text)'))
   assert.ok(run.indexOf('commandSearch(text)') >= 0 && run.indexOf('commandSearch(text)') < run.indexOf('parseShortcut(text)'))
-  // the search opens the files view for this visit only: the saved work view stays what it was
+  // the search opens the files tab on its search with the words: the saved work view stays what it was
   const search = run.slice(0, run.indexOf('parseShortcut(text)'))
   assert.doesNotMatch(search, /setWorkView|save\(/)
-  assert.match(search, /ctl\.openFiles\(\)/)   // which sets workView 'dossier' and saves nothing (test below)
+  assert.match(search, /ctl\.openFiles\(search\)/)
   // an answer for words no longer asked is dropped; a suggestion asks in its own place; only a click writes it
   assert.match(app, /if \(store\.get\(\)\.find\?\.q !== words\) return/)
   assert.match(app, /place: 'suggest'/)
@@ -340,7 +347,8 @@ test('every walk of the files view reads the workflow runs of the sessions state
 
 // ---------------------------------------------------------------- the files view: one file large, the next ones after it
 
-const filesOn = (over = {}) => cockpitState(NOW, { ...over, ui: { page: 'briefing', workView: 'dossier', ...(over.ui ?? {}) } })
+// the files tab walking its queue (ui.filesWalk), as a link to a file or a click on its walk leaves it
+const filesOn = (over = {}) => cockpitState(NOW, { ...over, ui: { page: '@files', filesWalk: true, ...(over.ui ?? {}) } })
 
 test('the files view shows one file as one surface: its head, its next step with the four verbs, its walk at its foot', async () => {
   const { DossierView, dossierQueue } = views.dossier
@@ -378,9 +386,10 @@ test('the files view shows one file as one surface: its head, its next step with
   assert.equal(items[0].getAttribute('aria-current'), 'true')
   items[3].click()
   assert.deepEqual(c.calls.filter(x => x[0] === 'dossierWalk').at(-1), ['dossierWalk', queue[3].id, 3])
-  // the view switch stands on top, the files view on
-  const on = el.$$('.work-switch button').find(b => b.getAttribute('aria-checked') === 'true')
-  assert.equal(on.text(), en.workOrder.views.dossier)
+  // no switch of the work tab on top (the files are a tab of their own), the way back to the search
+  assert.ok(!el.$('.work-switch'), 'no work switch')
+  el.button(en.dossier.start.back).click()
+  assert.deepEqual(c.calls.at(-1), ['filesHome'])
 })
 
 test('a file whose next step comes from STATUS.md says so, with its age, and the verbs act on the task', () => {
@@ -444,7 +453,7 @@ test('the drawers of a file come folded, each with its count, from what the task
 
 test('with no file in the queue the files view rests calmly', () => {
   const { DossierView } = views.dossier
-  const s = { ...filesOn(), ...cockpitState(NOW, { model: loadedRooms.mock.buildState(NOW, { empty: true }).model, ui: { page: 'briefing', workView: 'dossier' } }) }
+  const s = { ...filesOn(), ...cockpitState(NOW, { model: loadedRooms.mock.buildState(NOW, { empty: true }).model, ui: { page: '@files', filesWalk: true } }) }
   const el = mount(html`<${DossierView} s=${s} c=${recorder()} />`)
   assert.ok(el.$('.fx-calm'))
   assert.equal(el.$('.fx-calm .fx-title').text(), en.dossier.empty)
@@ -484,16 +493,13 @@ async function typeAndSend(el, selector, value) {
   await tick()
 }
 
-test('the files view has a search field of its own; what is typed there is searched, never run as a code', async () => {
+test('the files view has no search field of its own: the one search is the start\'s, the head leads back to it', () => {
   const { DossierView } = views.dossier
-  const c = answering()
+  const c = recorder()
   const el = mount(html`<${DossierView} s=${filesOn()} c=${c} />`)
-  const form = el.$('form.dz-find')
-  assert.ok(form && form.getAttribute('role') === 'search')
-  assert.equal(el.$('form.dz-find input').getAttribute('placeholder'), en.dossier.find.placeholder)
-  await typeAndSend(el, '.dz-find', '  2a vendor  ')
-  assert.deepEqual(c.calls.filter(x => x[0] === 'findFiles'), [['findFiles', '2a vendor']])
-  assert.equal(c.calls.filter(x => x[0] === 'act' || x[0] === 'runCommand').length, 0)
+  assert.ok(!el.$('form.dz-find'), 'no second field')
+  el.button(en.dossier.start.back).click()
+  assert.deepEqual(c.calls.at(-1), ['filesHome'])
 })
 
 test('the results come by file, best first; a click opens a file, a closed one too; a log line has none to open', () => {
@@ -604,26 +610,6 @@ test('a file without a next step offers a suggestion; the answer shows read only
 })
 
 // ---------------------------------------------------------------- the files view: review fixes of E2
-
-test('files: the search field shows the words searched last, also when they came from the command box', async () => {
-  const { DossierView } = views.dossier
-  const field = el => boxValue(el.$('form.dz-find input'))
-  const el = mount(html`<${DossierView} s=${filesOn({ find: { q: 'vendor export', status: 'ok', data: FOUND } })} c=${recorder()} />`)
-  await tick()
-  assert.equal(field(el), 'vendor export')
-  // ?invoice in the command box while the view is open: the field follows
-  loadedRooms.render(html`<${DossierView} s=${filesOn({ find: { q: 'invoice', status: 'loading', data: null } })} c=${recorder()} />`, el)
-  await tick()
-  assert.equal(field(el), 'invoice')
-  // what is typed stays while the search stays the same
-  const input = el.$('form.dz-find input')
-  input.value = 'invoice vendor'
-  input.dispatch('input')
-  await tick()
-  loadedRooms.render(html`<${DossierView} s=${filesOn({ find: { q: 'invoice', status: 'ok', data: FOUND } })} c=${recorder()} />`, el)
-  await tick()
-  assert.equal(field(el), 'invoice vendor')
-})
 
 test('files: a found closed file opens by its folder, so a slug open and closed are two files', () => {
   const { DossierView } = views.dossier
@@ -976,4 +962,253 @@ test('the cover of a file names Task or Stream first, then where it comes from, 
     assert.match(el.$('.dz-eyebrow-what .kind').text(), new RegExp(`${word}$`))
     assert.equal(el.$('.dz-eyebrow-what .origin-word').text(), en.origin.skill)
   }
+})
+
+// ---------------------------------------------------------------- the files tab (round 6c): its own tab, search first
+
+const REC = (slug, over = {}) => ({ slug, kind: 'task', path: `work/tasks/${slug}`, title: `Task ${slug}`, status: 'doing',
+  priority: null, area: null, updated: '2026-10-01', work_kind: 'task', ...over })
+const RECORDS = [
+  REC('invoice-onboarding', { title: 'Onboard the invoice vendor', area: 'acme', updated: '2026-10-08' }),
+  REC('ops-watch', { kind: 'stream', path: 'work/streams/ops-watch', work_kind: 'stream', title: 'Watch the runs', updated: '2026-10-05' }),
+  REC('versicherung-bestand', { title: 'Policies in review', updated: '2026-10-07' }),
+  REC('old-report', { kind: 'done', path: 'work/done/2026-09/old-report', work_kind: 'done_task', status: 'done', title: 'September report', updated: '2026-09-30' }),
+]
+const tabState = (ui = {}, over = {}) => cockpitState(NOW, { records: { status: 'ok', data: { ok: true, total: 4, truncated: false, records: RECORDS } },
+  work: { ...cockpitState(NOW).work, files_search: { enabled: true, block: ['Versicherung', 'Gesundheit'], left: 5 } },
+  ...over, ui: { page: '@files', ...ui } })
+
+test('the files are a tab of their own beside Work: off the switch, in the bar right after Work, a stored view leads there', async () => {
+  const nav = views.nav
+  const work = { id: 'w', group: 'work', jev: true, sections: [] }
+  const ready = { enabled: true, ready: true }
+  assert.deepEqual(logic.workViews(work, ready), ['due', 'area', 'jev'])
+  assert.deepEqual(logic.workViews(null, null, true, ['files', 'flow']), ['flow'], 'files and Work through: Work through alone, no switch')
+  assert.deepEqual(logic.workViews(null, null, false, ['files']), ['due'], 'only the files: every other view')
+  const s = cockpitState(NOW)
+  assert.equal(logic.filesOn(s), true)
+  const order = nav.pageOrder(s)
+  assert.equal(order[order.indexOf('briefing') + 1], logic.FILES_PAGE)
+  // a Bridge whose work_views leave the files out has no tab, and its links open the item drawer as before
+  const none = { ...s, work: { ...s.work, views: ['flow'] } }
+  assert.equal(logic.filesOn(none), false)
+  assert.ok(!nav.pageOrder(none).includes(logic.FILES_PAGE))
+  // a browser that remembers the files as the work tab's view, or a config that named them, lands on the tab once
+  assert.deepEqual(logic.filesMoved({ ...s, ui: { ...s.ui, page: 'briefing', workView: 'dossier' } }), { view: 'flow', page: logic.FILES_PAGE })
+  assert.deepEqual(logic.filesMoved({ ...s, ui: { ...s.ui, page: '@start', workView: 'dossier' } }), { view: 'flow', page: null })
+  assert.equal(logic.filesMoved({ ...s, ui: { ...s.ui, workView: 'flow' } }), null)
+  const fix = read('app.js').match(/\nfunction fixPage\(\) \{[\s\S]*?\n\}/)[0]
+  assert.match(fix, /filesMoved\(s\)/)
+  assert.match(fix, /save\('bridge-cockpit\.workTab', moved\.view\)/)
+})
+
+test('every link that opens a task\'s file opens the files tab with that record open', () => {
+  const s = cockpitState(NOW, { ui: { page: 'briefing', workView: 'flow' } })
+  const queue = logic.scopedFileQueue(s)
+  const x = queue[1]
+  for (const ui of [{ page: 'briefing', workView: 'flow' }, { page: '@start' }, { page: 'briefing', drawer: 'item' }]) {
+    const at = { ...s, ui: { ...s.ui, ...ui } }
+    assert.deepEqual(logic.fileClick(at, x.slug, null), { ui: { drawer: null, item: null, dossierAt: { id: x.id, i: 1 }, dossierOpen: null, filesWalk: true },
+      page: logic.FILES_PAGE }, JSON.stringify(ui))
+  }
+  const closed = 'work/done/2026-10/x'
+  assert.deepEqual(logic.fileClick(s, 'x', closed), { ui: { drawer: null, item: null, dossierOpen: closed }, page: logic.FILES_PAGE })
+  // in the files tab the record opens where it is
+  const here = { ...s, ui: { ...s.ui, page: logic.FILES_PAGE } }
+  assert.deepEqual(logic.fileClick(here, 'x', closed), { ui: { dossierOpen: closed } })
+  // without the files view the item drawer, as before
+  assert.deepEqual(logic.fileClick({ ...s, work: { ...s.work, views: ['flow'] } }, x.slug, null), { item: `task:${x.slug}` })
+})
+
+test('the start of the files tab lists the records, newest change first, filtered live by words, area, state and kind', () => {
+  const all = logic.recordList(tabState({ filesState: 'all' }))
+  assert.deepEqual(all.rows.map(r => r.slug), ['invoice-onboarding', 'versicherung-bestand', 'ops-watch', 'old-report'])
+  // open is the default state, the closed ones apart
+  assert.deepEqual(logic.recordList(tabState()).rows.map(r => r.slug), ['invoice-onboarding', 'versicherung-bestand', 'ops-watch'])
+  assert.deepEqual(logic.recordList(tabState({ filesState: 'done' })).rows.map(r => r.slug), ['old-report'])
+  assert.deepEqual(logic.recordList(tabState({ filesState: 'all', filesKind: 'stream' })).rows.map(r => r.slug), ['ops-watch'])
+  assert.deepEqual(logic.recordList(tabState({ filesState: 'all', filesKind: 'done' })).rows.map(r => r.slug).length, 4, 'closed is a state, no kind')
+  // the words over title, slug, area and theme, every word; the area filter as everywhere
+  assert.deepEqual(logic.recordList(tabState({ filesState: 'all', filesQ: 'invoice VENDOR' })).rows.map(r => r.slug), ['invoice-onboarding'])
+  assert.deepEqual(logic.recordList(tabState({ filesState: 'all', filesQ: 'acme' })).rows.map(r => r.slug), ['invoice-onboarding'])
+  assert.deepEqual(logic.recordList(tabState({ area: 'ACME' })).rows.map(r => r.slug), ['invoice-onboarding'])
+  // what the server's search found in STATUS.md counts too, with the line as its snippet
+  const find = { q: 'gateway', status: 'ok', data: { ok: true, total: 1, truncated: false, groups: [{ slug: 'old-report', kind: 'done',
+    path: 'work/done/2026-09/old-report', title: 'September report', rank: 1, count: 1, hits: [{ path: 'work/done/2026-09/old-report/STATUS.md', line: 3, text: 'the gateway answered 422' }] }] } }
+  const hit = logic.recordList(tabState({ filesState: 'all', filesQ: 'gateway' }, { find }))
+  assert.deepEqual(hit.rows.map(r => [r.slug, r.hit]), [['old-report', 'the gateway answered 422']])
+  assert.deepEqual(all.areas, ['acme'])
+})
+
+test('the question to the AI holds back every record a word of the block list names, and says how many and why', () => {
+  const rows = logic.recordList(tabState({ filesState: 'all' })).rows
+  const plan = logic.askPlan(rows, ['Versicherung', 'Gesundheit'])
+  assert.deepEqual(plan.paths, ['work/tasks/invoice-onboarding', 'work/streams/ops-watch', 'work/done/2026-09/old-report'])
+  assert.deepEqual(plan.held, { n: 1, words: ['Versicherung'] })
+  assert.ok(!plan.paths.some(p => p.includes('versicherung')), 'a held record never goes out')
+  const one = logic.askPlan([{ ...rows[0], area: 'Familie/Gesundheit' }], ['Versicherung', 'Gesundheit'])
+  assert.deepEqual(one, { paths: [], held: { n: 1, words: ['Gesundheit'] } })
+  const many = Array.from({ length: 20 }, (_, i) => ({ ...rows[0], path: `work/tasks/t-${i}` }))
+  assert.equal(logic.askPlan([...many, ...many], []).paths.length, 12, 'at most twelve, each once')
+  assert.equal(en.dossier.start.held(3, ['Versicherung', 'Gesundheit']), '3 records stay private: Versicherung, Gesundheit.')
+  assert.equal(text.TABLES.de.dossier.start.held(3, ['Versicherung', 'Gesundheit']), '3 Akten bleiben privat: Versicherung, Gesundheit.')
+})
+
+test('the files tab starts on its search: the field, the chips, the records, the AI only on a click', async () => {
+  const { DossierView } = views.dossier
+  const c = answering()
+  const el = mount(html`<${DossierView} s=${tabState()} c=${c} />`)
+  assert.ok(!el.$('.work-switch'), 'no switch of the work tab')
+  const field = el.$('.fs-find input')
+  assert.ok(field && field.hasAttribute('autofocus'), 'a large search field that takes the focus')
+  assert.equal(field.getAttribute('placeholder'), en.dossier.start.placeholder)
+  assert.ok(!el.$('.dz-cover'), 'no file of the walk until asked')
+  const items = el.$$('.fs-list > li')
+  assert.equal(items.length, 3)
+  assert.ok(items[0].text().includes('Onboard the invoice vendor') && items[0].text().includes('acme'))
+  items[0].$('button.fs-open').click()
+  assert.deepEqual(c.calls.filter(x => x[0] === 'openFile'), [['openFile', 'invoice-onboarding', 'work/tasks/invoice-onboarding']])
+  // typing filters live and asks the server's search for the words
+  field.value = 'runs'
+  field.dispatch('input')
+  await tick()
+  assert.deepEqual(c.calls.filter(x => x[0] === 'setFilesFilter').at(-1), ['setFilesFilter', { filesQ: 'runs' }])
+  // the chips: state and kind
+  el.$$('.fs-chips button').find(b => b.text() === en.dossier.start.state.done).click()
+  assert.deepEqual(c.calls.filter(x => x[0] === 'setFilesFilter').at(-1), ['setFilesFilter', { filesState: 'done' }])
+  // the AI: nothing sent by itself; the note says before the click how many go and which stay private
+  assert.equal(c.calls.filter(x => x[0] === 'askRecords').length, 0)
+  assert.equal(el.$('.fs-ask-note').text(), `${en.dossier.start.sends(2)} ${en.dossier.start.held(1, ['Versicherung'])} ${en.dossier.start.left(5)}`)
+  el.button(en.dossier.start.ask(2)).click()
+  await tick()
+  assert.deepEqual(c.calls.filter(x => x[0] === 'askRecords'), [['askRecords', en.dossier.start.askDefault, ['work/tasks/invoice-onboarding', 'work/streams/ops-watch']]])
+  // the walk through the active files stays one click away
+  el.$('.fs-walk button').click()
+  assert.ok(c.calls.some(x => x[0] === 'dossierWalk'))
+})
+
+test('the answer of the AI shows with links to the records it names; switched off there is no button', () => {
+  const { DossierView } = views.dossier
+  const c = recorder()
+  const ask = { status: 'ok', data: { answer: 'The vendor one waits.', files: [{ n: 1, why: 'waits on the vendor', slug: 'invoice-onboarding',
+    path: 'work/tasks/invoice-onboarding', title: 'Onboard the invoice vendor' }], sent: 2, held: { n: 1, words: ['Versicherung'] }, model: 'haiku' } }
+  const el = mount(html`<${DossierView} s=${tabState({}, { filesAsk: ask })} c=${c} />`)
+  assert.ok(el.$('.fs-answer').text().includes('The vendor one waits.'))
+  el.$('.fs-answer button.fs-open').click()
+  assert.deepEqual(c.calls.at(-1), ['openFile', 'invoice-onboarding', 'work/tasks/invoice-onboarding'])
+  const off = tabState({}, { work: { ...cockpitState(NOW).work, files_search: { enabled: false, block: [], left: 0 } } })
+  assert.equal(mount(html`<${DossierView} s=${off} c=${recorder()} />`).$('.fs-ask'), null)
+})
+
+test('a record open in the files tab leads back to the search; the walk too', () => {
+  const { DossierView } = views.dossier
+  const c = recorder()
+  const el = mount(html`<${DossierView} s=${tabState({ filesWalk: true })} c=${c} />`)
+  assert.ok(el.$('.dz-cover'), 'the walk shows its file')
+  el.button(en.dossier.start.back).click()
+  assert.deepEqual(c.calls.at(-1), ['filesHome'])
+})
+
+// ---------------------------------------------------------------- round 6 c fixes: the start of the files tab
+
+test('6c fix: the preview counts what the server holds back, by the words it names per record', () => {
+  // the server checks the text that goes too (actions_work.record_check): a record clean by its title is held all
+  // the same when it says so, and one it lets through goes
+  const rows = [{ ...REC('school-board'), held: ['Versicherung'] }, { ...REC('plain'), held: [] }, REC('older-server')]
+  const plan = logic.askPlan(rows, ['Versicherung'])
+  assert.deepEqual(plan.paths, ['work/tasks/plain', 'work/tasks/older-server'])
+  assert.deepEqual(plan.held, { n: 1, words: ['Versicherung'] })
+})
+
+test('6c fix: the question to the AI has its own field, says before the click what a click sends and how many are left', async () => {
+  const { DossierView } = views.dossier
+  const f = en.dossier.start
+  const c = answering()
+  const el = mount(html`<${DossierView} s=${tabState()} c=${c} />`)
+  assert.equal(el.$('.fs-ask-note').text(), `${f.sends(2)} ${f.held(1, ['Versicherung'])} ${f.left(5)}`)
+  const q = el.$('.fs-askq input')
+  assert.ok(q, 'a field of its own for the question')
+  q.value = 'Which one waits on the vendor?'
+  q.dispatch('input')
+  await tick()
+  el.button(f.ask(2)).click()
+  await tick()
+  assert.deepEqual(c.calls.filter(x => x[0] === 'askRecords'),
+    [['askRecords', 'Which one waits on the vendor?', ['work/tasks/invoice-onboarding', 'work/streams/ops-watch']]])
+  assert.match(f.sends(2), /^A click/)
+  // the search words are never the question
+  assert.ok(!c.calls.some(x => x[0] === 'askRecords' && x[1] === 'runs'))
+  // none left today: the button waits, the note says so
+  const spent = tabState({}, { work: { ...cockpitState(NOW).work, files_search: { enabled: true, block: [], left: 0 } } })
+  const none = mount(html`<${DossierView} s=${spent} c=${recorder()} />`)
+  assert.ok(none.button(f.ask(3)).hasAttribute('disabled'))
+  assert.match(none.$('.fs-ask-note').text(), new RegExp(f.noneLeft))
+  // no record listed: no line about privacy, there is nothing to keep back
+  const empty = mount(html`<${DossierView} s=${tabState({ filesQ: 'qqxyzzy' })} c=${recorder()} />`)
+  assert.equal(empty.$('.fs-ask-note').text(), f.noneToSend)
+  // the German words: AI as everywhere in the cockpit, plain sentences without config keys or semicolons
+  const de = text.TABLES.de
+  for (const k of ['ask', 'asking', 'answer', 'noneToSend', 'nothingToSend', 'noneLeft']) {
+    const v = typeof de.dossier.start[k] === 'function' ? de.dossier.start[k](2) : de.dossier.start[k]
+    assert.doesNotMatch(v, /\bKI\b/, k)
+  }
+  for (const [k, v] of Object.entries(de.errors).filter(([k]) => k.startsWith('files_ask_'))) {
+    assert.doesNotMatch(v, /[;(]|cockpit\.|workflow\//, k)
+    assert.doesNotMatch(v, /\bKI\b/, k)
+  }
+})
+
+test('6c fix: the chips are labelled, Kind is task or stream, a closed task counts as a task', () => {
+  const { DossierView } = views.dossier
+  const el = mount(html`<${DossierView} s=${tabState()} c=${recorder()} />`)
+  const f = en.dossier.start
+  assert.deepEqual(el.$$('.fs-chip-label').map(x => x.text()), [f.area, f.stateLabel, f.kindLabel])
+  assert.ok(!el.$$('.fs-chips button').some(b => b.text() === f.state.done && b.parentNode.getAttribute('aria-label') === f.kindLabel),
+    'closed is a state, not a kind')
+  assert.deepEqual(logic.recordList(tabState({ filesState: 'all', filesKind: 'task' })).rows.map(r => r.slug),
+    ['invoice-onboarding', 'versicherung-bestand', 'old-report'])
+})
+
+test('6c fix: the matching line reads as text: no Markdown marks, no table pipes, never a slug line', () => {
+  const group = (lines) => ({ q: 'irrtum', status: 'ok', data: { ok: true, total: 1, truncated: false, groups: [{ slug: 'old-report', kind: 'done',
+    path: 'work/done/2026-09/old-report', title: 'September report', rank: 1, count: lines.length,
+    hits: lines.map((text, i) => ({ path: 'work/done/2026-09/old-report/STATUS.md', line: i + 1, text })) }] } })
+  const hitOf = lines => logic.recordList(tabState({ filesState: 'all', filesQ: 'irrtum' }, { find: group(lines) })).rows[0].hit
+  assert.equal(hitOf(['**Korrigierter Irrtum:** the `vendor` sent _twice_']), 'Korrigierter Irrtum: the vendor sent twice')
+  assert.equal(hitOf(['| 2026-10-26 20:36 | 📋 | old-report | irrtum fixed |']), '2026-10-26 20:36 · 📋 · old-report · irrtum fixed')
+  assert.equal(hitOf(['slug: old-report', '## Irrtum noted']), 'Irrtum noted')
+  assert.equal(hitOf(['slug: old-report']), null)
+  // a cut snippet of a log row, and a front matter line, read as their text
+  assert.equal(hitOf(['| 2026-10-26 20:36 | 📋 | old-report | irrtum fixed in the run…']), '2026-10-26 20:36 · 📋 · old-report · irrtum fixed in the run…')
+  assert.equal(hitOf(['…the run | irrtum fixed |']), '…the run · irrtum fixed')
+  assert.equal(hitOf(['…ops, mail, cockpit | Irrtum fixed in the run, …']), '…ops, mail, cockpit · Irrtum fixed in the run, …')
+  assert.equal(hitOf(['headline: "Irrtum in the September report"']), 'Irrtum in the September report')
+  assert.equal(en.dossier.start.ask(0), 'Ask the AI')
+  // a line that only repeats the title says nothing more
+  assert.equal(hitOf(['headline: "September report"']), null)
+})
+
+test('6c fix: a record opened from the search has one way back and no second search; its area is the one the list named', () => {
+  const { DossierView } = views.dossier
+  const recs = RECORDS.map(r => (r.slug === 'ops-watch' ? { ...r, area: 'ops' } : r))
+  const s = tabState({ dossierOpen: 'ops-watch' }, {
+    records: { status: 'ok', data: { ok: true, total: 4, truncated: false, records: recs } },
+    details: { task: { 'ops-watch': { status: 'ok', ver: 0, data: { kind: 'stream', work_kind: 'stream', front: { status: 'doing' }, files: [] } } } } })
+  assert.equal(logic.recordList({ ...s, ui: { ...s.ui, filesQ: 'watch' } }).rows[0].area, 'ops')
+  const c = recorder()
+  const el = mount(html`<${DossierView} s=${s} c=${c} />`)
+  assert.ok(!el.$('form.dz-find'), 'no second search field')
+  assert.equal(el.$$('button').filter(b => b.text() === en.dossier.start.back).length, 1)
+  assert.match(el.$('.dz-cover .dz-eyebrow-end').text(), /ops/)
+  const what = el.$('.dz-eyebrow-what').text()
+  assert.equal((what.match(/stream/gi) ?? []).length, 1, what)
+})
+
+test('6c fix: the walk stands beside the search, in one form of words', () => {
+  const { DossierView } = views.dossier
+  const el = mount(html`<${DossierView} s=${tabState()} c=${recorder()} />`)
+  assert.ok(el.$('.fs-top .fs-walk button'), 'beside the field')
+  assert.equal(en.dossier.start.walk(1), 'Walk through the active records (1)')
+  assert.equal(text.TABLES.de.dossier.start.walk(4), 'Aktive Akten durchgehen (4)')
+  assert.equal(text.TABLES.de.dossier.start.walk(1), 'Aktive Akten durchgehen (1)')
 })

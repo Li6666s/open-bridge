@@ -108,6 +108,22 @@ test('return card: the cross takes the start off the list', () => {
   assert.deepEqual(c.calls.at(-1), ['act', 'return_forget', { key: 'inbox:20261009-0910-tidy-labels-c3d4' }])
 })
 
+test('the sessions page: a settled start is done, never to check; it stands there only while its tab is open to be closed', () => {
+  const old = n => start({ key: `inbox:20261001-0900-old-${n}`, item: `20261001-0900-old-${n}`, title: `Old start ${n}`,
+    stage: 'done', tab: null, at_ms: NOW - 3 * 24 * 60 * MIN })
+  const s = withReturns([old(1), old(2), start({ stage: 'done' })], { ui: { page: '@sessions' } })
+  const box = mount(html`<${views.sessions.SessionsPage} s=${s} c=${recorder()} />`).$('.ai-returns')
+  assert.ok(box !== null, 'the section of the starts stands')
+  const heads = box.$$('.ai-group h4').map(h => h.text())
+  assert.ok(!heads.some(h => h.startsWith(en.aiGroup.check)), heads.join(' | '))
+  assert.deepEqual(heads, [`${en.aiGroup.done} 1`])
+  assert.deepEqual(box.$$('.rcard-title').map(b => b.text()), ['Tidy the issue labels on the demo board'])
+  assert.ok(box.button(en.btnCloseTab) !== null, 'its tab can go')
+  // with nothing but old settled starts nothing is left for you: no section at all
+  const quiet = withReturns([old(1), old(2)], { ui: { page: '@sessions' } })
+  assert.ok(!mount(html`<${views.sessions.SessionsPage} s=${quiet} c=${recorder()} />`).$('.ai-returns'), 'the old starts stand there')
+})
+
 // ---------------------------------------------------------------- TabControls
 
 function renderControls(ref, { slim = true, tab: patch = {}, returns = [], ...over } = {}) {
@@ -241,6 +257,178 @@ test('header: a cockpit with only its own state names that, and a normal one sho
   const demo = renderHeader(null, { mock: true })
   assert.equal(demo.$('.hdr-scratch'), null)
   assert.equal(demo.$('.hdr-demo .hdr-demo-long').text(), en.demoBadge)
+})
+
+// ---------------------------------------------------------------- the page bar: More and the keys in the tooltips
+
+/** The page bar as on a screen too narrow for its tabs, handed to `check`: the DOM has no layout, so the bar is told
+ *  that it overflows (scrollWidth past clientWidth) and folds every tab of the more group behind More, one a render.
+ *  It reads its active tab back and listens for resize (as in the aria suite); the stubs stand for this mount only,
+ *  and the bar is unmounted before they go */
+async function foldedBar(s, check) {
+  const { render } = await loadCockpit()
+  const proto = Object.getPrototypeOf(document.body)
+  const saved = ['querySelector', 'offsetLeft', 'offsetWidth', 'scrollWidth', 'clientWidth'].map(k => [k, Object.getOwnPropertyDescriptor(proto, k)])
+  const hadWindow = 'window' in globalThis
+  if (!hadWindow) globalThis.window = { addEventListener() {}, removeEventListener() {}, innerWidth: 1280 }
+  Object.defineProperty(proto, 'querySelector', { value(sel) { return this.$(sel) }, configurable: true, writable: true })
+  for (const k of ['offsetLeft', 'offsetWidth', 'clientWidth']) Object.defineProperty(proto, k, { get: () => 0, configurable: true })
+  Object.defineProperty(proto, 'scrollWidth', { get() { return this.hasClass('pagebar') ? 2000 : 0 }, configurable: true })
+  const root = document.createElement('div')
+  try {
+    render(html`<${views.header.PageBar} s=${s} c=${recorder()} />`, root)
+    await new Promise(resolve => setTimeout(resolve, 30))
+    check(root)
+  } finally {
+    render(null, root)
+    for (const [k, d] of saved) { if (d) Object.defineProperty(proto, k, d); else delete proto[k] }
+    if (!hadWindow) delete globalThis.window
+  }
+}
+
+test('page bar: More wears a dot only for a reason behind it; a grey count, an idle agent or a green ok is none', async () => {
+  const base = cockpitState(NOW)
+  const calm = cockpitState(NOW, { agents: { ...base.agents, convs: [] }, ui: { page: '@start' } })
+  await foldedBar(calm, el => {
+    const more = el.$('.ptab-more button')
+    assert.ok(more !== null, 'the tabs of the more group fold behind More')
+    assert.equal(more.text().startsWith(en.morePages), true)
+    assert.ok(!more.$('.dot'), 'a dot on More with nothing behind it')
+  })
+  // a page behind More with a finding: its colour on More
+  const page = { id: 'llm', title: 'Models', group: 'more', badge: { kind: 'bad', n: 2 }, sections: [] }
+  const bad = { ...calm, model: { ...calm.model, pages: [...calm.model.pages, page] } }
+  await foldedBar(bad, el => assert.ok(!!el.$('.ptab-more button .dot.tk-danger'), 'no red dot for a finding behind More'))
+  const ok = { ...calm, model: { ...calm.model, pages: [...calm.model.pages, { ...page, badge: { kind: 'ok' } }] } }
+  await foldedBar(ok, el => assert.ok(!el.$('.ptab-more button .dot'), 'a dot on More for a green ok'))
+  // background jobs: an outage is red on More, upkeep alone no reason (proposal 5, jobCounts)
+  const runs = [{ id: 'a', state: 'last_run_failed', severity: 'high' }, { id: 'b', state: 'drifted', severity: 'medium' }]
+  const down = { ...calm, workers: { status: 'ok', data: { stats: { with_findings: 2, in_service: 2 }, runs } } }
+  await foldedBar(down, el => assert.ok(!!el.$('.ptab-more button .dot.tk-danger'), 'no red dot for an outage of the jobs'))
+  const upkeep = { ...calm, workers: { status: 'ok', data: { stats: { with_findings: 1, in_service: 1 }, runs: [runs[1]] } } }
+  await foldedBar(upkeep, el => assert.ok(!el.$('.ptab-more button .dot'), 'a dot on More for upkeep of the jobs'))
+})
+
+test('page bar and header: a tooltip names a key only while the shortcuts are on', async () => {
+  const proto = Object.getPrototypeOf(document.body)
+  proto.focus ??= function focus() { document.activeElement = this }
+  const off = cockpitState(NOW, { ui: { page: '@start' } })
+  const on = cockpitState(NOW, { ui: { page: '@start', shortcuts: true } })
+  await foldedBar(off, el => {
+    const titles = el.$$('[title]').map(x => x.getAttribute('title'))
+    assert.ok(!titles.some(x => /\(Alt \d\)/.test(x)), titles.join(' | '))
+  })
+  await foldedBar(on, el => assert.equal(el.$$('[role=tab]')[0].getAttribute('title'), `${en.startTab} (Alt 1)`))
+  const header = s => mount(html`<${Header} s=${s} c=${recorder()} />`)
+  const titles = el => el.$$('button').map(b => b.getAttribute('title')).filter(Boolean)
+  // the as-of time is the reload (r); Explain, first in Help, answers to ? (decision 6, menue.md)
+  const quiet = header(off)
+  quiet.$('.hdr-help > button').click()
+  await tick()
+  assert.ok(!titles(quiet).some(x => /\((\?|r)\)$/.test(x)), titles(quiet).join(' | '))
+  assert.ok(titles(quiet).includes(en.hints.buttonTitle) && titles(quiet).some(x => x.endsWith(` · ${en.reloadTitle}`)), titles(quiet).join(' | '))
+  const keyed = header(on)
+  keyed.$('.hdr-help > button').click()
+  await tick()
+  assert.ok(titles(keyed).includes(`${en.hints.buttonTitle} (?)`) && titles(keyed).some(x => x.endsWith(`${en.reloadTitle} (r)`)), titles(keyed).join(' | '))
+})
+
+// ---------------------------------------------------------------- Header: four parts and the as-of time (K1 to K5)
+
+test('header: the as-of time is the reload button with its mark; no colours, reload or Explain button beside it', () => {
+  const s = cockpitState(NOW)
+  const c = recorder()
+  const el = mount(html`<${Header} s=${s} c=${c} />`)
+  const asof = el.$('.hdr-asof button')
+  assert.ok(asof, 'the time is a button')
+  assert.equal(asof.$('.asof-text').text(), en.sourceAsOf(s.model.collected_at))
+  assert.ok(asof.$('svg'), 'with the reload mark on it')
+  assert.match(asof.getAttribute('title'), new RegExp(en.reloadTitle.replace(/[()]/g, '\\$&')))
+  asof.click()
+  assert.deepEqual(c.calls, [['reload']])
+  for (const gone of ['.hdr-reload', '.hdr-theme', '.hdr-explain']) assert.ok(!el.$(gone), `${gone} left the header`)
+  assert.ok(!el.$$('button').some(b => /^Theme\b/.test(b.getAttribute('aria-label') ?? '')), 'no colours button')
+  for (const kept of ['.hdr-ask', '.hdr-history', '.hdr-notes', '.hdr-help']) assert.ok(el.$(kept), `${kept} stays`)
+})
+
+test('header as the menu has it (decision 6): Notes is the bell, Help ? holds Explain first, the look-up topics and the tour', async () => {
+  // the menu moves the focus in on open: the small DOM answers with what it supports
+  const proto = Object.getPrototypeOf(document.body)
+  proto.focus ??= function focus() { document.activeElement = this }
+  const s = cockpitState(NOW)
+  const c = recorder()
+  const el = mount(html`<${Header} s=${s} c=${c} />`)
+  // left to right: History, Notes, then Help at the end
+  const parts = el.$('.hdr-right').childNodes.map(n => (n.nodeType === 1 ? n.getAttribute('class') ?? '' : ''))
+  const at = name => parts.findIndex(x => x.split(' ').includes(`hdr-${name}`))
+  assert.ok(at('history') >= 0 && at('history') < at('notes') && at('notes') < at('help') && at('help') === parts.length - 1, parts.join(' | '))
+  const bell = el.$('.hdr-notes')
+  assert.equal(bell.getAttribute('aria-label'), en.notesTitle)
+  assert.ok(bell.$('svg'), 'the bell')
+  bell.click()
+  assert.deepEqual(c.calls.at(-1), ['setDrawer', 'notes'])
+  const help = el.$('.hdr-help > button')
+  assert.equal(help.getAttribute('aria-haspopup'), 'menu')
+  assert.equal(help.getAttribute('aria-label'), en.helpTitle)
+  assert.ok(!el.$('.help-menu'), 'closed until clicked')
+  const items = () => el.$$('.help-menu [role=menuitem]')
+  help.click()
+  await tick()
+  // the topic Keyboard only while the shortcuts are on: off (the default), no key does anything
+  const topics = ['rows', 'act', 'trust']
+  assert.deepEqual(items().map(b => b.text()), [en.hints.button, ...topics.map(id => en.help.tabs[id]), en.tour.again])
+  const keyed = mount(html`<${Header} s=${{ ...s, ui: { ...s.ui, shortcuts: true } }} c=${recorder()} />`)
+  keyed.$('.hdr-help > button').click()
+  await tick()
+  assert.ok(keyed.$$('.help-menu [role=menuitem]').some(b => b.text() === en.help.tabs.keys), 'with the shortcuts on')
+  assert.match(el.$('.help-menu').text(), new RegExp(en.settings.lookupTitle))
+  const want = [['setHints', true], ...topics.map(id => ['openLookup', id]), ['tourStart']]
+  for (let k = 0; k < want.length; k++) {
+    if (!el.$('.help-menu')) { help.click(); await tick() }
+    items()[k].click()
+    await tick()
+    assert.deepEqual(c.calls.at(-1), want[k], `item ${k}`)
+    assert.ok(!el.$('.help-menu'), 'a pick closes the menu')
+  }
+})
+
+test('notes drawer: the bell lists what the cockpit reported, newest first; an entry with a target goes there', async () => {
+  const proto = Object.getPrototypeOf(document.body)
+  proto.focus ??= function focus() { document.activeElement = this }
+  proto.querySelector ??= function querySelector(sel) { try { return this.$(sel) } catch { return null } }
+  const { NotesDrawer } = views.overlays
+  const s = cockpitState(NOW, { ui: { drawer: 'notes' }, notes: [
+    { at: '11:58', text: 'Plain note', tone: 'info', ms: 1 },
+    { at: '11:59', text: 'Sent to demo-task', tone: 'ok', ms: 2, go: { kind: 'item', key: 'task:demo-task' } },
+  ] })
+  const c = recorder()
+  const el = mount(html`<${NotesDrawer} s=${s} c=${c} />`)
+  assert.deepEqual(el.$$('.note').map(n => n.text().includes('Sent to demo-task')), [true, false], 'newest first')
+  el.$('button.note-go').click()
+  assert.deepEqual(c.calls, [['setDrawer', null], ['openItem', 'task:demo-task', null]])
+  const none = mount(html`<${NotesDrawer} s=${{ ...s, notes: [] }} c=${recorder()} />`)
+  assert.match(none.text(), new RegExp(en.notesEmpty))
+  for (const lang of ['en', 'de']) assert.ok(text.TABLES[lang].notesTitle && text.TABLES[lang].notesEmpty && text.TABLES[lang].helpTitle, lang)
+  await tick()
+})
+
+test('header: while a fresh pass runs the as-of button waits; narrow, the header keeps the mark, the line below the time', () => {
+  const busy = cockpitState(NOW, { loading: { pass: 'full', fresh: true, started_ms: NOW, eta_ms: 0, queued: null, last_error: null } })
+  const b = mount(html`<${Header} s=${busy} c=${recorder()} />`).$('.hdr-asof button')
+  assert.equal(b.getAttribute('aria-busy'), 'true')
+  assert.ok(b.hasAttribute('disabled'), 'a second click starts no second pass')
+  const narrow = cockpitState(NOW, { layout: 'narrow' })
+  const c = recorder()
+  const head = mount(html`<${Header} s=${narrow} c=${c} />`)
+  const mark = head.$('.hdr-asof button')
+  assert.ok(mark && mark.$('svg'), 'the mark stays in a narrow header')
+  assert.equal(mark.$('.asof-text'), null)
+  mark.click()
+  assert.deepEqual(c.calls, [['reload']])
+  const line = mount(html`<${views.overlays.MobileSwitch} s=${narrow} c=${c} />`).$('.mobile-status .hdr-asof button')
+  assert.equal(line.$('.asof-text').text(), en.sourceAsOf(narrow.model.collected_at))
+  line.click()
+  assert.deepEqual(c.calls.at(-1), ['reload'])
 })
 
 // ---------------------------------------------------------------- what works where: header chip and sidebar counts
@@ -704,6 +892,61 @@ test('row steps as buttons: a busy row disables its buttons', () => {
   const it = { index: 1, row_id: 'r1', actions: [{ id: 'wake', label: 'Switch on' }] }
   const el = mountExtra(extra.html`<${extra.pages.RowSteps} it=${it} page="p" section="sec" s=${s} c=${recorder()} as="buttons" />`)
   assert.equal(el.$('button').hasAttribute('disabled'), true)
+})
+
+// ---------------------------------------------------------------- the dates page shows time only (views/dates.js)
+
+// a day n days after NOW as the server writes it, and one event on it at `hour`
+const calDay = n => { const d = new Date(2026, 9, 9 + n); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` }
+const calEvent = (index, n, hour, more = {}) => ({ index, title: `Date ${index}`, cal: { start: `${calDay(n)}T${hour}:00`, end: `${calDay(n)}T${hour}:30`,
+  day: calDay(n), minutes: 30, all_day: false, calendar: 'Work', info: false, where: null, online: false, people: [], past: false, running: false,
+  overlaps: [], ...more } })
+
+/** A dates page with these events and, beside the calendar, a section of due rows (overdue and due this week) */
+function renderDates(events) {
+  const cal = { id: 'calendar', kind: 'calendar', view: 'agenda', title: 'Calendar', status: 'ok', items: events, count: events.length, total: events.length,
+    cal_figures: { today: 2, busy_today: 60, tomorrow: 1, week: 3, overlaps: 1, info_week: 0, day_start: 8, day_end: 20,
+      next: { start: `${calDay(0)}T14:00`, title: 'Date 1' }, free_today: { minutes: 90, from: `${calDay(0)}T15:00` } } }
+  const due = { id: 'deadlines', kind: 'command', title: 'Deadlines', status: 'ok', count: 2, total: 2,
+    items: [{ index: 0, title: 'Slides', due_at: calDay(-2) }, { index: 1, title: 'Offer', due_at: calDay(3) }] }
+  const page = { id: 'dates', title: 'Dates', sections: [cal, due] }
+  const c = recorder()
+  return { el: mount(html`<${views.pages.PageSection} page=${page} section=${cal} s=${cockpitState(NOW)} c=${c} />`), c }
+}
+
+test('dates: two figures at most, the overlaps and the free block today; no day counts, no next date, no due rows of the page', () => {
+  const { el } = renderDates([calEvent(0, 0, 14, { overlaps: ['Date 1'] }), calEvent(1, 0, 14, { overlaps: ['Date 0'] }), calEvent(2, 1, 9)])
+  assert.deepEqual(el.$$('.calf-label').map(x => x.text()), [en.cal.fig.overlaps, en.cal.fig.free])
+  assert.ok(!el.$('.calf-title'), 'no tile names the next date')
+})
+
+test('dates: the overlaps figure still filters the agenda', async () => {
+  const { el } = renderDates([calEvent(0, 0, 14, { overlaps: ['Date 1'] }), calEvent(1, 0, 14, { overlaps: ['Date 0'] }), calEvent(2, 1, 9)])
+  assert.equal(el.$$('.cal-row').length, 3)
+  el.$$('.calf-tile')[0].click()
+  await new Promise(r => setTimeout(r, 20))
+  assert.deepEqual(el.$$('.cal-row .cal-title').map(x => x.text().trim()), ['Date 0', 'Date 1'])
+})
+
+test('dates: the month view stands once the loaded dates span four weeks; a month kept in the browser shows the agenda till then', () => {
+  const modes = el => el.$$('.ghb-mode-btn').map(b => b.text())
+  const short = [calEvent(0, 0, 9), calEvent(1, 26, 9)]   // 27 days, today included
+  const long = [calEvent(0, 0, 9), calEvent(1, 27, 9)]    // 28 days
+  assert.deepEqual(modes(renderDates(short).el), [en.cal.views.agenda, en.cal.views.week])
+  assert.deepEqual(modes(renderDates(long).el), [en.cal.views.agenda, en.cal.views.week, en.cal.views.month])
+  const had = Object.getOwnPropertyDescriptor(globalThis, 'localStorage')
+  const kept = []
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, writable: true,
+    value: { getItem: () => 'month', setItem: (k, v) => kept.push([k, v]) } })
+  try {
+    const hidden = renderDates(short).el
+    assert.ok(!!hidden.$('.cal-agenda') && !hidden.$('.cal-month'), 'the agenda while the month is hidden')
+    assert.ok(!!renderDates(long).el.$('.cal-month'), 'the month once four weeks are loaded')
+    assert.deepEqual(kept, [], 'hiding the month does not overwrite the kept choice')
+  } finally {
+    if (had) Object.defineProperty(globalThis, 'localStorage', had)
+    else delete globalThis.localStorage
+  }
 })
 
 // ---------------------------------------------------------------- quick_live: only the chat re-renders (#400)
@@ -1554,7 +1797,8 @@ test('guide: a chosen step brings its box into view and puts the cursor in it, S
   proto.focus = function () { seen.push(['focus', this.tagName?.toLowerCase?.() ?? this.nodeName]) }
   try {
     el.$$('.guide-opt')[0].click()
-    await tick()
+    // the effect runs after paint: a busy runner needs more than one tick
+    for (let i = 0; i < 50 && !seen.some(x => x[0] === 'scroll'); i++) await tick()
     assert.deepEqual(seen.find(x => x[0] === 'scroll'), ['scroll', 'guide-compose', 'nearest'])
     assert.ok(seen.some(x => x[0] === 'focus' && /textarea/i.test(x[1])), JSON.stringify(seen))
     assert.ok(el.$('.guide-compose').button(en.guide.send))
@@ -1662,38 +1906,33 @@ test('hints: nothing in view says so instead of an empty overlay', () => {
   assert.match(el.$('.hints-bar').text(), new RegExp(en.hints.none.slice(0, 20)))
 })
 
-// ---------------------------------------------------------------- help (views/overlays.js HelpDialog)
+// ---------------------------------------------------------------- look up (views/settings.js, under Appearance; K3)
 
-test('help: one topic at a time, this page first; a topic tab shows its own words, the keys theirs', async () => {
-  const { HelpDialog } = views.overlays
-  const proto = Object.getPrototypeOf(document.body)
-  proto.focus ??= function focus() { document.activeElement = this }
-  proto.querySelector ??= function querySelector(sel) { return this.$(sel) }
-  // the page beneath is not mounted here: the help asks the document which parts it shows, and none are
-  const ask = Object.getOwnPropertyDescriptor(document, 'querySelector')
-  document.querySelector = () => null
-  try {
-  const c = recorder()
-  const el = mount(html`<${HelpDialog} s=${cockpitState(NOW, { ui: { page: '@sessions', drawer: 'help', shortcuts: false } })} c=${c} />`)
-  const tabs = el.$$('.help-tabs .seg-btn').map(b => b.text())
-  assert.deepEqual(tabs, ['page', 'rows', 'act', 'keys', 'trust'].map(id => en.help.tabs[id]))
-  assert.match(el.$('.help-pane').text(), new RegExp(en.help.pageLead.slice(0, 24)))
-  assert.match(el.$('.help-pane').text(), new RegExp(en.help.headTitle))
-  assert.doesNotMatch(el.$('.help-pane').text(), new RegExp(en.kindHelp))
-  el.button(en.help.tabs.rows).click()
+test('look up: Appearance holds the signs, acting, the keys and costs, one topic at a time; the page notes are Explain\'s', async () => {
+  const { SettingsPage } = views.settings
+  const s = cockpitState(NOW, { ui: { page: '@settings', settingsSection: 'look', shortcuts: false } })
+  const el = mount(html`<${SettingsPage} s=${s} c=${recorder()} />`)
+  const card = el.$$('.set-card').find(x => x.$('.set-card-name')?.text() === en.settings.lookupTitle)
+  assert.ok(card, 'the card stands under Appearance')
+  assert.deepEqual(card.$$('.seg-btn').map(b => b.text()), ['rows', 'act', 'keys', 'trust'].map(id => en.help.tabs[id]))
+  assert.match(card.text(), new RegExp(en.kindHelp))
+  card.button(en.help.tabs.keys).click()
   await tick()
-  assert.match(el.$('.help-pane').text(), new RegExp(en.kindHelp))
-  el.button(en.help.tabs.keys).click()
+  assert.match(card.text(), new RegExp(en.keysOff.slice(0, 20)))
+  // mouse first: while the keys are off the card names none, the card above switches them on
+  assert.ok(!card.$('kbd'), 'no key while they are off')
+  assert.ok(!card.$('dl.keys'), 'no key table while they are off')
+  const on = mount(html`<${SettingsPage} s=${{ ...s, ui: { ...s.ui, shortcuts: true } }} c=${recorder()} />`)
+  const onCard = on.$$('.set-card').find(x => x.$('.set-card-name')?.text() === en.settings.lookupTitle)
+  onCard.button(en.help.tabs.keys).click()
   await tick()
-  assert.match(el.$('.help-pane').text(), new RegExp(en.keysOff.slice(0, 20)))
-  el.button(en.hints.helpButton).click()
-  assert.deepEqual(c.calls.at(-1), ['setHints', true])
-  el.button(en.tour.again).click()
-  assert.deepEqual(c.calls.at(-1), ['tourStart'])
-  assert.match(el.$('.help-pane').text() + el.text(), new RegExp(en.help.tabs.keys))
-  } finally {
-    if (ask) Object.defineProperty(document, 'querySelector', ask); else delete document.querySelector
-  }
+  assert.ok(onCard.$('dl.keys kbd'), 'the keys stand there once they are on')
+  card.button(en.help.tabs.trust).click()
+  await tick()
+  assert.match(card.text(), new RegExp(en.helpTopics.trust[0][0]))
+  assert.doesNotMatch(card.text(), new RegExp(en.kindHelp))
+  // the colours stand on the same page, the header has no button for them
+  assert.ok(el.$$('.set-card-name').some(x => x.text() === en.settings.themeTitle))
 })
 
 // ---------------------------------------------------------------- NextUp
@@ -1786,11 +2025,205 @@ test('github boards: a board switched off leaves the page, one line names it and
   const c = recorder()
   const section = ghSection(s)
   const el = mount(html`<${GitHubBoard} section=${section} filter=${null} setFilter=${() => {}} c=${c} s=${s} />`)
-  assert.deepEqual(el.$$('.ghb-board-name').map(x => x.text()), ['Demo board', 'Docs board'])
   const line = el.$('.ghb-hidden')
   assert.match(line.text(), /Old roadmap/)
   line.$('button').click()
   assert.deepEqual(c.calls.at(-1), ['openSettings', 'boards'])
+})
+
+test('github page (G4): only the figures with a cause stand above the list, no tile per board and no switch on the page', () => {
+  const s = cockpitState(NOW)
+  const c = recorder()
+  const section = ghSection(s)
+  const el = mount(html`<${GitHubBoard} section=${section} filter=${null} setFilter=${() => {}} c=${c} s=${s} />`)
+  // the demo counts open, yours, your PRs, in progress, in review, closed and merged (no cause to look) and blocked 0
+  assert.deepEqual(el.$$('.ghb-figure .ghb-label').map(x => x.text()), [en.gh.figure.ask_review, en.gh.figure.quiet, en.gh.figure.untasked])
+  assert.ok(!el.$('.ghb-boards'), 'no tile per board: its facts stand in the head of its list')
+  assert.ok(!el.$('.ghb-mode'), 'Off, Mine and All are chosen in the settings only')
+  el.$$('.ghb-figure')[1].click()
+  assert.deepEqual(c.calls, [])
+  const picked = []
+  const f = mount(html`<${GitHubBoard} section=${section} filter=${null} setFilter=${x => picked.push(x)} c=${c} s=${s} />`)
+  f.$$('.ghb-figure')[1].click()
+  assert.deepEqual(picked, [{ flag: 'quiet' }])
+})
+
+test('github list (G4): the head of a board names its facts, the cards it shows, how many are open by state, a cut', () => {
+  const { GitHubList } = views.github
+  const s = cockpitState(NOW)
+  const base = ghSection(s)
+  const section = { ...base, boards: base.boards.map(b => (b.name === 'Demo board' ? { ...b, capped: 200 } : b)) }
+  const el = mount(html`<${GitHubList} items=${section.items} page="trackers" section=${section} s=${s} c=${recorder()} byKey=${new Map()} />`)
+  const group = name => el.$$('.ghl-group').find(g => g.$('.ghl-head-name').text() === name)
+  const facts = group('Demo board').$('.ghl-facts').text()
+  for (const part of [en.gh.boardMode.mine, en.gh.boardOpen(9), `3 ${en.gh.state.new}`, `2 ${en.gh.state.in_progress}`, `1 ${en.gh.state.blocked}`, en.gh.capped(200)]) {
+    assert.ok(facts.includes(part), `${part} in ${facts}`)
+  }
+  // rows the search adds without a board stand under their repository, with no board facts
+  assert.ok(group('example/tools') && !group('example/tools').$('.ghl-facts'))
+})
+
+test('github rows (G4): one split start, the lead step left and the other steps under ▾, Close beside; a live tab leads with To tab', async () => {
+  const { GitHubList } = views.github
+  const s = cockpitState(NOW)
+  const c = recorder()
+  const it = { index: 0, key: 'item:github/boards/example/repo#5', title: 'example/repo#5 Fix it', actionable: true, row_id: 'example/repo#5',
+    group: 'Demo board', flags: ['mine'], gh: { title: 'Fix it', repo: 'example/repo', number: 5, type: 'issue', state: 'ready' },
+    actions: [{ id: 'analyze', label: 'Analyse' }, { id: 'implement', label: 'Implement' }, { id: 'sync', label: 'Sync status' }],
+    link: { kind: 'web', href: 'https://example.org/repo/issues/5' } }
+  const list = row => mount(html`<${GitHubList} items=${[row]} page="github" section=${{ id: 'boards', boards: [] }} s=${s} c=${c} byKey=${new Map()} />`)
+  const el = list(it)
+  const acts = el.$('.ghl-acts')
+  const [lead, more] = acts.$('.btn-split').$$('button')
+  assert.equal(lead.text(), 'Implement', 'yours to implement: the lead')
+  assert.equal(more.text(), '▾')
+  assert.ok(!acts.$('.start'), 'no second start beside the lead step')
+  assert.ok(labels(acts).includes(`${en.settle} ▾`), 'Close beside it')
+  lead.click()
+  assert.deepEqual(c.calls.at(-1), ['act', 'row_action', { page: 'github', section: 'boards', index: 0, action: 'implement' }])
+  more.click()
+  await tick()
+  assert.deepEqual(acts.$$('[role="menuitem"]').map(b => b.text()), ['Analyse', 'Sync status'])
+  acts.$$('[role="menuitem"]')[0].click()
+  assert.deepEqual(c.calls.at(-1), ['act', 'row_action', { page: 'github', section: 'boards', index: 0, action: 'analyze' }])
+  // an agent works on the row: To tab leads, every step under ▾
+  const live = list({ ...it, tab: { ref: 'surface:9', state: 'working', live: true, waiting: false } }).$('.ghl-acts')
+  const [toTab, all] = live.$('.btn-split').$$('button')
+  assert.equal(toTab.text(), en.btnToTab)
+  toTab.click()
+  assert.deepEqual(c.calls.at(-1), ['act', 'tab_jump', { tab_ref: 'surface:9' }])
+  all.click()
+  await tick()
+  assert.deepEqual(live.$$('[role="menuitem"]').map(b => b.text()), ['Analyse', 'Implement', 'Sync status'])
+  // a row with no step of its own: the general start is its one start
+  const bare = list({ ...it, actions: null }).$('.ghl-acts')
+  assert.ok(bare.$('.start') && !bare.$('.btn-split'))
+})
+
+// round 6c: a filter bar over the GitHub rows (Board, Person, Repository, Kind, Board status) and more on each row
+function ghBarRows() {
+  const row = (index, gh, over = {}) => ({ index, key: `item:github/boards/${index}`, title: gh.title, flags: [], actionable: true,
+    gh: { type: 'issue', state: 'ready', people: [], labels: [], also_on: [], prs: [], ...gh }, ...over })
+  return [
+    row(1, { title: 'Fix the parser', repo: 'example/app', number: 1, board: 'Demo board', status: 'In Progress', people: ['demo-user'],
+      labels: ['bug', 'ci', 'parser', 'p1', 'flaky'], author: 'teammate' }, { flags: ['mine'], group: 'Demo board' }),
+    row(2, { title: 'Write the docs', repo: 'example/app', number: 2, board: 'Demo board', status: 'Todo',
+      people: ['teammate', 'second-dev', 'third-dev', 'fourth-dev'], author: 'demo-user', by_me: true }, { group: 'Demo board' }),
+    row(3, { title: 'Bump the schema', repo: 'example/tools', number: 3, board: null, status: 'open', type: 'pr', author: 'other-dev',
+      people: ['other-dev'], pr: { draft: true, review: 'changes_requested', checks: 'failure' } }, { flags: ['ask_review'], group: 'example/tools' }),
+  ]
+}
+
+function ghBar(filter = null, items = ghBarRows()) {
+  const picked = []
+  const section = { id: 'boards', items, boards: [{ name: 'Demo board', slug: 'demo', mode: 'mine', counts: {} }], metrics: [{ id: 'open', n: 3 }] }
+  const el = mount(html`<${GitHubBoard} section=${section} items=${items} filter=${filter} setFilter=${f => picked.push(f)} c=${recorder()} s=${cockpitState(NOW)} />`)
+  return { el, picked }
+}
+
+test('github filter bar (6c G1): Board, Person, Repository, Kind and Board status with counts, a choice combines with the others', () => {
+  const { el, picked } = ghBar()
+  const field = d => el.$(`.ghf-field[data-dim="${d}"] select`)
+  for (const d of ['board', 'person', 'repo', 'type', 'status']) assert.ok(field(d), `a select for ${d}`)
+  const opts = d => field(d).$$('option').map(o => o.text())
+  assert.deepEqual(opts('board'), [en.gh.bar.all(3), 'Demo board (2)', `${en.gh.bar.noBoard} (1)`])
+  // Me first, then the most rows, your own login only as Me
+  assert.deepEqual(opts('person'), [en.gh.bar.all(3), `${en.gh.bar.me} (2)`, '@teammate (2)', '@fourth-dev (1)', '@other-dev (1)',
+    '@second-dev (1)', '@third-dev (1)'])
+  assert.deepEqual(opts('type'), [en.gh.bar.all(3), `${en.gh.bar.kind.issue} (2)`, `${en.gh.bar.kind.pr} (1)`])
+  assert.deepEqual(opts('status'), [en.gh.bar.all(3), 'In Progress (1)', 'Todo (1)'], 'only rows on a board have a column')
+  assert.ok(!el.$('.ghf-reset'), 'nothing chosen: no reset')
+  const sel = field('board')
+  sel.value = 'Demo board'
+  sel.dispatch('change')
+  assert.deepEqual(picked.at(-1), { board: 'Demo board' })
+  // a choice keeps the others: Person on top of Board; under that board every row is an issue, so Kind steps aside
+  const two = ghBar({ board: 'Demo board' })
+  assert.ok(!two.el.$('.ghf-field[data-dim="type"]'), 'one kind left: no select')
+  const person = two.el.$('.ghf-field[data-dim="person"] select')
+  person.value = '@me'
+  person.dispatch('change')
+  assert.deepEqual(two.picked.at(-1), { board: 'Demo board', person: '@me' })
+  // back to all in one dimension leaves the rest
+  const all = two.el.$('.ghf-field[data-dim="board"] select')
+  all.value = ''
+  all.dispatch('change')
+  assert.deepEqual(two.picked.at(-1), { board: null })
+})
+
+test('github filter bar (6c G1): with a choice it says how many rows it shows and resets every filter in one click', () => {
+  const { el, picked } = ghBar({ person: '@me', flag: 'mine' })
+  assert.equal(el.$('.ghf-count').text(), en.gh.bar.count(1, 3), 'Me and the figure yours: the one row assigned to you')
+  const reset = el.$('.ghf-reset')
+  assert.equal(reset.text(), en.gh.bar.reset)
+  reset.click()
+  assert.deepEqual(picked.at(-1), null)
+  // a dimension with one value only and nothing chosen stays out of the way
+  const lone = ghBar(null, ghBarRows().filter(r => r.gh.repo === 'example/app'))
+  assert.ok(!lone.el.$('.ghf-field[data-dim="repo"]'), 'one repository: no select')
+  assert.ok(lone.el.$('.ghf-field[data-dim="person"]'))
+})
+
+test('github rows (6c G2): repository and number, board and column, people, labels three and +n, who opened it, a PR\'s state', () => {
+  const { GitHubList } = views.github
+  const s = cockpitState(NOW)
+  const rows = ghBarRows()
+  const el = mount(html`<${GitHubList} items=${rows} page="github" section=${{ id: 'boards', boards: [{ name: 'Demo board', mode: 'mine' }] }}
+    s=${{ ...s, ui: { ...s.ui, ghGroup: false } }} c=${recorder()} byKey=${new Map()} />`)
+  assert.ok(!el.$('.ghl-head'), 'not grouped: one list without board heads')
+  const row = n => el.$$('.ghl-row').find(r => r.$('.ghl-title').text() === n)
+  const first = row('Fix the parser')
+  assert.equal(first.$('.ghl-ref').text(), 'app#1')
+  assert.equal(first.$('.ghl-chip-board').text(), 'Demo board', 'not grouped: the row names its board')
+  assert.equal(first.$('.ghl-state').text(), 'In Progress')
+  assert.deepEqual(first.$$('.ghl-meta .gh-label').map(x => x.text()), ['bug', 'ci', 'parser'])
+  assert.equal(first.$('.ghl-more').text(), '+2')
+  assert.equal(first.$('.ghl-more').getAttribute('title'), 'p1, flaky')
+  assert.equal(first.$('.ghl-author').text(), en.gh.by('teammate'))
+  const docs = row('Write the docs')
+  assert.deepEqual(docs.$$('.ghl-people .gh-person').map(x => x.text()), ['@teammate', '@second-dev', '@third-dev', '+1'])
+  assert.equal(docs.$('.ghl-author').text(), en.gh.byYou, 'opened by you')
+  const pr = row('Bump the schema')
+  assert.ok(!pr.$('.ghl-chip-board'), 'on no board')
+  assert.deepEqual(pr.$$('.ghl-pr').map(x => x.text()), [en.gh.draft, en.gh.reviewState.changes_requested, en.gh.checksShort.failure])
+  assert.ok(!pr.$('.ghl-author'), 'opened by the one assigned: named once')
+  // grouped (the default): the heads stand, the rows leave the board out
+  const grouped = mount(html`<${GitHubList} items=${rows} page="github" section=${{ id: 'boards', boards: [] }} s=${s} c=${recorder()} byKey=${new Map()} />`)
+  assert.ok(grouped.$('.ghl-head'))
+  assert.ok(!grouped.$('.ghl-chip-board'))
+})
+
+test('github list (6c G2): "Group by board" switches the heads off and on, kept for the viewer', () => {
+  const { GitHubList } = views.github
+  const s = cockpitState(NOW)
+  const c = recorder()
+  const el = mount(html`<${GitHubList} items=${ghBarRows()} page="github" section=${{ id: 'boards', boards: [] }} s=${s} c=${c} byKey=${new Map()} />`)
+  const toggle = el.$('.ghl-group-toggle')
+  assert.equal(toggle.text(), en.gh.groupByBoard)
+  assert.equal(toggle.getAttribute('aria-pressed'), 'true')
+  toggle.click()
+  assert.deepEqual(c.calls.at(-1), ['setGhGroup', false])
+})
+
+test('github page (6c G1): the section reads its kept filter, a new choice goes to the controller under page and section', () => {
+  const { PageSection } = views.pages
+  const base = cockpitState(NOW)
+  const page = base.model.pages.find(p => p.id === 'trackers')
+  const section = ghSection(base)
+  const c = recorder()
+  const s = cockpitState(NOW, { ui: { ghFilter: { 'trackers/mine': { type: 'pr' } } } })
+  const el = mount(html`<${PageSection} page=${page} section=${section} s=${s} c=${c} />`)
+  assert.deepEqual(el.$$('.ghl-title').map(x => x.text()), ['Release checklist'], 'only the pull request')
+  assert.ok(el.$('.ghf-reset'))
+  const board = el.$('.ghf-field[data-dim="type"] select')
+  board.value = ''
+  board.dispatch('change')
+  assert.deepEqual(c.calls.at(-1), ['setGhFilter', 'trackers/mine', { type: null }])
+  // a kept choice no row matches: the bar stays, so it can be taken back, and the list says nothing matches
+  const none = mount(html`<${PageSection} page=${page} section=${section} c=${recorder()}
+    s=${cockpitState(NOW, { ui: { ghFilter: { 'trackers/mine': { repo: 'example/gone' } } } })} />`)
+  assert.ok(none.$('.ghf-reset') && !none.$('.ghl-row'))
+  assert.match(none.text(), new RegExp(en.filterNone))
 })
 
 test('github boards: the settings list every board, the hidden ones too, and the default for new boards', () => {
@@ -1860,7 +2293,9 @@ test('with cockpit.focus_to_files a focus of one step still offers the files vie
 
 test('the demo shows the work tab as the default config does, and ?work=files&focus_to_files=1&files_scope=all as the switches do', () => {
   const { mock } = loadedRooms
-  const work = st => { const { flow, views, ...rest } = st.work; return rest }
+  const work = st => { const { flow, views, files_search: _fs, ...rest } = st.work; return rest }
+  // the files tab's question to its records is on in the demo, the Health area kept private (round 6c)
+  assert.deepEqual(mock.buildState(NOW).work.files_search, { enabled: true, block: ['Health'], left: 20 })
   // every view of the work tab (cockpit.work_views), ?views=files,flow narrows it
   assert.deepEqual(mock.buildState(NOW).work.views, ['due', 'source', 'jev', 'files', 'flow'])
   assert.deepEqual(mock.buildState(NOW, { views: ['files', 'flow'] }).work.views, ['files', 'flow'])
@@ -1961,7 +2396,7 @@ test('origin: no origin still draws a neutral Other source, unknown, and breaks 
   assert.ok(mount(html`<${RowMeta} row=${{ key: 'x', title: 'x', origin: null }} s=${s} />`).$('.kind'))
 })
 
-test('origin: By source, the board list and the detail show both tags, the detail the raw text in full beside the sources', () => {
+test('origin: By source and the detail show both tags, the board list its ref for a GitHub row, the detail the raw text in full beside the sources', () => {
   const { PageSection } = views.pages
   const s = cockpitState(NOW)
   const page = s.model.pages.find(p => p.id === 'trackers')
@@ -1974,8 +2409,9 @@ test('origin: By source, the board list and the detail show both tags, the detai
   const { GitHubList } = views.github
   const mine = page.sections.find(x => x.id === 'mine')
   const gh = mount(html`<${GitHubList} items=${mine.items} page=${page.id} section=${mine.id} s=${s} c=${recorder()} byKey=${new Map()} />`)
-  assert.ok(gh.$$('.origin').length >= 1)
-  assert.equal(gh.$('.origin-word').text(), en.origin.github)
+  // a GitHub row says where it comes from by its repo#n; the chip GitHub beside it would say it twice (6c fix)
+  assert.ok(gh.$('.ghl-ref'))
+  assert.ok(!gh.$$('.ghl-row').some(r => r.$('.origin-word')?.text() === en.origin.github))
   // the detail: the kind and the origin in its head, the raw text in the facts, the sources row kept
   const { DetailColumn } = views.detail
   const { indexRows } = loadedRooms.logic
@@ -2097,6 +2533,32 @@ test('kind: the history says Stream for an ended stream, Task for a task', async
   assert.deepEqual(el.$$('.hist-what .chip').map(x => x.text()), [en.histKind.stream, en.histKind.task])
 })
 
+test('history: undo brings a task back with the status it had before the close, never forced to doing (K2)', async () => {
+  const { HistoryDrawer } = views.overlays
+  const s = cockpitState(NOW)
+  const back = (slug, as) => ({ verb: 'task_reopen', args: { slug, ...(as ? { as } : {}) } })
+  s.history = [{ id: 'h2', at_ms: NOW, verb: 'task_close', items: [
+    { key: 'task:in-review', title: 'In review', kind: 'task', did: 'done', ident: 'in-review', undo: back('in-review', 'review') },
+    { key: 'task:in-backlog', title: 'In backlog', kind: 'task', did: 'done', ident: 'in-backlog', undo: back('in-backlog', 'backlog') },
+    { key: 'task:older', title: 'Older', kind: 'task', did: 'done', ident: 'older', undo: back('older') }] }]
+  const c = recorder()
+  const el = await settled(html`<${HistoryDrawer} s=${s} c=${c} />`)
+  const rows = el.$$('.hist-item')
+  const review = rows[0].$$('button')
+  assert.deepEqual(review.map(b => b.text()), [en.undoReview, en.undoBacklog])
+  review[0].click()
+  assert.deepEqual(c.calls.at(-1), ['undo', s.history[0].items[0].undo])
+  review[1].click()
+  assert.deepEqual(c.calls.at(-1), ['undo', s.history[0].items[0].undo, 'backlog'])
+  // closed out of the backlog: the one way back is the backlog
+  const backlog = rows[1].$$('button')
+  assert.deepEqual(backlog.map(b => b.text()), [en.undoBacklog])
+  backlog[0].click()
+  assert.deepEqual(c.calls.at(-1), ['undo', s.history[0].items[1].undo])
+  // an older entry without the status: open again as before, or still to be done
+  assert.deepEqual(rows[2].$$('button').map(b => b.text()), [en.undoReopen, en.undoBacklog])
+})
+
 test('origin: the files view lists the inbox entries of a file with who filed them', () => {
   const { Drawers } = views.dossier
   const s = cockpitState(NOW)
@@ -2146,6 +2608,334 @@ test('jev: a plan entry the model holds no row for reads its kind and source fro
   assert.equal(row.origin.category, 'bot')
   assert.equal(row.inbox_id, '20261001-0900-x-ab12')
   assert.equal(planRow({ key: 'task:y' }, null, null).task, 'y')
+})
+
+// ---------------------------------------------------------------- Operations and its sub pages (under:, @workers)
+
+const opsSec = (id, title, items, extra = {}) => ({ id, kind: 'command', title, status: 'ok', reason: '', alarm: false, empty: 'nothing',
+  count: items.length, total: items.length, weight: 0, bad: items.filter(x => x.tone === 'bad').length, as_of: null, more: 0, items, ...extra })
+const opsRow = (i, title, tone = null) => ({ index: i, title, tone, detail: '', when: '', actionable: false })
+const opsRun = (id, severity) => ({ id, title: id, state: severity === 'high' ? 'stopped' : severity === 'medium' ? 'drifted' : 'in_sync',
+  severity: severity ?? 'none', findings: severity ? [{ state: 'x', severity, detail: 'd' }] : [], strip: [], retired: false })
+
+/** The cockpit with three pages of an invented Bridge: Operations names Background jobs, Inventory and Lab as its sub pages */
+function opsState({ runs = [opsRun('mail', null), opsRun('pilot', 'medium')], ui = {}, pages = null } = {}) {
+  const base = cockpitState(NOW, { ui })
+  const page = (id, title, sections, extra = {}) => ({ id, title, group: 'main', badge: { kind: 'ok' }, overview: false, cards: null,
+    jev: false, under: null, subs: [], sections, ...extra })
+  const all = pages ?? [
+    page('ops', 'Operations', [opsSec('checks', 'Checks', [], { alarm: true, empty: 'all green' })],
+      { overview: true, cards: [], subs: ['@workers', 'inv', 'lab'] }),
+    page('inv', 'Inventory', [opsSec('machines', 'Machines', [opsRow(0, 'box'), opsRow(1, 'printer', 'dim'), opsRow(2, 'watch', 'dim')], { view: 'tiles' }),
+      opsSec('cloud', 'Cloud live', [opsRow(0, 'fn-a')], { view: 'tiles', hide_ok: true })], { under: 'ops' }),
+    page('lab', 'Lab', [opsSec('remotes', 'Remotes', [opsRow(0, 'gpu-box', 'dim')]), opsSec('findings', 'Findings', [], { alarm: true })], { under: 'ops' }),
+  ]
+  const live = runs.filter(r => !r.retired)
+  return { ...base, model: { ...base.model, pages: all }, usage: { status: 'idle', data: null }, costs: { status: 'idle', data: null },
+    workers: { status: 'ok', error: null, data: { host: 'homebox', generated_at: '', systems: [], runs,
+      stats: { in_service: live.length, with_findings: live.filter(r => r.findings.length).length, not_reported: 0, retired: 0 } } } }
+}
+
+const tabTexts = bar => bar.$$('[role=tab]').map(b => b.text())
+
+/** The page bar reads its active tab back with querySelector, listens for resize and measures its tabs (as in the
+ *  flow suite): a DOM without layout says 0, so it neither folds nor moves its marker. Installed by the first test
+ *  that mounts the bar, so the tests above this section run on the DOM as it was */
+function pageBar(s, c = recorder()) {
+  const proto = Object.getPrototypeOf(document.createElement('div'))
+  if (!proto.querySelector) proto.querySelector = function querySelector(sel) { return this.$(sel) }
+  globalThis.window ??= { addEventListener() {}, removeEventListener() {}, innerWidth: 1280 }
+  for (const k of ['offsetLeft', 'offsetWidth', 'scrollWidth', 'clientWidth']) {
+    if (!Object.getOwnPropertyDescriptor(proto, k)) Object.defineProperty(proto, k, { get: () => 0, configurable: true })
+  }
+  return mount(html`<${views.header.PageBar} s=${s} c=${c} />`)
+}
+
+test('operations: a page names its sub pages and each knows its parent; Background jobs only where a worker view exists', () => {
+  const { parentOf, subPagesOf, pageOrder } = views.nav
+  const s = opsState()
+  assert.deepEqual(subPagesOf(s, 'ops'), ['@workers', 'inv', 'lab'])
+  assert.deepEqual([parentOf(s, 'inv'), parentOf(s, '@workers'), parentOf(s, 'ops')], ['ops', 'ops', null])
+  assert.ok(!pageOrder(s).some(id => ['inv', 'lab', '@workers'].includes(id)), pageOrder(s).join(' '))
+  assert.deepEqual(subPagesOf({ ...s, workers: { status: 'none', data: null } }, 'ops'), ['inv', 'lab'])
+  // a parent the model does not carry leaves its sub pages a tab of their own
+  const orphan = { ...s, model: { ...s.model, pages: s.model.pages.filter(p => p.id !== 'ops') } }
+  assert.equal(parentOf(orphan, 'inv'), null)
+  assert.ok(pageOrder(orphan).includes('inv') && pageOrder(orphan).includes('@workers'))
+  // beside a sub page's title a plain ok only on a live all clear: devices nothing measures live are not in order
+  const { headBadgeOf } = views.nav
+  const page = id => s.model.pages.find(p => p.id === id)
+  assert.deepEqual([headBadgeOf(s, page('inv')).kind, headBadgeOf(s, page('lab')).kind, headBadgeOf(s, page('ops')).kind], ['none', 'ok', 'ok'])
+})
+
+test('operations: a sub page has no tab, the tab of the page it stands under stays lit while it is open', () => {
+  for (const page of ['inv', '@workers']) {
+    const bar = pageBar(opsState({ ui: { page } }))
+    const tabs = tabTexts(bar)
+    assert.ok(tabs.some(x => x.startsWith('Operations')), tabs.join(' | '))
+    assert.ok(!tabs.some(x => x.startsWith('Inventory') || x.startsWith('Lab') || x.startsWith(en.workersTab)), tabs.join(' | '))
+    const lit = bar.$$('[role=tab]').filter(b => b.getAttribute('aria-selected') === 'true').map(b => b.text())
+    assert.equal(lit.length, 1, page)
+    assert.match(lit[0], /^Operations/, page)
+  }
+})
+
+test('operations: an outage turns the parent tab red with its count, upkeep alone leaves it calm', () => {
+  const opsTab = s => pageBar(s).$$('[role=tab]').find(b => b.text().startsWith('Operations'))
+  const calm = opsTab(opsState())
+  assert.ok(!calm.$('.tk-danger') && !calm.$('.tk-warning'), calm.text())
+  const down = opsTab(opsState({ runs: [opsRun('mail', null), opsRun('pilot', 'medium'), opsRun('backup', 'high')] }))
+  assert.ok(down.$('.pbadge .tk-danger'), down.text())
+  assert.equal(down.$('.pbadge .mono').text(), '1')
+  // a finding on a sub page counts there too
+  const s = opsState()
+  const inv = s.model.pages.find(p => p.id === 'inv')
+  const red = { ...s, model: { ...s.model, pages: s.model.pages.map(p => (p === inv ? { ...inv, badge: { kind: 'bad', n: 2 } } : p)) } }
+  assert.equal(opsTab(red).$('.pbadge .mono').text(), '2')
+})
+
+test('operations: Background jobs keep their own tab red only for an outage, never orange for upkeep', () => {
+  const alone = runs => {
+    const s = opsState({ runs })
+    return { ...s, model: { ...s.model, pages: s.model.pages.map(p => ({ ...p, subs: [], under: null })) } }
+  }
+  const jobsTab = s => pageBar(s).$$('[role=tab]').find(b => b.text().startsWith(en.workersTab))
+  const upkeep = jobsTab(alone([opsRun('pilot', 'medium'), opsRun('report', 'medium')]))
+  assert.ok(upkeep, 'the tab is there')
+  assert.ok(!upkeep.$('.pbadge'), upkeep.text())
+  const down = jobsTab(alone([opsRun('pilot', 'medium'), opsRun('backup', 'high')]))
+  assert.ok(down.$('.pbadge .tk-danger'), down.text())
+  assert.equal(down.$('.pbadge .mono').text(), '1')
+})
+
+test('operations: the tiles on top show the parent\'s own parts, its sub pages stand in the folder bar instead', () => {
+  const { OverviewBoard } = views.pages
+  const s = opsState({ runs: [opsRun('mail', null), opsRun('pilot', 'medium'), opsRun('backup', 'high')] })
+  const el = mount(html`<${OverviewBoard} page=${s.model.pages[0]} s=${s} c=${recorder()} />`)
+  assert.deepEqual(el.$$('.otile').map(x => x.$('.otile-title').text()), ['Checks'])
+  // Background jobs with a tab of their own keep their tile on an overview, and it opens on every job
+  const free = { ...s, model: { ...s.model, pages: s.model.pages.map(p => ({ ...p, subs: [], under: null })) } }
+  const c = recorder()
+  const jobs = mount(html`<${OverviewBoard} page=${free.model.pages[0]} s=${free} c=${c} />`).$$('.otile')
+    .find(x => x.$('.otile-title').text() === en.workersTab)
+  assert.ok(jobs.hasClass('tk-danger'), jobs.getAttribute('class'))
+  assert.equal(jobs.$('.otile-big').text(), '1')
+  jobs.click()
+  assert.deepEqual(c.calls.at(-1), ['openWorkers', {}])
+})
+
+test('Background jobs opened on their outages: only those, the chip says so and takes it back', () => {
+  const runs = [opsRun('mail', null), opsRun('pilot', 'medium'), opsRun('backup', 'high')]
+  const el = mount(html`<${views.sessions.WorkersPage} s=${opsState({ runs, ui: { page: '@workers', workersFilter: { outage: true } } })} c=${recorder()} />`)
+  const chip = el.$$('.wfilters .fchip').find(b => b.text().includes(en.workerOutage))
+  assert.ok(chip, 'the outage chip')
+  assert.equal(chip.getAttribute('aria-pressed'), 'true')
+  assert.match(el.$('.wfilters').text(), new RegExp(en.workersShown(1, 3).replace(/[()]/g, '\\$&')))
+  // without an outage the chip stands only while it is on
+  const calm = mount(html`<${views.sessions.WorkersPage} s=${opsState({ runs: runs.slice(0, 2), ui: { page: '@workers' } })} c=${recorder()} />`)
+  assert.ok(!calm.$$('.wfilters .fchip').some(b => b.text().includes(en.workerOutage)))
+})
+
+test('operations: the folder bar names the overview and every sub page with its mark, on each of them', () => {
+  const { FolderBar } = views.header
+  const runs = [opsRun('mail', null), opsRun('pilot', 'medium'), opsRun('backup', 'high')]
+  const warnLab = s => ({ ...s, model: { ...s.model, pages: s.model.pages.map(p => (p.id === 'lab'
+    ? { ...p, sections: [...p.sections, opsSec('logs', 'Logs', [opsRow(0, 'journal', 'warn'), opsRow(1, 'tasks', 'warn')])] } : p)) } })
+  for (const page of ['ops', 'inv', 'lab']) {
+    const c = recorder()
+    const bar = mount(html`<${FolderBar} s=${warnLab(opsState({ runs, ui: { page } }))} c=${c} />`).$('.folderbar')
+    assert.ok(bar, page)
+    const items = bar.$$('button')
+    assert.deepEqual(items.map(b => b.$('.folder-name').text()), [en.folderOverview, en.workersTab, 'Inventory', 'Lab'], page)
+    const current = items.filter(b => b.getAttribute('aria-current') === 'page').map(b => b.$('.folder-name').text())
+    assert.deepEqual(current, [page === 'ops' ? en.folderOverview : page === 'inv' ? 'Inventory' : 'Lab'])
+    const [, jobs, inv, lab] = items
+    assert.ok(jobs.$('.tk-danger'), jobs.text())
+    assert.equal(jobs.$('.folder-note').text(), en.folderOutages(1))
+    assert.equal(lab.$('.folder-note').text(), en.folderWarnings(2))
+    assert.ok(!inv.$('.folder-note'), inv.text())
+    items[3].click()
+    assert.deepEqual(c.calls.at(-1), ['setPage', 'lab'])
+    items[0].click()
+    assert.deepEqual(c.calls.at(-1), ['setPage', 'ops'])
+  }
+  assert.ok(mount(html`<${views.sessions.WorkersPage} s=${opsState({ ui: { page: '@workers' } })} c=${recorder()} />`).$('.folderbar'),
+    'on Background jobs too')
+  assert.ok(!mount(html`<${FolderBar} s=${opsState({ ui: { page: 'briefing' } })} c=${recorder()} />`).$('.folderbar'), 'none outside a folder')
+  // no way back of its own: the bar is the way
+  assert.ok(!mount(html`<${views.sessions.WorkersPage} s=${opsState({ ui: { page: '@workers' } })} c=${recorder()} />`).button('‹ Operations'))
+})
+
+test('operations: the parent tab opens its overview, its ▾ opens a menu of the same pages with their marks', async () => {
+  const proto = Object.getPrototypeOf(document.body)
+  proto.focus ??= function focus() { document.activeElement = this }
+  const c = recorder()
+  const bar = pageBar(opsState({ runs: [opsRun('mail', null), opsRun('backup', 'high')], ui: { page: 'inv' } }), c)
+  bar.$$('[role=tab]').find(b => b.text().startsWith('Operations')).click()
+  assert.deepEqual(c.calls.at(-1), ['setPage', 'ops'])
+  const caret = bar.button(en.folderMenu('Operations'))
+  assert.ok(caret, 'the ▾ beside the tab')
+  assert.equal(caret.getAttribute('aria-haspopup'), 'menu')
+  assert.ok(!bar.$('.folder-menu'), 'closed until clicked')
+  caret.click()
+  await tick()
+  const items = bar.$$('.folder-menu [role=menuitem]')
+  assert.deepEqual(items.map(b => b.$('.folder-name').text()), [en.folderOverview, en.workersTab, 'Inventory', 'Lab'])
+  assert.equal(items[1].$('.folder-note').text(), en.folderOutages(1))
+  items[3].click()
+  await tick()
+  assert.deepEqual(c.calls.at(-1), ['setPage', 'lab'])
+  assert.ok(!bar.$('.folder-menu'), 'a pick closes it')
+})
+
+test('operations: the tab order follows the listing, and a page without under is a tab of its own again', () => {
+  const { pageOrder, subPagesOf } = views.nav
+  const s = opsState()
+  const gh = { id: 'gh', title: 'GitHub', group: 'main', badge: { kind: 'ok' }, overview: false, cards: null, jev: false, under: null, subs: [], sections: [] }
+  const order = pages => pageOrder({ ...s, model: { ...s.model, pages } }).filter(id => ['ops', 'gh'].includes(id))
+  assert.deepEqual(order([...s.model.pages, gh]), ['ops', 'gh'])
+  assert.deepEqual(order([gh, ...s.model.pages]), ['gh', 'ops'])
+  const free = { ...s, model: { ...s.model, pages: s.model.pages.map(p => (p.id === 'lab' ? { ...p, under: null }
+    : p.id === 'ops' ? { ...p, subs: ['@workers', 'inv'] } : p)) } }
+  assert.ok(pageOrder(free).includes('lab'))
+  assert.deepEqual(subPagesOf(free, 'ops'), ['@workers', 'inv'])
+  assert.ok(!mount(html`<${views.header.FolderBar} s=${{ ...free, ui: { ...free.ui, page: 'lab' } }} c=${recorder()} />`).$('.folderbar'))
+})
+
+/** Runs on machines: the always-on box with an outage and a job in order, the laptop with one */
+const hostRun = (id, host, severity = null, extra = {}) => ({ ...opsRun(id, severity), host, system: '', kind: 'interval', ...extra })
+const machinePages = () => {
+  const s = opsState()
+  const inv = s.model.pages.find(p => p.id === 'inv')
+  const lab = s.model.pages.find(p => p.id === 'lab')
+  const mrow = (i, name, tone, detail) => ({ ...opsRow(i, name, tone), id: `machine:${name}`, detail })
+  return s.model.pages.map(p => (p === inv ? { ...inv, sections: [opsSec('machines', 'Machines',
+    [mrow(0, 'homebox', null, 'always on'), mrow(1, 'laptop', null, 'online'), mrow(2, 'gpu-box', 'dim', 'offline'), mrow(3, 'printer', 'dim', 'outside')])] }
+    : p === lab ? { ...lab, sections: [opsSec('remotes', 'Remotes', [{ ...opsRow(0, 'gpu-box', 'dim'), detail: 'off' }, { ...opsRow(1, 'homebox'), detail: 'on' }])] } : p))
+}
+
+test('machines: one line per machine a job runs on or a sub page names, the always-on first; a printer is not one', () => {
+  const runs = [hostRun('mail', 'homebox'), hostRun('backup', 'homebox', 'high'), hostRun('sync', 'laptop', 'medium')]
+  const lines = loadedLogic.machineLines({ runs, hosts: ['homebox'], pages: machinePages() })
+  assert.deepEqual(lines.map(x => x.name), ['homebox', 'laptop', 'gpu-box'])
+  const [box, laptop, gpu] = lines
+  assert.deepEqual([box.always, box.jobs, box.failing, box.upkeep, box.tone], [true, 2, 1, 0, 'bad'])
+  assert.deepEqual(box.places.map(p => [p.page, p.title, p.state]), [['lab', 'Lab', 'on']])
+  assert.deepEqual([laptop.always, laptop.jobs, laptop.upkeep, laptop.state, laptop.places.length], [false, 1, 1, 'online', 0])
+  assert.deepEqual([gpu.jobs, gpu.state, gpu.tone, gpu.places.map(p => p.state)], [0, 'offline', 'dim', ['off']])
+})
+
+test('machines: the rows as the server sends them (collector.info_out: a key, no id) still give a machine its state and its lab place', () => {
+  // info_out carries `key` (item:<page>/<section>/<source id>) and `row_id`, never `id`; a lab row names its machine
+  // in tags.Remote or its id pc:<name>, whatever its title says
+  const served = (page, sec, id, title, tone, detail, extra = {}) => ({ ...opsRow(0, title, tone), key: `item:${page}/${sec}/${id}`,
+    row_id: null, detail, ...extra })
+  const s = opsState()
+  const pages = s.model.pages.map(p => (p.id === 'inv' ? { ...p, sections: [opsSec('machines', 'Machines', [
+    served('inv', 'machines', 'machine:homebox', 'homebox', null, 'macos · macOS 27.0 · online · always on', { tags: { Device: 'macos' } }),
+    served('inv', 'machines', 'machine:gpu-box', 'gpu-box', 'dim', 'windows · Windows 11 · offline', { tags: { Device: 'windows' } })])] }
+    : p.id === 'lab' ? { ...p, sections: [opsSec('remotes', 'Remotes', [
+      served('lab', 'remotes', 'pc:gpu-box', 'GPU box (lab)', 'dim', 'off', { row_id: 'pc:gpu-box', tags: { Remote: 'gpu-box' } })])] } : p))
+  const lines = loadedLogic.machineLines({ runs: [hostRun('mail', 'homebox')], hosts: ['homebox'], pages })
+  assert.deepEqual(lines.map(x => x.name), ['homebox', 'gpu-box'], 'a machine with no job still has its line through its lab row')
+  const [box, gpu] = lines
+  assert.deepEqual(box.places, [], 'the inventory row is the state, never a place of its own')
+  // the state without its device word, which the tags already say
+  assert.equal(gpu.state, 'Windows 11 · offline')
+  assert.equal(gpu.tone, 'dim')
+  assert.deepEqual(gpu.places.map(p => [p.page, p.state]), [['lab', 'off']])
+})
+
+test('machines: the block on the overview opens the jobs of a machine, a lab state opens the lab', () => {
+  const { MachineLines } = views.pages
+  const runs = [hostRun('mail', 'homebox'), hostRun('backup', 'homebox', 'high'), hostRun('sync', 'laptop', 'medium')]
+  const base = opsState({ runs, ui: { page: 'ops' } })
+  const s = { ...base, model: { ...base.model, pages: machinePages() }, workers: { ...base.workers, data: { ...base.workers.data, hosts: ['homebox'] } } }
+  const c = recorder()
+  const el = mount(html`<${MachineLines} page=${s.model.pages[0]} s=${s} c=${c} />`)
+  assert.equal(el.$('.mlines-title').text(), en.machinesTitle)
+  const rows = el.$$('.mline')
+  assert.deepEqual(rows.map(r => r.$('.mline-name').text()), ['homebox', 'laptop', 'gpu-box'])
+  assert.match(rows[0].text(), new RegExp(en.machineAlways))
+  assert.match(rows[0].text(), new RegExp(en.machineJobs(2)))
+  assert.ok(rows[0].$('.mline-main .tk-danger'), 'an outage is red')
+  rows[0].$('.mline-main').click()
+  assert.deepEqual(c.calls.at(-1), ['openWorkers', { host: 'homebox' }])
+  rows[0].button(en.machinePlace('Lab', 'on')).click()
+  assert.deepEqual(c.calls.at(-1), ['setPage', 'lab'])
+  rows[2].$('.mline-main').click()
+  assert.deepEqual(c.calls.at(-1), ['setPage', 'lab'])
+  // a page outside a folder draws none
+  assert.ok(!mount(html`<${MachineLines} page=${s.model.pages[1]} s=${s} c=${recorder()} />`).$('.mlines'))
+})
+
+test('background jobs: by machine, the always-on first, the systems with an outage first, every job in view', () => {
+  const runs = [hostRun('sync', 'laptop', null, { system: 'notes' }), hostRun('mail', 'homebox', null, { system: 'mail' }),
+    hostRun('backup', 'homebox', 'high', { system: 'store' }), hostRun('pilot', 'homebox', 'medium', { system: 'mail' })]
+  const groups = loadedLogic.groupByHost(runs, { hosts: ['homebox'], systems: [{ id: 'mail', title: 'Mail' }, { id: 'store', title: 'Store' }] })
+  assert.deepEqual(groups.map(g => [g.host, g.always, g.runs.length, g.failing, g.upkeep]), [['homebox', true, 3, 1, 1], ['laptop', false, 1, 0, 0]])
+  assert.deepEqual(groups[0].groups.map(g => [g.id, g.runs.map(r => r.id)]), [['store', ['backup']], ['mail', ['pilot', 'mail']]])
+  const base = opsState({ runs, ui: { page: '@workers' } })
+  const s = { ...base, workers: { ...base.workers, data: { ...base.workers.data, hosts: ['homebox'], systems: [{ id: 'mail', title: 'Mail' }] } } }
+  const el = mount(html`<${views.sessions.WorkersPage} s=${s} c=${recorder()} />`)
+  const heads = el.$$('.wmachine > .wmachine-head')
+  assert.deepEqual(heads.map(h => h.$('.rgroup-title').text()), ['homebox', 'laptop'])
+  assert.match(heads[0].text(), new RegExp(en.machineAlways))
+  assert.equal(el.$$('.wrow').length, 4, 'every job, not only those with a finding')
+  // the machine is the first filter, as chips
+  const first = el.$('.wfilters .wfacet')
+  assert.equal(first.$('.label-caps').text(), en.workerFacet.host)
+  assert.deepEqual(first.$$('.fchip').map(b => b.text().split(' ')[0]), ['homebox', 'laptop'])
+})
+
+test('background jobs: a row names its kind, when it ran last and when it runs next', () => {
+  const now = new Date(2026, 9, 9, 12, 0).getTime()
+  const at = (h, m) => new Date(2026, 9, 9, h, m).toISOString()
+  const daily = { when: 'FREQ=DAILY at 06:05; FREQ=DAILY at 18:05', day: { marks: [{ at_pct: 25, today: true }] }, strip: [{ at: at(6, 6), verdict: 'ok' }] }
+  assert.deepEqual(loadedLogic.runTimes(daily, now), { last: Date.parse(at(6, 6)), next: new Date(2026, 9, 9, 18, 5).getTime() })
+  const every = { when: 'every 900s', day: { marks: [] }, strip: [{ at: at(11, 50), verdict: 'ok' }] }
+  assert.deepEqual(loadedLogic.runTimes(every, now), { last: Date.parse(at(11, 50)), next: Date.parse(at(12, 5)) })
+  assert.deepEqual(loadedLogic.runTimes({ when: 'continuous', strip: [] }, now), { last: null, next: null })
+  // a weekly run not due today names no time today
+  assert.equal(loadedLogic.runTimes({ when: 'FREQ=WEEKLY;BYDAY=SU at 10:30', day: { marks: [] }, strip: [] }, now).next, null)
+  const run = hostRun('mail', 'homebox', null, { kind: 'recurring', ...daily, title: 'Mail digest', purpose: 'sends the digest' })
+  const s = opsState({ runs: [run], ui: { page: '@workers' } })
+  const row = mount(html`<${views.sessions.WorkersPage} s=${{ ...s, now }} c=${recorder()} />`).$('.wrow')
+  assert.match(row.$('.wrow-name').text(), new RegExp(en.workerKind.recurring))
+  assert.match(row.$('.wrow-times').text(), /06:06/)
+  assert.match(row.$('.wrow-times').text(), /18:05/)
+})
+
+test('lab: a sub page with overview shows a head card of its own parts, folded where they say the same, no jobs and no tokens', () => {
+  const rest = { ...opsRow(0, 'Lab not running', 'dim'), detail: 'the box is off' }
+  const lab = { id: 'lab', title: 'Lab', overview: true, under: 'ops', sections: [
+    opsSec('remotes', 'Remotes', [opsRow(0, 'gpu-box', 'dim'), opsRow(1, 'homebox')]),
+    opsSec('findings', 'Findings', [], { alarm: true, empty: 'Lab quiet' }),
+    opsSec('gpu', 'GPU', [rest]), opsSec('llm', 'Model', [rest]),
+    opsSec('logs', 'Logs', [opsRow(0, 'journal', 'warn'), opsRow(1, 'tasks', 'warn')])] }
+  const lines = loadedLogic.pageSummary(lab)
+  assert.deepEqual(lines.map(x => [x.titles.join('+'), x.kind, x.tone]), [['Remotes', 'rows', 'neutral'], ['Findings', 'empty', 'success'],
+    ['GPU+Model', 'one', 'neutral'], ['Logs', 'loud', 'warning']])
+  const base = opsState({ ui: { page: 'lab' } })
+  const s = { ...base, usage: { status: 'ok', data: { days: [], outliers: [] } }, model: { ...base.model, pages: base.model.pages.map(p => (p.id === 'lab' ? { ...p, ...lab } : p)) } }
+  const c = recorder()
+  const el = mount(html`<${views.pages.PageSummary} page=${s.model.pages.find(p => p.id === 'lab')} s=${s} c=${c} />`)
+  const rows = el.$$('.psum-line')
+  assert.equal(rows.length, 4)
+  assert.match(rows[0].text(), new RegExp(`Remotes.*${en.summaryRows(1, 1)}`))
+  assert.match(rows[2].text(), /GPU, Model.*Lab not running/)
+  assert.match(rows[3].text(), new RegExp(`Logs.*${en.folderWarnings(2)}`))
+  assert.ok(!el.text().includes(en.workersTab) && !el.text().includes(en.usageTitle), el.text())
+})
+
+test('operations: a section with hide_ok is drawn only while one of its rows is a finding', () => {
+  const { PageSection } = views.pages
+  const s = opsState({ ui: { page: 'inv' } })
+  const page = s.model.pages.find(p => p.id === 'inv')
+  const cloud = page.sections.find(x => x.id === 'cloud')
+  assert.ok(!mount(html`<${PageSection} page=${page} section=${cloud} s=${s} c=${recorder()} />`).$('section'), 'hidden while quiet')
+  const down = { ...cloud, bad: 1, items: [opsRow(0, 'fn-a', 'bad')] }
+  assert.ok(mount(html`<${PageSection} page=${page} section=${down} s=${s} c=${recorder()} />`).$('section'), 'shown with a finding')
 })
 
 // ---------------------------------------------------------------- the runaway guard of cockpit_render.mjs
@@ -2289,4 +3079,154 @@ test('print: a failing test on an element ends in seconds through the test repor
   assert.equal(r.status, 1, r.out)
   assert.match(r.out, /an element where none belongs/)
   assert.ok(r.out.length < 20000, `the report is ${r.out.length} characters long`)
+})
+
+// ---------------------------------------------------------------- round 6 b: what the Sessions page held, in the Chat
+
+const OFFLINE = { enabled: true, online: false, reason: 'no_heartbeat', session: null, records: [] }
+const chatOn = (over = {}) => cockpitState(NOW, { ...over, ui: { room: { kind: 'chat' }, tabView: 'surface:99', ...(over.ui ?? {}) } })
+
+test('round 6 b S3: the Chat says on its head why the relay has nobody to ask, with the button that starts a control session', () => {
+  const t = text.T()
+  const c = recorder()
+  const el = mount(html`<${RoomsPage} s=${chatOn({ relay: OFFLINE })} c=${c} />`)
+  const note = el.$('.chat-control')
+  assert.ok(!!note, 'the notice on top of the Chat')
+  assert.ok(note.text().includes(t.relayReason.no_heartbeat), note.text())
+  note.button(t.btnStartControl).click()
+  assert.deepEqual(c.calls.at(-1), ['act', 'start_control', {}])
+  // the same notice stands on top of the classic Chat (views/chat.js ChatPage)
+  const own = mount(html`<${views.header.ControlNotice} s=${chatOn({ relay: OFFLINE })} c=${recorder()} />`)
+  assert.ok(own.$$('.chat-control').some(x => x.text().includes(t.relayReason.no_heartbeat)), 'the notice on its own')
+  // the relay ready: nothing
+  assert.ok(!mount(html`<${RoomsPage} s=${chatOn()} c=${recorder()} />`).$('.chat-control'), 'nothing while the relay is ready')
+  // a control session that runs but does not listen: the Chat says so, and the header's badge leads there where
+  // Running now lists the sessions (the Sessions page without Work through)
+  const deaf = { ...OFFLINE, reason: 'ambiguous' }
+  const words = mount(html`<${RoomsPage} s=${chatOn({ relay: deaf })} c=${recorder()} />`).$$('.chat-control').map(x => x.text())
+  assert.ok(words.some(w => w.includes(t.sessionControlNoRelay)), words.join(' | '))
+  const badge = s => { const c2 = recorder(); mount(html`<${views.header.RelayBadge} s=${s} c=${c2} />`).$('button.hdr-relay').click(); return c2.calls }
+  assert.deepEqual(badge(chatOn({ relay: deaf })), [['setPage', '@chat']])
+  const classicFlow = chatOn({ relay: deaf })
+  assert.deepEqual(badge({ ...classicFlow, work: { ...classicFlow.work, flow: { enabled: false } } }), [['setPage', '@sessions']])
+})
+
+test('round 6 b S4: the Chat warns when the tab list is broken or no driver lists the tabs, and a tab links to its task', () => {
+  const t = text.T()
+  const banners = s => mount(html`<${RoomsPage} s=${s} c=${recorder()} />`).$$('.banner').map(x => x.text())
+  const base = chatOn()
+  const broken = banners(chatOn({ tabs: { ...base.tabs, error: { since: '11:58', message: 'the terminal did not answer' } } }))
+  assert.ok(broken.some(w => w.includes(t.tabsStale('11:58', 'the terminal did not answer'))), broken.join(' | '))
+  const none = banners(chatOn({ cmux: { ok: false, error: null }, driver: { caps: [] } }))
+  assert.ok(none.some(w => w.includes(t.noDriver)), none.join(' | '))
+  assert.deepEqual(banners(base), [])
+  // a task tab names its task, a click opens it in the drawer over the Chat
+  const open = ref => {
+    const c = recorder()
+    const el = mount(html`<${RoomsPage} s=${chatOn({ ui: { room: { kind: 'tab', id: ref } } })} c=${c} />`)
+    const link = el.$('.tabview-head .room-task')
+    if (!link) return null
+    link.click()
+    const call = c.calls.find(x => x[0] === 'openItem')
+    return call ? [call[1], link.getAttribute('title')] : []
+  }
+  assert.deepEqual(open('surface:12'), ['task:demo-task', t.infoOpenTask])
+  // a tab typed into by hand whose session works on a task (recognised): that task
+  assert.deepEqual(open('surface:14'), ['task:search-index', t.infoOpenTask])
+  // a tab of no task: no link
+  assert.equal(open('surface:11'), null)
+})
+
+// ---------------------------------------------------------------- round 6 c fix: the small fixes block on the day
+
+test('the day names its housekeeping block in plain words and says per line what to do, the text where it has no kind', () => {
+  const { DayView } = views.detail
+  const base = cockpitState(NOW)
+  const tend = [
+    { kind: 'no_next', text: '2 tasks without a next step: a, b', n: 2, names: ['alpha', 'beta'] },
+    { kind: 'untasked', text: 'GitHub: assigned to you without a task: 12', n: 12, names: [], title: 'GitHub' },
+    { kind: 'muted', text: '2 muted', n: 2, names: [] },
+    { kind: 'note', text: '9 tasks active, 5 is the cap', n: null, names: [] },
+  ]
+  const s = { ...base, model: { ...base.model, extras: { ...base.model.extras, hygiene: tend.map(x => x.text), tend } } }
+  const el = mount(html`<${DayView} s=${s} c=${recorder()} />`)
+  const block = el.$$('.ov-block').find(b => b.$('h3')?.text() === en.hygieneTitle)
+  assert.ok(block, 'the block under its title')
+  const lines = block.$$('li').map(li => li.text().trim())
+  assert.deepEqual(lines, [en.tend.no_next(tend[0]), en.tend.untasked(tend[1]), en.tend.muted(tend[2]), tend[3].text])
+  // without facts (an older server) the lines stand as they came
+  const old = { ...base, model: { ...base.model, extras: { ...base.model.extras, hygiene: ['x line'], tend: undefined } } }
+  assert.ok(mount(html`<${DayView} s=${old} c=${recorder()} />`).text().includes('x line'))
+  // the word nobody understood is gone from every German text that names this block
+  const de = text.TABLES.de
+  assert.doesNotMatch(`${de.hygieneTitle} ${de.allAreas} ${de.settings.explainOption['d:day']}`, /Aufräumen/)
+  for (const k of ['no_next', 'untasked', 'muted', 'error', 'repos_skipped', 'owed', 'hidden']) {
+    assert.equal(typeof de.tend[k], 'function', k)
+    assert.match(de.tend[k]({ n: 2, names: ['a', 'b'], title: 'X', reason: 'r' }), /\.$/, `${k} is a sentence`)
+  }
+})
+
+test('background jobs answer to the words Worker and Workflow, name every machine they list, and the header says AI runs', () => {
+  const run = (id, host, kind, extra = {}) => ({ ...opsRun(id, null), host, kind, system: '', ...extra })
+  const runs = [run('mail', 'homebox', 'daemon'), run('nightly', 'homebox', 'recurring'), run('poll', 'laptop', 'interval'), run('eye', 'homebox', 'watch')]
+  const ids = q => loadedLogic.filterWorkers(runs, { q }).map(r => r.id)
+  assert.deepEqual(ids('workflow'), ['nightly', 'poll'], 'scheduled and interval runs are the workflows')
+  assert.deepEqual(ids('Worker'), ['mail', 'nightly', 'poll', 'eye'], 'every background job is a worker')
+  assert.deepEqual(ids('termin'), ['nightly'], 'the German kind word too')
+  assert.deepEqual(ids('dienst'), ['mail'])
+  const s = opsState({ runs, ui: { page: '@workers' } })
+  const el = mount(html`<${views.sessions.WorkersPage} s=${s} c=${recorder()} />`)
+  assert.match(el.$('.page-head').text(), /homebox, laptop/, 'the head names both machines')
+  assert.equal(el.$('.workers-intro').text(), en.workersIntro)
+  // the retired label Worker stays retired in the texts (one word per thing); the search answers to it all the same
+  assert.match(text.TABLES.de.workersIntro, /Workflows/)
+  // a search that finds nothing does not add the count of units the machine runs without a declaration
+  const none = mount(html`<${views.sessions.WorkersPage} s=${{ ...s, ui: { ...s.ui, workersFilter: { q: 'zzz' } },
+    workers: { ...s.workers, data: { ...s.workers.data, elsewhere: { undeclared: { counted: 9 } } } } }} c=${recorder()} />`)
+  assert.ok(!none.text().includes(en.workersElsewhere(9)))
+  // the header's count of Claude workflows no longer says Workflows, which are the jobs of the machines to the person
+  for (const lang of ['en', 'de']) assert.doesNotMatch(text.TABLES[lang].header.working(1, 0, 2), /[Ww]orkflow/, lang)
+})
+
+test('lab: a head line that folds more than two parts names the first and counts the rest, the whole list as its tooltip', () => {
+  const rest = { ...opsRow(0, 'Lab not running', 'dim'), detail: 'the box is off' }
+  const lab = { id: 'lab', title: 'Lab', overview: true, under: 'ops', sections: [
+    opsSec('gpu', 'GPU', [rest]), opsSec('llm', 'Model', [rest]), opsSec('guests', 'Guests', [rest]), opsSec('disk', 'Storage', [rest])] }
+  const base = opsState({ ui: { page: 'lab' } })
+  const s = { ...base, model: { ...base.model, pages: base.model.pages.map(p => (p.id === 'lab' ? { ...p, ...lab } : p)) } }
+  const line = mount(html`<${views.pages.PageSummary} page=${s.model.pages.find(p => p.id === 'lab')} s=${s} c=${recorder()} />`).$('.psum-line')
+  assert.equal(line.$('.psum-title').text(), en.summaryParts(['GPU', 'Model', 'Guests', 'Storage']))
+  assert.equal(line.$('.psum-title').getAttribute('title'), 'GPU, Model, Guests, Storage')
+  assert.equal(en.summaryParts(['GPU', 'Model']), 'GPU, Model')
+})
+
+test('a drawn list shows the When column only where a row has a time, and names its actions column for a screen reader only', () => {
+  const { PageSection } = views.pages
+  const s = opsState({ ui: { page: 'inv' } })
+  const page = s.model.pages.find(p => p.id === 'inv')
+  const plain = opsSec('gpu', 'GPU', [{ ...opsRow(0, 'card 0'), detail: '40 %' }])
+  const el = mount(html`<${PageSection} page=${page} section=${plain} s=${s} c=${recorder()} />`)
+  assert.ok(!el.$('th.c-when') && !el.$('td.c-when'), 'no empty When column')
+  assert.ok(el.$('th.c-acts .sr-only'), 'the actions head is not drawn as a word')
+  const timed = opsSec('gpu', 'GPU', [{ ...opsRow(0, 'card 0'), when: '09:12' }])
+  assert.ok(mount(html`<${PageSection} page=${page} section=${timed} s=${s} c=${recorder()} />`).$('td.c-when'))
+})
+
+test('github (6c fix): a board column spelled two ways is one option, the rows drop the GitHub tag their ref already says', () => {
+  const rows = ghBarRows().map(r => (r.index === 2 ? { ...r, gh: { ...r.gh, status: 'In progress' } }
+    : r.index === 3 ? { ...r, gh: { ...r.gh, board: 'Demo board', status: 'Todo' } } : r))
+  const { el, picked } = ghBar(null, rows)
+  const status = el.$('.ghf-field[data-dim="status"] select')
+  assert.deepEqual(status.$$('option').map(o => o.text()), [en.gh.bar.all(3), 'In Progress (2)', 'Todo (1)'])
+  status.value = 'in progress'
+  status.dispatch('change')
+  const f = picked.at(-1)
+  assert.equal(rows.filter(it => loadedLogic.ghPasses(it, f)).length, 2, 'the pick holds both spellings')
+  // the settings link says what it does: which boards are fetched, not a second board filter
+  assert.notEqual(en.gh.boardsSettings, en.gh.bar.dim.board)
+  assert.match(text.TABLES.de.gh.boardsSettings, /laden/)
+  const { GitHubList } = views.github
+  const s = cockpitState(NOW)
+  const list = mount(html`<${GitHubList} items=${ghBarRows()} page="github" section=${{ id: 'boards', boards: [] }} s=${s} c=${recorder()} byKey=${new Map()} />`)
+  assert.ok(list.$('.ghl-ref') && !list.$('.ghl-row .origin'), 'repo#n, no GitHub chip')
 })

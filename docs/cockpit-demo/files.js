@@ -1,25 +1,132 @@
 // SPDX-License-Identifier: MIT
 // Pure helpers of the cockpit's files view: the queue of files, what a file's drawers hold, its next step,
-// the search and what a question asked in a file carries along. No DOM, no network, no state. logic.js
+// the search and what a question asked in a file carries along, and the start of the files tab (its records, their
+// filters, what its question to the AI sends and holds back). No DOM, no network, no state. logic.js
 // passes every name on, so a view may import it from either; the frontend test imports this file under node.
 import { TABLES } from './text.js'
-import { CONTEXT_MAX, indexRows, liveStage, queueOf } from './logic.js'
-import { areaScope, inProject } from './areas.js'
+import { CONTEXT_MAX, FILES_PAGE, filesOn, indexRows, liveStage, queueOf } from './logic.js'
+import { areaScope, inProject, rowProject } from './areas.js'
 
-/** The files the files view walks under the filters of Work (areaScope as on Work, whatever page is open):
+/** The files the files view walks under the filters of the files tab (areaScope as there, whatever page is open):
  *  what Next and Previous, n and p and a found file see */
 export function scopedFileQueue(s) {
-  const v = areaScope({ ...s, ui: { ...s.ui, page: 'briefing' } })
+  const v = areaScope({ ...s, ui: { ...s.ui, page: FILES_PAGE } })
   return fileQueue(v.tabs?.tabs ?? [], v.model, s.now || Date.now(), s.sessions?.runs)
 }
 
-/** Where a found file opens: at its place in the filtered queue, else beside the queue (a file of another area,
- *  a backlog task); a closed one always beside it, by its folder, since a slug can be open and closed at once */
+// ---------------------------------------------------------------- the start of the files tab
+
+export const RECORD_STATES = ['open', 'done', 'all']
+// what a record is: a closed one is its kind too (work_kind done_task, done_stream), closed is a state
+export const RECORD_KINDS = ['task', 'stream']
+// the records a question to the AI takes at most (work_find.py ASK_FILES_MAX, the server checks it again)
+export const ASK_FILES_MAX = 12
+
+const fold = x => String(x ?? '').toLowerCase()
+
+/** A record's area, from one place for the list and the opened record: the area the cockpit names (its row, its
+ *  file of model.files), else the one the server read from its front matter (`fallback`: the record's area, its
+ *  context) */
+export function recordArea(row, file, fallback = null) {
+  return rowProject(row) || file?.area_names?.[0] || fallback || null
+}
+
+/** A matching line as text to read: no Markdown marks (bold, italic, code, a heading or list mark), a table row's
+ *  cells joined by a dot (also a row the snippet cut short, its … kept), a front matter line by its value; a `slug:`
+ *  line is no match to show (null) */
+export function hitText(line) {
+  const raw = String(line ?? '').trim()
+  if (!raw || /^slug\s*:/i.test(raw)) return null
+  const cut = /^…/.test(raw) ? '…' : ''
+  const body = raw.replace(/^…\s*/, '')
+  const row = /^\|/.test(body) || /\|$/.test(body) || /\|.*\|/.test(body) || (!!cut && body.includes(' | '))
+  const cells = row ? body.replace(/^\|/, '').replace(/\|$/, '').split('|').map(x => x.trim()).filter(Boolean).join(' · ') : body
+  const front = cells.match(/^[a-z][a-z_]*:\s+["']?(.*?)["']?$/)
+  return (cut + (front && !row ? front[1] : cells)).replace(/^#{1,6}\s+/, '').replace(/^[-*+]\s+/, '').replace(/\*\*|__|`/g, '')
+    .replace(/(^|[\s(])[*_]([^*_\s][^*_]*?)[*_](?=[\s).,:;!?]|$)/g, '$1$2').replace(/\s+/g, ' ').trim() || null
+}
+
+/** The records of the files tab's start (GET /api/records, `s.records`) as it lists them under its filters: the
+ *  words of ui.filesQ, every one in the title, slug, area or theme, or in what the server's search found for those
+ *  words (s.find, with its first line as `hit`); ui.area as everywhere; ui.filesState open (default), done or all;
+ *  ui.filesKind task or stream (a closed one by what it was). A record's area is recordArea's; its theme the one
+ *  Work through placed its point in; its `hit` the first matching line that reads as text (hitText). Newest change first, the ones whose title
+ *  or slug holds the words before the rest. {rows, areas, status, error}: `areas` every area named, for the chips */
+export function recordList(s) {
+  const records = s?.records?.data?.records ?? []
+  const model = s?.wholeModel ?? s?.model
+  const rows = indexRows(model)
+  const files = new Map((model?.files ?? []).map(f => [f.slug, f]))
+  const themes = new Map((s?.themes?.themes ?? []).map(t => [t.id, t.name]))
+  const ui = s?.ui ?? {}
+  const q = String(ui.filesQ ?? '').replace(/\s+/g, ' ').trim()
+  const words = q ? [...new Set(fold(q).split(' '))] : []
+  const found = s?.find?.status === 'ok' && s.find.q === q ? new Map((s.find.data?.groups ?? []).map(g => [g.path, g])) : new Map()
+  const state = RECORD_STATES.includes(ui.filesState) ? ui.filesState : 'open'
+  const kind = RECORD_KINDS.includes(ui.filesKind) ? ui.filesKind : null
+  const out = []
+  const areas = new Map()
+  for (const r of records) {
+    const open = r.kind !== 'done'
+    const row = open ? rows.get(`task:${r.slug}`) : null
+    const area = recordArea(row, files.get(r.slug), r.area)
+    if (area && !areas.has(fold(area))) areas.set(fold(area), area)
+    const theme = open ? themes.get(s?.themes?.assign?.[`task:${r.slug}`]) ?? null : null
+    if (state === 'open' ? !open : state === 'done' ? open : false) continue
+    if (kind && String(r.work_kind ?? '').replace(/^done_/, '') !== kind) continue
+    if (ui.area && !inProject({ area, area_names: [r.area] }, ui.area)) continue
+    const g = found.get(r.path)
+    const named = words.every(w => fold(`${r.title} ${r.slug}`).includes(w))
+    if (words.length && !g && !words.every(w => fold(`${r.title} ${r.slug} ${area ?? ''} ${theme ?? ''}`).includes(w))) continue
+    // the first line that reads as text and says more than the title
+    const hit = (g?.hits ?? []).map(h => hitText(h.text)).find(x => x && fold(x) !== fold(r.title)) ?? null
+    out.push({ ...r, area, theme, hit, named: !words.length || named })
+  }
+  out.sort((a, b) => (b.named - a.named) || String(b.updated ?? '').localeCompare(String(a.updated ?? '')))
+  return { rows: out, areas: [...areas.values()], status: s?.records?.status ?? null, error: s?.records?.error ?? null }
+}
+
+/** What the files tab's question to the AI sends: the folders of the first ASK_FILES_MAX records listed, each once,
+ *  but every one the block list (cockpit.files_search.block) holds back; those are counted with the words that held
+ *  them. A record the server checked names those words (`held`, GET /api/records: it reads the text that would go
+ *  too, actions_work.record_check), so the count is the server's; one without (an older server) is checked here by
+ *  its area, theme, path and title, case folded. The server holds them back again. {paths, held: {n, words}} */
+export function askPlan(rows, words) {
+  const block = (words ?? []).filter(w => typeof w === 'string' && w)
+  const seen = new Set()
+  const paths = []
+  const hit = new Set()
+  let held = 0
+  for (const r of rows ?? []) {
+    if (paths.length + held >= ASK_FILES_MAX) break
+    if (!r?.path || seen.has(r.path)) continue
+    seen.add(r.path)
+    const hay = [r.area, r.theme, r.path, r.title].filter(Boolean).map(fold)
+    const by = Array.isArray(r.held) ? block.filter(w => r.held.some(x => fold(x) === fold(w)) || hay.some(h => h.includes(fold(w))))
+      : block.filter(w => hay.some(h => h.includes(fold(w))))
+    if (by.length) { held += 1; by.forEach(w => hit.add(w)) } else paths.push(r.path)
+  }
+  return { paths, held: { n: held, words: block.filter(w => hit.has(w)) } }
+}
+
+/** Where a found file opens: at its place in the filtered queue, the walk on (ui.filesWalk), else beside the queue
+ *  (a file of another area, a backlog task); a closed one always beside it, by its folder, since a slug can be open
+ *  and closed at once */
 export function fileOpen(s, slug, path) {
   const closed = typeof path === 'string' && path.startsWith('work/done/')
   const queue = closed ? [] : scopedFileQueue(s)
   const i = queue.findIndex(x => x.slug === slug)
-  return i >= 0 ? { dossierAt: { id: queue[i].id, i }, dossierOpen: null } : { dossierOpen: closed ? path : slug }
+  return i >= 0 ? { dossierAt: { id: queue[i].id, i }, dossierOpen: null, filesWalk: true } : { dossierOpen: closed ? path : slug }
+}
+
+/** Where a click on a task's file shows it (c.openFile from a card, Work through, the start page, a drawer or the
+ *  files tab): the files tab with that record open, at its place in the walk where the filtered queue holds it
+ *  (fileOpen); in the files tab with nothing over it the page stays. Only where cockpit.work_views keeps no files
+ *  view the item drawer takes it over the page, which stays as it was. {item} or {ui, page} */
+export function fileClick(s, slug, path) {
+  if (s.ui?.page === FILES_PAGE && !s.ui.drawer && !s.ui.tabView) return { ui: fileOpen(s, slug, path) }
+  if (!filesOn(s)) return { item: `task:${slug}` }
+  return { ui: { drawer: null, item: null, ...fileOpen(s, slug, path) }, page: FILES_PAGE }
 }
 
 const FILE_STATES = ['doing', 'review']

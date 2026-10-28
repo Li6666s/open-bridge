@@ -1,7 +1,7 @@
 ---
-summary: "The cockpit's files view: one task at a time as a file on the work tab, its queue, next step and drawers, the search across every task, asking a file, the suggestion, the workflow runs as results, the files under the area filter, every task as a file behind the queue, and the switches cockpit.work_view, cockpit.focus_to_files and cockpit.files_scope."
+summary: "The cockpit's Files tab: a search over every record first, Ask the AI with a block list (cockpit.files_search), one task at a time as a file, its queue, next step and drawers, the search across every task, asking a file, the suggestion, the workflow runs as results, the files under the area filter, every task as a file behind the queue, and the switches cockpit.work_view, cockpit.focus_to_files, cockpit.files_scope and cockpit.files_search."
 type: guide
-last_updated: 2026-10-25
+last_updated: 2026-10-28
 related:
   - bridge-cockpit.md
   - cockpit-areas.md
@@ -10,7 +10,7 @@ related:
   - ../scripts/web/views/dossier.js
 ---
 
-# The files view
+# The Files tab
 
 > Part of [the Bridge cockpit](bridge-cockpit.md). The code is `scripts/web/files.js`,
 > `views/dossier.js`, `text-files.js` and `files.css`; the tests are
@@ -19,14 +19,73 @@ related:
 > `scripts/tests/bridge_cockpit_files_all.test.mjs` (the list on the server:
 > `scripts/tests/test_bridge_cockpit_files_all.py`).
 
-**Files** is one more view of the work tab, on every Bridge, with or without a
-work page, beside Due and never in its place: Due stays, and stays the view the
-tab opens on, unless `cockpit.work_view: files` says otherwise (below). On a Bridge without a work page
-this is what makes the tab's view switch appear ("Due | Files"), since without
-it the view could not be reached. It shows one task at a time as
+**Files** is a tab of its own on every Bridge, with or without a work page,
+right after the work tab (de: Akten). It is no view of the work tab any more: the
+work tab's switch never offers it, and a stored or configured `files` view opens
+this tab once and leaves the work tab on the view it falls back to.
+
+## The search first
+
+The tab opens on a search. A large field takes the focus, with "Walk through
+the active records (n)" beside it, which starts the walk over the queue, one file
+at a time. Under it stand chips, each group under its small label: **Area** (the
+areas the records name, at most 12), **State** (open, done, all; open at first)
+and **Kind** (task or stream; a closed record counts by what it was, so Task with
+State all lists the closed tasks too), and the records changed last, newest first
+(at most 30 shown, "30 of 120 shown"). Typing narrows the list at once, over
+title, slug, area and theme, and over the text of every STATUS.md through the
+same search as below (`/api/find`, a moment after the last key), with the line
+that matched under the record as plain text (no Markdown marks, a table row's
+cells joined by a dot, never a `slug:` line). A click opens the record as a file
+(below); "Back to the search" at its head leads back with the words still typed.
+The start's field is the one search of the tab: an opened record has no second
+one.
+
+The records come from `GET /api/records`, a read: every folder of `work/tasks/`,
+`work/streams/` and `work/done/`, its front matter read in place (status,
+priority, area or context, the last change, title, kind), newest first, at most
+2000. A record's area comes from one place for the list and the opened record:
+the area of its row, else of its file of `model.files`, else the one its front
+matter names (`area`, else `context`).
+
+**Ask the AI** (de: Die AI fragen) stands under the chips where
+`cockpit.files_search.enabled` is true: a field of its own for the question and
+a button "Ask the AI about these n records". It sends that question, or a
+default one when the field is empty, with at most 12 of the records listed to a
+model, in one call with no tools, no settings and no session (the verb
+`files_ask`), and only on the click; the search words are never the question.
+The answer stands under it with a link to each record it names. Before the click
+a line says what a click sends, which words keep others private and how many
+questions are left today ("A click sends 2 records to the AI. 1 record stays
+private: insurance. 19 questions left today."); with none left the button
+waits, and with no record listed the line says so and nothing about privacy.
+The block list is `cockpit.files_search.block`: a record whose area (front
+matter and row), context, theme, path, title or the text that would go (the
+start of its STATUS.md, with its front matter and `related:`) holds one of its
+words, case folded, is dropped on the server before the request is built, so it
+never reaches the prompt. A word also matches inside a longer one (`tax` holds
+back `taxonomy` too): the list holds back more, never less. `GET /api/records`
+names, per record, the words that hold it (`held`, only with the question on and
+a block list), so the count before the click is the server's. When every record
+sent is gone since the page read them, the answer is "the records have changed,
+search again", not the block list. The calls of a day are capped
+by `budget_per_day` (20) and counted in `.bridge/cockpit/flow-activity.json`;
+the model is `model`, else the service `cockpit-files` of `workflow/ai-services/`
+(default Haiku).
+
+```yaml
+cockpit:
+  files_search:
+    enabled: true
+    budget_per_day: 20
+    block: [insurance, health, tax, family]
+```
+
+## One task at a time
+
+The walk shows one task at a time as
 a file, on one framed surface centred at a reading width (it stays in the
-middle when the sidebar is hidden). Above it stand the view switch and a small
-search field. On the surface: an eyebrow (File, "2 of 16", status, kind and
+middle when the sidebar is hidden). Above it stands "Back to the search". On the surface: an eyebrow (File, "2 of 16", status, kind and
 priority, the slug on the right), the task's title as the one heading, and the
 situation in one sentence (the `headline` of its STATUS.md, else what the
 triage made of it, always with where that comes from and its date). Under it
@@ -57,6 +116,12 @@ with where it comes from and since when; with none of these the file says "No
 next step known" rather than making one up. A file a tab asks about keeps the
 verbs of its task, the tab named beside them. Every task row of the model
 carries `status` and `next` for it (`model.task_next`).
+
+A link to a task inside this tab opens it here. Anywhere else (a
+point of Work through, Not now, a card, the start page) an open task opens in
+the Files tab with that record open (`files.js fileClick`): in the walk where
+the queue holds it, else beside it. Only where `cockpit.work_views` keeps no
+`files` does a task open in the item drawer over the page, as before.
 
 The view says what its queue leaves out, so a short queue explains itself.
 Under the head of the file stands one calm line: where the file stands, then
@@ -115,7 +180,7 @@ place, Markdown as formatted text and anything else as it stands, with its
 path (`GET /api/task?slug=&file=`, which reads only a file that list names).
 A folder with only STATUS.md shows no Files drawer.
 
-On top of the Files view stands a search field of its own. It searches every
+The search (the field of the start, or a search from elsewhere such as the command box) searches every
 task, stream and closed task (`work/tasks/`, `work/streams/`, `work/done/`),
 `work/log.md` and `work/archive/`: every `*.md` and `*.yaml`, never inside a
 `video/` or `deliverables/` folder, never a hidden file, a link or anything
@@ -150,16 +215,12 @@ any time. Nothing is written until you press Take over, which keeps the step
 in STATUS.md as `next: {what: ...}` with a dated note (`task.py next`, the
 verb `task_set_next`).
 
-**Switching the default.** Two keys of the `cockpit:` block ([section 1 of the cockpit page](bridge-cockpit.md#1-switch-it-on)) let
-the Files view take over step by step, each off by default, so a Bridge that
-sets neither sees the work tab as before:
+**Switching the default.** Keys of the `cockpit:` block ([section 1 of the cockpit page](bridge-cockpit.md#1-switch-it-on)) let
+the Files tab go further, each off by default:
 
-- `work_view: files` opens the work tab on Files (`due`, `source` and `jev`
-  name the other views; a view the tab does not offer opens Due). A click on
-  the tab's switch still picks another view for this browser, and that click
-  holds until the key changes: the first visit after a change opens the view
-  the key names, once, whatever was clicked before. Setting the key back to
-  `due` brings Due back the same way.
+- `work_view: files` no longer names a view of the work tab: the first visit of
+  the work tab after it opens the Files tab once, and the work tab keeps the view
+  it falls back to (`due`, `source`, `jev` and `flow` name its views).
 - `focus_to_files: true` lets the focus on the start page lead on into Files
   when it runs out: its calm card says "Continue with the files" in place of
   "Open the tasks", and its last step offers the same where the bar would say
@@ -168,15 +229,15 @@ sets neither sees the work tab as before:
 
 - `files_scope: all` makes every task and stream a file (below). The default
   `active` keeps the queue alone, as it always was.
+- `files_search` switches on Ask the AI and holds its block list (above).
 
-All three take effect with the next start of the cockpit (`bridge-cockpit.py stop`,
-then `open`) and a reload of the page. The page says which view it opened: every opening of the work
-tab, its view switch, the search of the command box and the focus's way on
-leave one `page_view` line in the audit log with `view=` (`due`, `area`, `jev`
-or `dossier`, the page's ids for Due, By source, By Jev and Files; [section 4 of the cockpit page](bridge-cockpit.md#4-safety-model)),
-so how often each view is used can be counted before the default changes, for
-instance with
-`grep -c ' page_view briefing view=dossier' .bridge/cockpit/audit.log`.
+They take effect with the next start of the cockpit (`bridge-cockpit.py stop`,
+then `open`) and a reload of the page. The page says which page and view it opened: every opening of a tab, the work
+tab's view switch, the search of the command box and the focus's way on leave
+one `page_view` line in the audit log, with the page id (`@files` for this tab)
+and, on the work tab, `view=` (`due`, `area`, `jev` or `flow`; [section 4 of the cockpit page](bridge-cockpit.md#4-safety-model)),
+so how often each is used can be counted, for instance with
+`grep -c ' page_view @files' .bridge/cockpit/audit.log`.
 
 ## Every task as a file
 
