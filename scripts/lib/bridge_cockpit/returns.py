@@ -8,9 +8,17 @@ Where a start stands is read from what the Bridge already has, nothing is asked 
 
 - started   no tab for it yet, within the first minutes
 - working   its tab works
-- asks      its tab waits for you, asks, or stopped at the prompt
-- result    it left an answer: a filed inbox item (the tab's `filed_by`), or a note on its inbox item
-            written after the start (work/inbox/<id>/events/<UTC stamp>-...-note.yaml)
+- asks      its tab waits for you: a dialog the terminal reports (needs-you), or a question on its screen
+            (asks.py: a question mark, numbered options, or words typed in its prompt)
+- idle      its tab stopped working and the words read off its screen ask nothing, or it is back at its
+            shell: still, most likely through (a screen not read keeps it at asks)
+- result    it left an answer: a filed inbox item (the tab's `filed_by`), a note on its inbox item
+            written after the start (work/inbox/<id>/events/<UTC stamp>-...-note.yaml), or a note on its
+            task since the day of the start, after the cockpit's own start line of that day, that begins
+            with the result head ("Result:", "Ergebnis:"). A newest note on its inbox item that begins with
+            the question head ("Question:", "Frage:") asks instead, also once its tab is gone, until its tab
+            works again or the item ends; the result then says `asks: true`. A tab still since well after
+            the question (ANSWERED_MS) with nothing asked on its screen was answered in the terminal: idle
 - done      its inbox item was ended after the start (closed, executed, dropped, rejected), or its task
             moved to work/done/
 - lost      no tab, no answer, and the start is a while ago
@@ -42,12 +50,18 @@ KEEP_MS = 7 * 24 * 3600 * 1000
 KEEP_MAX = 60
 SHOW_MAX = 12
 GRACE_MS = 3 * 60 * 1000        # a start without a tab counts as starting this long
+ANSWERED_MS = 60 * 1000         # a tab still this long after its question note worked on it since
 INBOX_ID_RE = re.compile(r"^\d{8}-\d{4}-[a-z0-9-]{1,80}\Z")
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,80}\Z")
+CONV_RE = re.compile(r"^q[0-9a-f]{10}\Z")       # a quick chat (quick.py CONV_RE)
+# the person's own sentence for a start (actions_work.py start_noted), on the item before the agent reads it
+START_NOTE = "Start note:"
 STAMP_RE = re.compile(r"^(\d{8}T\d{6}Z)")
 ANSWER_VERBS = ("note", "close", "executed", "failed")
 MODES = ("go", "report", "context")
-PICK_FIELDS = ("model", "effort", "routed_by")
+# what the agent started with when the cockpit chose it (launch.py), and who decided the start when it was not the
+# person's own click (by: suggestion, batch, instruction), kept for the Activity tab
+PICK_FIELDS = ("model", "effort", "routed_by", "by")
 
 
 class Launches:
@@ -68,7 +82,8 @@ class Launches:
         atomic_write_json(self.path, {"v": 1, "launches": self._items})
 
     def record(self, entries: list) -> None:
-        """Keep the starts that ran: [{key, item, title, mode, model?, effort?, routed_by?}], newest first"""
+        """Keep the starts that ran: [{key, item, title, mode, model?, effort?, routed_by?, by?, conv?}], newest first;
+        `conv` is the quick chat a start was handed on from, so its card leads back to that question"""
         now = self.clock()
         with self.lock:
             for e in entries:
@@ -78,7 +93,8 @@ class Launches:
                 self._items.insert(0, {"key": e["key"], "item": e["item"], "title": str(e.get("title") or e["item"])[:200],
                                        "mode": e.get("mode") if e.get("mode") in MODES else "go", "at_ms": now,
                                        # what the agent started with, when the cockpit chose it (launch.py)
-                                       **{k: e[k] for k in PICK_FIELDS if isinstance(e.get(k), str)}})
+                                       **{k: e[k] for k in PICK_FIELDS if isinstance(e.get(k), str)},
+                                       **({"conv": e["conv"]} if isinstance(e.get("conv"), str) and CONV_RE.match(e["conv"]) else {})})
             self._items = [x for x in self._items if now - float(x.get("at_ms") or 0) < KEEP_MS][:KEEP_MAX]
             self._save()
 
@@ -131,10 +147,53 @@ def inbox_answers(root: Path, item: str, since_ms: float) -> list:
             continue
         if isinstance(ev, dict) and ev.get("verb") in ANSWER_VERBS:
             text = ev.get("text") or ev.get("note") or ""
-            if ev["verb"] == "note" and str(text).strip().startswith(OWN_HEADS):
-                continue   # the cockpit's own start and "no word" lines, in any language, are no answer
+            if ev["verb"] == "note" and str(text).strip().startswith((*OWN_HEADS, START_NOTE)):
+                continue   # the cockpit's own start and "no word" lines, in any language, and the person's order are no answer
             out.append({"verb": ev["verb"], "text": str(text).strip()[:600], "at_ms": at})
     return out
+
+
+NOTE_RE = re.compile(r"^- (\d{4}-\d{2}-\d{2}): (.+)$")
+
+
+def _task_files(root: Path, slug: str) -> list:
+    work = Path(root) / "work"
+    return [work / "tasks" / slug / "STATUS.md", work / "streams" / slug / "STATUS.md",
+            *sorted(work.glob(f"done/*/{slug}/STATUS.md"))]
+
+
+def task_result(root: Path, slug: str, since_ms: float) -> dict | None:
+    """The newest result line on a task's notes (task.py note: `- YYYY-MM-DD: <text>`) dated on or after the
+    day of the start and after the cockpit's own start line of that day, if it wrote one (a note carries a day
+    only: a result line of an earlier start that day stands before it), as {kind: note, text}; at_ms stays None"""
+    if not SLUG_RE.match(slug):
+        return None
+    since = dt.date.fromtimestamp(since_ms / 1000).isoformat()
+    for path in _task_files(root, slug):
+        try:
+            body = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        found = re.search(r"^## Notes\s*$(.*?)(?=^## |\Z)", body, flags=re.M | re.S)
+        lines = [NOTE_RE.match(ln.strip()) for ln in (found.group(1).splitlines() if found else [])]
+        notes = [m.group(2).strip() for m in lines if m and m.group(1) >= since]
+        starts = [i for i, text in enumerate(notes) if text in START_LINES]
+        hits = [text for text in notes[starts[-1] + 1 if starts else 0:] if text.startswith(RESULT_HEADS)]
+        if hits:
+            return {"kind": "note", "text": hits[-1][:600], "key": None, "at_ms": None}
+    return None
+
+
+def _asks(tab: dict) -> bool:
+    """Whether a tab that stopped working asks something: a dialog the terminal reports, or a question read off
+    its screen (asks.py). Only last words read that ask nothing, or a shell its agent left, make it idle:
+    nothing read (no screens, the questions off, not read yet) may ask, as model.is_idle has it"""
+    if tab.get("state") == "shell":
+        return False
+    ask = tab.get("ask")
+    if tab.get("state") == "needs-you" or not ask:
+        return True
+    return bool(ask.get("yes_no") or ask.get("options") or ask.get("draft"))
 
 
 def task_done(root: Path, slug: str) -> bool:
@@ -188,6 +247,18 @@ def tab_settled(root: Path, tab: dict) -> str | None:
     return None
 
 
+def tab_behind(root: Path, tab: dict, task: str | None = None) -> dict | None:
+    """What still stands behind a tab and can be done with it: its open task (a folder under work/tasks/, never a
+    stream) and its open inbox item (there, not ended), as {task, item}, each None where it has none; None when
+    neither stands. Read from the Bridge by the tab's binding (its slug, its item), never from the tab's words; a
+    tab known by its name alone (no slug) takes `task`, the task of the session that works in it (server.py tab_tasks)"""
+    item, slug = tab.get("item"), tab.get("slug") or task
+    task = slug if isinstance(slug, str) and SLUG_RE.match(slug) and (Path(root, "work", "tasks", slug, "STATUS.md")).is_file() else None
+    open_item = (item if isinstance(item, str) and INBOX_ID_RE.match(item) and Path(root, "work", "inbox", item).is_dir()
+                 and not inbox_settled(root, item) else None)
+    return {"task": task, "item": open_item} if task or open_item else None
+
+
 def _tab_for(item: str, tabs: list) -> dict | None:
     mine = [t for t in tabs if not t.get("is_control") and (t.get("slug") == item or t.get("item") == item)]
     order = {"needs-you": 0, "waiting": 1, "working": 2, "shell": 3}
@@ -211,21 +282,35 @@ def build(launches: list, tabs: list, rows: dict, root: Path, now: float) -> lis
             for ev in inbox_answers(root, item, at):
                 if ev["text"] or not result:
                     result = {"kind": ev["verb"], "text": ev["text"], "key": None, "at_ms": ev["at_ms"]}
-        elif task_done(root, item):
-            done = True
-        if done:
+        else:
+            done = task_done(root, item)
+            if not result:
+                result = task_result(root, item, at)
+        if result and not done and result["kind"] == "note" and str(result.get("text") or "").startswith(QUESTION_HEADS):
+            result["asks"] = True
+        if (result and result.get("asks") and not done and tab and tab.get("state") not in ("working", "needs-you")
+                and float(tab.get("since_ms") or 0) > float(result.get("at_ms") or 0) + ANSWERED_MS and not _asks(tab)):
+            # still since well after its question, with nothing asked on its screen: answered in the tab meanwhile
+            result.pop("asks")
+            stage = "idle"
+        elif done:
             stage = "done"
+        elif result and result.get("asks") and not (tab and tab.get("state") == "working"):
+            stage = "asks"
+        elif result and result.get("asks"):
+            stage = "working"     # its tab took the question up again
         elif result:
             stage = "result"
         elif tab and tab.get("state") == "working":
             stage = "working"
         elif tab:
-            stage = "asks"
+            stage = "asks" if _asks(tab) else "idle"
         elif now - at < GRACE_MS:
             stage = "started"
         else:
             stage = "lost"
         out.append({"key": x["key"], "item": item, "title": x.get("title") or item, "mode": x.get("mode", "go"), "at_ms": at,
+                    "conv": x.get("conv"),
                     "stage": stage, "in_briefing": x["key"] in rows,
                     "tab": {"ref": tab["ref"], "state": tab.get("state"), "since_ms": tab.get("since_ms"),
                             "last": str(tab.get("last") or "")[:300]} if tab else None,
@@ -235,6 +320,10 @@ def build(launches: list, tabs: list, rows: dict, root: Path, now: float) -> lis
 
 LINES = {code: TABLES[code]["returns"] for code in TABLES}   # the words live in text.py
 OWN_HEADS = tuple(f"{w['head']}:" for w in LINES.values())
+RESULT_HEADS = tuple(f"{w['result']}:" for w in LINES.values())
+QUESTION_HEADS = tuple(f"{w['question']}:" for w in LINES.values())
+START_LINES = frozenset(f"{w['head']}: {w['start'].format(mode=w['mode'].get(mode, mode))}"
+                         for w in LINES.values() for mode in MODES)
 
 
 def _words(lang: str) -> dict:

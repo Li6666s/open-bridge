@@ -230,7 +230,7 @@ test('card line: a list row says its goal under the title when it has one, else 
 // ---------------------------------------------------------------- the same item everywhere
 
 test('card: the demo task has the same title in the list, the drawer and the files view, with its goal', async () => {
-  const s = s0({ ui: { page: 'briefing', workView: 'dossier', selectedKey: 'task:demo-task', queue: null } })
+  const s = s0({ ui: { page: 'briefing', selectedKey: 'task:demo-task', queue: null } })
   const row = logic.indexRows(s.model).get('task:demo-task')
   assert.ok(row.card?.goal, 'the demo gives the task a brief')
   const title = row.card.title
@@ -254,7 +254,7 @@ test('card: the demo task has the same title in the list, the drawer and the fil
   const queue = views.dossier.dossierQueue(s)
   const k = queue.findIndex(x => x.slug === 'demo-task')
   assert.ok(k >= 0, 'the demo task is a file')
-  const file = mount(html`<${views.dossier.DossierView} s=${{ ...s, ui: { ...s.ui, dossierAt: { id: queue[k].id, i: k } } }} c=${recorder()} />`)
+  const file = mount(html`<${views.dossier.DossierView} s=${{ ...s, ui: { ...s.ui, page: '@files', filesWalk: true, dossierAt: { id: queue[k].id, i: k } } }} c=${recorder()} />`)
   assert.equal(file.$('.dz-title').text(), title)
   assert.equal(file.$('.card-goal-text').text(), row.card.goal)
 })
@@ -311,6 +311,20 @@ test('demo: describe writes a brief for an item nobody wrote, proposes for an ed
   const detail = (await tr.get('/api/task?slug=docs-refresh')).data
   assert.equal(detail.card.goal, 'My own goal')
   assert.equal(detail.describe.written, 'human')
+})
+
+test('demo: a brief written ahead stays quiet as the server keeps it (no note), a click still says what it did', async () => {
+  const { mock } = await loadCockpit()
+  const tr = mock.createMockTransport({ lang: 'en', latency: 0 })
+  const notes = []
+  tr.events(new Proxy({}, { get: (_, name) => p => { if (name === 'note' && p?.text) notes.push(p.text) } }), () => {})
+  const act = (verb, args) => tr.post('/api/action', { verb, args })
+  assert.equal((await act('describe_run', { key: 'task:old-cleanup', ahead: true })).data.outcome, 'written')
+  await new Promise(r => setTimeout(r, 120))
+  assert.deepEqual(notes, [], 'no toast for a brief prepared ahead')
+  await act('describe_run', { key: 'task:old-cleanup' })
+  await new Promise(r => setTimeout(r, 120))
+  assert.equal(notes.length, 1, 'a click says what it did')
 })
 
 // ---------------------------------------------------------------- review fixes

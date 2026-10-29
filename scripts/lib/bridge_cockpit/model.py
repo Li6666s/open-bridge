@@ -206,17 +206,31 @@ def parse_cal_figures(value: Any) -> dict | None:
             if free else None}
 
 
+GH_REVIEWS = ("approved", "changes_requested", "review_required")
+GH_CHECKS = ("success", "failure", "error", "pending", "expected")
+
+
 def parse_gh(value: Any) -> dict | None:
     """A GitHub row's facts (briefing_view.github_facts), checked again: the view file is input."""
     if not isinstance(value, dict):
         return None
     texts = lambda v, n: [x for x in _list(v) if isinstance(x, str)][:n]   # noqa: E731
+    pr = value.get("pr") if isinstance(value.get("pr"), dict) else None
     return {"title": as_text(value.get("title")), "repo": as_text_or_null(value.get("repo")),
             "number": value.get("number") if isinstance(value.get("number"), int) else None,
             "type": value["type"] if value.get("type") in ("pr", "draft") else "issue", "state": as_text_or_null(value.get("state")),
             "status": as_text_or_null(value.get("status")), "priority": as_text_or_null(value.get("priority")),
-            "labels": texts(value.get("labels"), 4),
-            "people": texts(value.get("people"), 3),
+            "labels": texts(value.get("labels"), 10),
+            "people": texts(value.get("people"), 10),
+            # round 6c: who opened it, the board and column it stands in, a pull request's state (the page's filters)
+            "author": as_text_or_null(value.get("author")),
+            "by_me": value.get("by_me") is True,
+            "board": as_text_or_null(value.get("board")),
+            "also_on": texts(value.get("also_on"), 3),
+            "pr": {"draft": pr.get("draft") is True,
+                   "review": pr["review"] if pr.get("review") in GH_REVIEWS else None,
+                   "checks": pr["checks"] if pr.get("checks") in GH_CHECKS else None} if pr else None,
+            "untasked": value.get("untasked") is True,
             "prs": [{"n": p["n"], "draft": p.get("draft") is True} for p in _list(value.get("prs"))
                     if isinstance(p, dict) and isinstance(p.get("n"), int)][:3],
             "task": as_text_or_null(value.get("task")), "stream": value.get("stream") is True,
@@ -256,6 +270,9 @@ def _base_row(**extra) -> dict:
            "due": None, "is_new": False, "is_changed": False,
            # a task row's state (doing, review) and its next step, derived (task_next), never stored
            "status": None, "next": None, "created": None,
+           # the day a task's STATUS.md last changed (the task list's `updated`), and the day a deferred inbox item
+           # comes back (its newest defer): what Work through reads for "last moved" and its list Later
+           "updated": None, "until": None,
            # where the row comes from (origin.py classifies them): the inbox item's `from` or the task's origin, the
            # inbox item's kind, the provider and kind of the section it came from, the task or stream it is about
            "origin_raw": None, "inbox_kind": None, "origin_provider": None, "origin_section_kind": None,
@@ -278,7 +295,7 @@ def task_row_for(slug: str, title: str, tasks: list[dict], tx: dict = EN) -> dic
         [tx["quiet_for"].format(days=as_text(t["age"]))] if t["stale"] else [])
     row = task_row(slug, title or t.get("title") or t["label"])
     row.update(why=why, sources=["tasks"], priority=t["priority"], area=t["area"], area_names=list(t["area_names"]),
-               task_type=t["type"], origin_raw=t.get("origin"))
+               task_type=t["type"], origin_raw=t.get("origin"), updated=t.get("updated"), status=t.get("status"))
     return row
 
 
@@ -293,6 +310,10 @@ def parse_cards(value) -> list[dict] | None:
         return None
     return [{"id": c["id"], "after": c["after"] if isinstance(c.get("after"), str) and c["after"] else None}
             for c in value if isinstance(c, dict) and c.get("id") in CARD_IDS]
+
+
+# the sections of the Setup page (briefing_view.SETUP_SECTIONS, a test holds them equal)
+SETUP_SECTIONS = ("setup-checks", "setup-available", "setup-on")
 
 
 def parse_pages(data: dict, tx: dict = EN) -> list[dict]:
@@ -315,6 +336,8 @@ def parse_pages(data: dict, tx: dict = EN) -> list[dict]:
                 "view": x.get("view") if x.get("view") in ("tiles", "mosaic", "groups", "board", "agenda") else None,
                 "cal_figures": parse_cal_figures(x.get("cal_figures")),
                 "hide_empty": x.get("hide_empty") is True,
+                # kept for what reads it on the page (an account's services, the badge), drawn only with a finding
+                "hide_ok": x.get("hide_ok") is True,
                 "steps": "buttons" if x.get("steps") == "buttons" else None,
                 "stale": as_text_or_null(x.get("stale")),
                 "boards": parse_boards(x.get("boards")),
@@ -322,9 +345,16 @@ def parse_pages(data: dict, tx: dict = EN) -> list[dict]:
                              "days": g.get("days") if isinstance(g.get("days"), int) else None}
                             for g in _list(x.get("metrics")) if isinstance(g, dict) and isinstance(g.get("id"), str)][:12] or None,
             })
+        # the Setup page (briefing_view SETUP_GROUP) stands in Settings, Setup: only a page of the setup sections alone
+        setup_only = bool(sections) and all(x["id"] in SETUP_SECTIONS for x in sections)
         page = {"id": as_text(p.get("id")), "title": as_text(p.get("title")), "sections": sections,
-                "group": p.get("group") if p.get("group") in ("more", "work", "day") else "main", "overview": p.get("overview") is True,
+                "group": p.get("group") if p.get("group") in ("more", "work", "day") or (p.get("group") == "settings" and setup_only)
+                else "main", "overview": p.get("overview") is True,
                 "cards": parse_cards(p.get("cards")),
+                # where the page stands: under another (no tab, the bar of that page's folder opens it), and the sub
+                # pages a page names in their order, the cockpit's own @workers among them (briefing_view.pages)
+                "under": as_text_or_null(p.get("under")),
+                "subs": [x for x in _list(p.get("subs")) if isinstance(x, str) and x][:12],
                 # the order by Jev: the words stay on the server (jev.rank), the page only learns there is one
                 "jev": ({k: [as_text(x) for x in v] if isinstance(v := p["jev"].get(k), list) else []
                          for k in ("skip_sections", "private")} if isinstance(p.get("jev"), dict) else None)}
@@ -346,6 +376,121 @@ def page_badge(page: dict) -> dict:
     return {"kind": "none"}
 
 
+# ---------------------------------------------------------------- findings marked seen ("Seen")
+
+ACK_FP_MAX = 400
+LOUD_SEVERITIES = ("high", "medium")
+
+
+def worker_key(run: dict) -> str:
+    """The key of a background job's finding, the inbox key of round 6d: worker:<host>:<id>"""
+    return f"worker:{as_text(run.get('host'))}:{as_text(run.get('id'))}"
+
+
+# a span of time in a finding's words ("4210s ago", "3 h ago", "vor 2 Std."): it grows on every read without
+# anything new happening, so a fingerprint reads it as one mark
+AGE_RE = re.compile(r"(?<![\w.:-])\d+(?:[.,]\d+)?\s?(?:s|secs?|seconds?|m|mins?|minutes?|h|hrs?|hours?|d|days?"
+                    r"|Sek\.?|Min\.?|Minuten|Std\.?|Stunden?|Tagen?|Tage)(?![\w-])")
+
+
+def steady(text: Any) -> str:
+    """A finding's words without the spans of time in them (AGE_RE): what stays while nothing new happens"""
+    return AGE_RE.sub("#", as_text(text))
+
+
+def run_fingerprint(run: dict) -> str:
+    """What a job's finding is: its loud findings (high, medium), state and detail, the detail without its spans
+    of time (steady: an overdue job's seconds since its last line grow on every refresh). The detail of a failed
+    run carries the time of the failure, so a NEW failure has another fingerprint; empty when nothing is loud"""
+    loud = [f for f in run.get("findings") or [] if isinstance(f, dict) and f.get("severity") in LOUD_SEVERITIES]
+    return "\n".join(f"{as_text(f.get('state'))}:{steady(f.get('detail'))}" for f in loud)[:ACK_FP_MAX]
+
+
+def item_fingerprint(it: dict) -> str:
+    """What a page row's finding is: its tone, title and detail without their spans of time (steady); empty for a
+    row that is not bad or warn"""
+    if it.get("tone") not in ("bad", "warn"):
+        return ""
+    return f"{it['tone']}:{steady(it.get('title'))}:{steady(it.get('detail'))}"[:ACK_FP_MAX]
+
+
+def _seen(ack: dict) -> dict:
+    return {"day": ack.get("day") or "", "note": ack.get("note") or ""}
+
+
+def workers_with_acks(view: Any, acks: dict) -> Any:
+    """The workers view with `acked` on every job whose finding was marked seen as it still stands: the page
+    draws it grey and counts it nowhere (logic.js jobSeverity). A job without one is left exactly as it was"""
+    if not acks or not isinstance(view, dict) or not isinstance(view.get("runs"), list):
+        return view
+    runs = []
+    for run in view["runs"]:
+        ack = acks.get(worker_key(run)) if isinstance(run, dict) else None
+        fp = run_fingerprint(run) if ack else ""
+        runs.append({**run, "acked": _seen(ack)} if ack and fp and ack.get("fp") == fp else run)
+    return {**view, "runs": runs}
+
+
+def ack_item(it: dict, acks: dict) -> bool:
+    """Mark a page row whose finding was marked seen as it still stands: grey (tone dim), its own tone kept in
+    `acked`. True when it was, so the caller takes it out of the section's bad and weight"""
+    ack = acks.get(it.get("key")) if acks else None
+    fp = item_fingerprint(it) if ack else ""
+    if not (ack and fp and ack.get("fp") == fp):
+        return False
+    it["acked"] = {**_seen(ack), "tone": it["tone"]}
+    it["tone"] = "dim"
+    return True
+
+
+def _when(text: Any) -> dt.datetime | None:
+    try:
+        moment = dt.datetime.fromisoformat(as_text(text).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return moment if moment.tzinfo else moment.replace(tzinfo=dt.timezone.utc)
+
+
+def item_about_run(item: dict, run: dict) -> bool:
+    """Whether an inbox item is about this job: its key is the job's (worker:<host>:<id>), its text names that
+    key, or it is a question handed over from the cockpit (key web:...) about it ("Background job <id> on
+    <host>", text.js workerAsk). Another item that merely names the job and its machine is not enough"""
+    key = worker_key(run)
+    text = f"{as_text(item.get('summary'))}\n{as_text(item.get('detail'))}"
+    if item.get("key") == key or key in text:
+        return True
+    if not as_text(item.get("key")).startswith("web:"):
+        return False
+    rid, host = re.escape(as_text(run.get("id"))), re.escape(as_text(run.get("host")))
+    return bool(rid and host and re.search(rf"(?<![\w-]){rid} (?:on|auf) {host}(?![\w-])", text))
+
+
+ACK_CLOSE_DAYS = 7
+
+
+def closed_acks(items: list[dict], view: Any, read: set, now: dt.datetime) -> list[tuple[str, str, str, str]]:
+    """(finding key, fingerprint, close note, inbox id) for each job whose inbox item was closed after its
+    finding came up: closing the item says the finding was looked at. Only a close not read before (`read`), of
+    the last ACK_CLOSE_DAYS (an old close says nothing about today's finding), and only one that came after the
+    job's newest failed run, where the view says when that was"""
+    runs = [r for r in (view or {}).get("runs") or [] if isinstance(r, dict) and run_fingerprint(r)]
+    out = []
+    for item in items:
+        closed = _when(item.get("closed_at"))
+        if item.get("id") in read or closed is None or (now - closed).days >= ACK_CLOSE_DAYS:
+            continue
+        for run in runs:
+            if not item_about_run(item, run):
+                continue
+            failed = [_when(e.get("at")) for e in run.get("strip") or [] if isinstance(e, dict)
+                      and e.get("verdict") in ("failed", "expired")]
+            failed = [f for f in failed if f is not None]
+            if failed and max(failed) > closed:
+                continue                     # closed before this failure: it is news
+            out.append((worker_key(run), run_fingerprint(run), as_text(item.get("note")), as_text(item.get("id"))))
+    return out
+
+
 def row_key(row: dict) -> str:
     if row.get("inbox_id"):
         return f"inbox:{row['inbox_id']}"
@@ -360,6 +505,67 @@ def item_key(page_id: str, section_id: str, info: dict) -> str:
     """The key of a page item: its source id, else a hash of its title (a row without an id still has one)"""
     rid = info.get("id") or "h" + hashlib.sha1(as_text(info.get("title")).encode("utf-8")).hexdigest()[:10]
     return f"item:{page_id}/{section_id}/{rid}"
+
+
+def page_twins(view: dict | None) -> dict[str, list[tuple[str, dict, str]]]:
+    """The page items that are a row of Due: a tracker or command row of Due is ref:<id> (briefing_view, row_key) with
+    the sections it came from as its sources, and a tracker list among them on a page (an issue on the GitHub page)
+    lists the same thing as item <id> (item_key). A command list or an alarm section never twins: a Later in Work
+    through must not take a failing probe off its page, its count and its alarm. Row key -> [(page id, section,
+    item key)], only for a row some such list holds"""
+    if not view:
+        return {}
+    listed: dict[str, list[tuple[str, dict, dict]]] = {}
+    for pg in view.get("pages") or []:
+        for s in pg.get("sections") or []:
+            if s.get("kind") != "tracker" or s.get("alarm") is True:
+                continue
+            ids = {it["id"]: it for it in s.get("items") or [] if it.get("id")}
+            if ids:
+                listed.setdefault(s.get("id"), []).append((pg.get("id"), s, ids))
+    out: dict[str, list[tuple[str, dict, str]]] = {}
+    for row in all_rows(view):
+        ref = row.get("ref")
+        if not ref or row.get("key") != f"ref:{ref}":
+            continue
+        hits = [(pid, s, item_key(pid, s["id"], ids[ref])) for sid in row.get("sources") or []
+                for pid, s, ids in listed.get(sid, ()) if ref in ids]
+        if hits:
+            out[row["key"]] = hits
+    return out
+
+
+def decision_twins(pairs: dict[str, list[tuple[str, dict, str]]]) -> dict[str, tuple[str, ...]]:
+    """The keys one decision holds for (later, done, not doing, show again): a row of Due and its page items
+    (page_twins) are one thing under several keys. Each key of such a group -> the whole group, its own key first"""
+    out: dict[str, tuple[str, ...]] = {}
+    for key, hits in pairs.items():
+        group = list(dict.fromkeys([key, *(k for _, _, k in hits)]))
+        for k in group:
+            out[k] = (k, *(g for g in group if g != k))
+    return out
+
+
+def with_twins(decided: dict, twins: dict[str, tuple[str, ...]]) -> dict:
+    """The decisions by key (hidden, dismissed, settled) with each one also under the keys of the same thing
+    (decision_twins); a key's own decision wins over its twin's"""
+    out = dict(decided)
+    for key, value in decided.items():
+        for twin in twins.get(key, ())[1:]:
+            out.setdefault(twin, value)
+    return out
+
+
+def board_places(pairs: dict[str, list[tuple[str, dict, str]]]) -> dict[str, dict]:
+    """Row key -> {page, section}: the GitHub list a row of Due stands in (page_twins), a section on its board view with
+    a board or figures (views/pages.js draws it as views/github.js GitHubList); a row in none is not in the map"""
+    out: dict[str, dict] = {}
+    for key, hits in pairs.items():
+        for pid, s, _ in hits:
+            if s.get("view") == "board" and (s.get("boards") or s.get("metrics")):
+                out[key] = {"page": pid, "section": s["id"]}
+                break
+    return out
 
 
 def launch_item(row: dict) -> str | None:
@@ -436,6 +642,12 @@ def parse_view(raw: Any, is_full: bool, now: float, tx: dict = EN) -> dict:
         "since": as_text_or_null(v.get("since")),
         "extras": {"clear": [as_text(x) for x in _list(v.get("clear"))],
                    "hygiene": [as_text(x) for x in _list(v.get("hygiene"))],
+                   # the same lines as kind and facts (briefing_view tend), for the page to word each one
+                   "tend": [{"kind": as_text(x.get("kind")), "text": as_text(x.get("text")), "n": _number(x.get("n"), None),
+                             "names": [as_text(n) for n in _list(x.get("names"))],
+                             "title": as_text(x.get("title")) if isinstance(x.get("title"), str) else "",
+                             "reason": as_text(x.get("reason")) if isinstance(x.get("reason"), str) else ""}
+                            for x in (_dict(t) for t in _list(v.get("tend"))) if x.get("kind")],
                    "workplace": as_text_or_null(v.get("workplace"))},
         "collected_at": clock_time(now),
         "collected_ms": int(now),
@@ -553,7 +765,8 @@ def with_tasks(view: dict, tasks: list[dict], tx: dict = EN) -> dict:
             # An inbox entry shows the area of its task, but not its priority.
             priority = r["priority"] if r.get("inbox_id") else (r["priority"] if r["priority"] is not None else t["priority"])
             mine = {} if r.get("inbox_id") else {"status": t.get("status"), "next": task_next(t, inbox_rows),
-                                                  "origin_raw": r.get("origin_raw") or t.get("origin")}
+                                                  "origin_raw": r.get("origin_raw") or t.get("origin"),
+                                                  "updated": t.get("updated")}
             rows.append({**r, "area": t["area"], "area_names": list(t["area_names"]), "priority": priority,
                          "task_type": t["type"], **mine})
         buckets.append({**b, "rows": rows})
@@ -565,7 +778,8 @@ def with_tasks(view: dict, tasks: list[dict], tx: dict = EN) -> dict:
             why.append(tx["inbox_open"].format(n=inbox_count[t["slug"]]))
         base = _base_row(bucket=bucket, title=t.get("title") or t["label"], why=why, sources=["tasks"], task=t["slug"],
                          priority=t["priority"], area=t["area"], area_names=list(t["area_names"]), task_type=t["type"],
-                         status=t.get("status"), next=task_next(t, inbox_rows), origin_raw=t.get("origin"))
+                         status=t.get("status"), next=task_next(t, inbox_rows), origin_raw=t.get("origin"),
+                         updated=t.get("updated"))
         base["key"] = row_key(base)
         return base
 
@@ -643,7 +857,13 @@ def is_idle(tab: dict, ask: dict | None, since_ms: float, settled: str | None, n
         return True
     if after_ms <= 0 or now - since_ms < after_ms or not ask:
         return False
-    return not ask.get("yes_no") and not ask.get("options") and not ask.get("draft")
+    return not asks_something(ask)
+
+
+def asks_something(ask: dict | None) -> bool:
+    """Whether the words read off a waiting tab's screen ask anything: a question (yes or no, a question mark),
+    options, or something typed in its prompt. Every waiting tab has its last words read, so words alone ask nothing"""
+    return bool(ask) and bool(ask.get("yes_no") or ask.get("options") or ask.get("draft"))
 
 
 def is_live(tab: dict) -> bool:
@@ -750,7 +970,8 @@ def merge_view(base: dict, fresh: dict) -> dict:
     fresh_extras = fresh.get("extras") or {"clear": [], "hygiene": [], "workplace": None}
     base_extras = base.get("extras") or {}
     extras = ({**fresh_extras, "clear": list(base_extras.get("clear") or []),
-               "hygiene": list(base_extras.get("hygiene") or [])} if fresh_is_partial else fresh_extras)
+               "hygiene": list(base_extras.get("hygiene") or []), "tend": list(base_extras.get("tend") or [])}
+              if fresh_is_partial else fresh_extras)
     return {
         **fresh,
         "extras": extras,

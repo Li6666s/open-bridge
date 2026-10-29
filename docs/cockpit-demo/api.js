@@ -6,7 +6,7 @@
 // the caller can treat 202 and 409 (relay offline) as answers. A network failure gives
 // status 0 and error code "network".
 
-const EVENTS = ['hello', 'state', 'view', 'view_pages', 'tabs', 'loading', 'note', 'relay', 'relay_state', 'alert', 'sessions', 'quick', 'quick_live', 'agents', 'triage', 'home', 'launch', 'ticker', 'guide', 'tour', 'describe']
+const EVENTS = ['hello', 'state', 'view', 'view_pages', 'tabs', 'loading', 'note', 'relay', 'relay_state', 'alert', 'sessions', 'quick', 'quick_live', 'agents', 'triage', 'home', 'launch', 'ticker', 'guide', 'tour', 'describe', 'acks']
 
 function failure(status, code, message) {
   return { status, ok: false, data: null, error: { code, message, field: null } }
@@ -29,6 +29,8 @@ async function parse(res) {
 /** The real transport: same-origin fetch and EventSource */
 function httpTransport() {
   return {
+    // the address of a file the page links rather than fetches (a document of a task): the path itself
+    href: p => p,
     async get(path) {
       try {
         const res = await fetch(path, { credentials: 'same-origin', headers: { Accept: 'application/json' }, cache: 'no-store' })
@@ -124,6 +126,8 @@ export function createApi(transport = httpTransport()) {
     reload: fresh => transport.post('/api/reload', { fresh: !!fresh }, csrf),
     // which page or view was opened: one audit line on the server (page_view), the files view's measure
     seen: (page, view) => transport.post('/api/seen', view ? { page, view } : { page }, csrf),
+    // the click origin log: a batch of {kind, page, view, area, control, verb, n}, never content (usage.jsonl)
+    clicks: events => transport.post('/api/clicks', { events }, csrf),
     inbox: id => transport.get(`/api/inbox?id=${encodeURIComponent(id)}`),
     // path: one folder of the slug (work/done/<month>/<slug>, a closed copy the search found), else the open one first
     task: (slug, path) => transport.get(`/api/task?slug=${encodeURIComponent(slug)}${path ? `&path=${encodeURIComponent(path)}` : ''}`),
@@ -131,11 +135,23 @@ export function createApi(transport = httpTransport()) {
     taskFile: (slug, file, path) => transport.get(`/api/task?slug=${encodeURIComponent(slug)}&file=${encodeURIComponent(file)}${path ? `&path=${encodeURIComponent(path)}` : ''}`),
     // the files view's search over every task, stream and closed task, the log and its archive (work-find.py)
     find: q => transport.get(`/api/find?q=${encodeURIComponent(q)}`),
+    // the records of the files tab's start: every task, stream and closed task with its state, area and last change
+    records: () => transport.get('/api/records'),
     github: (ref, fresh) => transport.get(`/api/github?ref=${encodeURIComponent(ref)}${fresh ? '&fresh=1' : ''}`),
     page: (page, section) => transport.get(`/api/page?page=${encodeURIComponent(page)}&section=${encodeURIComponent(section)}`),
     relay: () => transport.get('/api/relay'),
     // since: the hash of the screen the page holds; the server then answers unchanged without the text
     tabScreen: (ref, since) => transport.get(`/api/tab/screen?ref=${encodeURIComponent(ref)}${since ? `&since=${encodeURIComponent(since)}` : ''}`),
+    // Work through, the Activity of a point (cached 20 s on the server; fresh skips it, after a note or an attachment)
+    activity: (key, fresh) => transport.get(`/api/flow/activity?key=${encodeURIComponent(key)}${fresh ? '&fresh=1' : ''}`),
+    // a document attached to the task of a point, its bytes as standard base64 (the one POST with a larger body cap)
+    attach: (key, name, data) => transport.post('/api/flow/attach', { key, name, data }, csrf),
+    // the link of a document in a task's deliverables/, opened in a new tab and never fetched by the page; the demo's
+    // transport gives a Blob of invented text in its place
+    docHref: (slug, path) => {
+      const p = `/api/flow/doc?slug=${encodeURIComponent(slug)}&path=${encodeURIComponent(path)}`
+      return transport.href ? transport.href(p) : p
+    },
     events: (handlers, onConn) => {
       // A page in a background browser tab tells the server so, and the server stops polling the
       // agent tabs, the full pass and the ticker for it; coming back asks for one poll at once.

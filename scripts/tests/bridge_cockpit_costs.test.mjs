@@ -17,7 +17,7 @@ import assert from 'node:assert/strict'
 const here = path.dirname(fileURLToPath(import.meta.url))
 const WEB = path.join(here, '..', 'web')
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'bridge-cockpit-costs-'))
-for (const name of ['logic', 'areas', 'files', 'text', 'text-areas', 'text-card', 'text-files', 'text-chat']) {
+for (const name of ['logic', 'areas', 'files', 'flow', 'text', 'text-areas', 'text-card', 'text-files', 'text-flow', 'text-chat']) {
   const src = fs.readFileSync(path.join(WEB, `${name}.js`), 'utf8').replace(/(from\s+'\.\/[^']+)\.js'/g, "$1.mjs'")
   fs.writeFileSync(path.join(tmp, `${name}.mjs`), src)
 }
@@ -31,6 +31,13 @@ test('a page without cards keeps what overview alone drew: usage and noise at it
   const plan = logic.cardPlan({ overview: true, sections: [{ id: 'a' }], cards: null })
   assert.deepEqual(plan, { after: {}, end: ['usage', 'noise'] })
   assert.deepEqual(logic.cardPlan({ sections: [{ id: 'a' }] }), { after: {}, end: [] })
+})
+
+test('a sub page with overview and no cards draws none: the tokens and the noise stand on its folder overview', () => {
+  assert.deepEqual(logic.cardPlan({ overview: true, under: 'ops', sections: [{ id: 'a' }], cards: null }), { after: {}, end: [] })
+  // its own cards: still stand where it names them
+  assert.deepEqual(logic.cardPlan({ overview: true, under: 'ops', sections: [{ id: 'a' }], cards: [{ id: 'usage', after: 'a' }] }),
+    { after: { a: ['usage'] }, end: [] })
 })
 
 test('cards stand after their section in the listed order, each once; an unknown section sends a card to the end', () => {

@@ -7,21 +7,22 @@ import {
   attentionTabs, duration, indexRows, short, stateToken, canTab, previewText, workPageOf, homeCatalog, homeChosen,
   homeContinue, homeProjects, homeView, inProject, meterPace, projectTone, tabOfTask, asksYou, countInProject, focusPick,
   nextEvent, untilText, liveStage, stageTone, homeRowQueue, RETURN_STAGES, greetingText, dayLabel, workPageId,
-  rowProject, homeAreas, areasCoverProjects, areaJump, homeQuota, tabStateKey, AREA_PAGES, areaScope, tickerPage,
+  rowProject, homeAreas, areasCoverProjects, areaJump, homeQuota, tabStateKey, AREA_PAGES, areaScope, tickerPage, rowConv, askMark,
+  flowAreas, flowOn, startWaiting,
 } from '../logic.js'
 import { T, language } from '../text.js'
 import { KindTag, OriginTag, RowBar, RowMeta, Section } from './day.js'
 import { GuideCard, guideTabs } from './guide.js'
 import { TabCard } from './tabs.js'
-import { DayPages, DayView } from './detail.js'
+import { DayPages, DayView, TabClose } from './detail.js'
 import { PageBadge } from './header.js'
 import {
   AGENTS_PAGE, ASK_MAX, CHAT_PAGE, CHECK_PAGE, JEV_PAGE, SESSIONS_PAGE, SETTINGS_PAGE, START_PAGE, WORKERS_PAGE, briefingTitle,
-  pageOrder,
+  pageOrder, workViewNow,
 } from './nav.js'
 import { HomeFocusView } from './focus.js'
 import { HomeList } from './list.js'
-import { Btn, Dot, Empty, Icon, PrioChip, StateLine } from './parts.js'
+import { Btn, Chip, Dot, Empty, Icon, PrioChip, StateLine } from './parts.js'
 import { BridgeStage, leadOf, stationOf } from './stage.js'
 import { TickerBand, TickerStatusList } from './ticker.js'
 
@@ -50,13 +51,15 @@ export function returnsOf(s) {
   return (s.model?.returns ?? []).map(r => ({ ...r, live: liveStage(r, tabs, now) }))
 }
 
-/** The steps of a start, the one it stands on lit; a lost start shows where it broke off */
+/** The steps of a start, the one it stands on lit; a lost start shows where it broke off; a quiet tab (idle)
+ *  stands on the step of a question, named quiet */
 function ReturnSteps({ stage }) {
   const h = T().home
-  const at = RETURN_STAGES.indexOf(stage)
+  const step = x => (x === 'asks' && stage === 'idle' ? 'idle' : x)
+  const at = RETURN_STAGES.indexOf(stage === 'idle' ? 'asks' : stage)
   return html`<ol class=${`rsteps${stage === 'lost' ? ' is-lost' : ''}`} aria-label=${h.returnStage[stage] ?? stage}>
-    ${RETURN_STAGES.map((x, i) => html`<li key=${x} class=${i < at ? 'is-past' : i === at ? `is-now tk-${stageTone(x)}` : ''}>
-      <span class="rstep-dot" aria-hidden="true"></span><span class="rstep-label">${h.returnStage[x]}</span></li>`)}
+    ${RETURN_STAGES.map((x, i) => html`<li key=${x} class=${i < at ? 'is-past' : i === at ? `is-now tk-${stageTone(step(x))}` : ''}>
+      <span class="rstep-dot" aria-hidden="true"></span><span class="rstep-label">${h.returnStage[step(x)]}</span></li>`)}
   </ol>`
 }
 
@@ -68,7 +71,8 @@ export function ReturnCard({ r, s, c }) {
   const ago = duration((s.now || Date.now()) - r.at_ms)
   const tab = (s.tabs?.tabs ?? []).find(x => x.ref === r.tab?.ref) ?? null
   const row = indexRows(s.model).get(r.key)
-  // settled (its item closed, its task done) and its tab only waits: the tab can go
+  // settled (its item closed, its task done) and its tab only waits: the tab can go, its close leads; any other tab
+  // that neither works nor asks closes too (TabClose), less loudly
   const closable = r.live === 'done' && tab && !tab.is_control && tab.state === 'waiting' && canTab(s, 'close')
   return html`<article class=${`rcard tk-${stageTone(r.live)}`}>
     <header class="rcard-head">
@@ -85,8 +89,7 @@ export function ReturnCard({ r, s, c }) {
     ${r.live === 'lost' ? html`<p class="rcard-answer"><span class="label-caps">${h.returnStage.lost}</span> ${h.returnLostHint}</p>` : null}
     ${closable ? html`<p class="small"><${StateLine} token="success" word=${h.returnSettled} /></p>` : null}
     <div class="hcard-acts">
-      ${closable ? html`<${Btn} size="xs" variant="primary" busy=${!!s.ui.busy[tab.ref]}
-        onClick=${() => c.act('tab_close', { tab_ref: tab.ref })}>${t.btnCloseTab}<//>` : null}
+      ${tab ? html`<${TabClose} tab=${tab} s=${s} c=${c} strong=${closable} />` : null}
       ${r.result?.key ? html`<${Btn} size="xs" variant=${closable ? 'secondary' : 'primary'} onClick=${() => c.openItem(r.result.key, null)}>${h.returnOpenAnswer}<//>` : null}
       ${tab ? html`<${Btn} size="xs" variant=${r.result?.key || closable ? 'secondary' : 'primary'} onClick=${() => jumpToTab(s, c, tab.ref)}>${h.toTab}<//>
         <${Btn} size="xs" variant="ghost" onClick=${() => c.openTabView(tab.ref)}>${h.view}<//>` : null}
@@ -107,6 +110,24 @@ export function ReturnChip({ s, rowKey }) {
   if (!r || r.live === 'done') return null
   return html`<span class=${`chip chip-tk tk-${stageTone(r.live)} rchip`}><${Dot} token=${stageTone(r.live)} pulse=${r.live === 'working'} />
     <span>${T().home.returnStage[r.live]}</span></span>`
+}
+
+/** A row's ask (a job of the workers page, a page row): the question it was asked last (logic.js rowConv) as
+ *  question open, answered or without an answer, or once handed on with the marker every question list shows
+ *  (logic.js askMark: in its tab, done, asks you, tab ended), with Open, and ask again beside it; a row never
+ *  asked has only ask */
+export function RowAsk({ s, c, rowKey, onAsk, variant = 'ghost', cls = 'act-quiet' }) {
+  const t = T()
+  const conv = rowConv(s.quick?.convs, rowKey)
+  if (!conv) return html`<${Btn} size="xs" variant=${variant} cls=${cls} onClick=${onAsk}>${t.btnAsk}<//>`
+  const mark = conv.running ? null : askMark(conv, s.tabs?.tabs, s.now || Date.now())
+  // never handed on: open while it is answered or has no answer yet, failed when its last turn ended with an error
+  const last = conv.turns?.at(-1)
+  const [token, word] = conv.running ? ['info', t.askRunning] : mark ? [mark.tone, t.asks.mark[mark.word]]
+    : last?.error ? ['danger', t.askFailed] : last && !last.a ? ['info', t.askRunning] : ['success', t.askAnswered]
+  return html`<${Chip} token=${token}>${word}<//>
+    <${Btn} size="xs" variant="secondary" onClick=${() => c.openAsk(conv.id)}>${t.askOpenConv}<//>
+    <${Btn} size="xs" variant="ghost" cls="act-quiet" onClick=${onAsk}>${t.btnAskAgain}<//>`
 }
 
 /** The return channel inside a task or an inbox item: the steps, what the tab said last or its answer, and
@@ -141,7 +162,12 @@ export function jumpToTab(s, c, ref) {
  *  the controller has; a page that exists nowhere and a row that is gone open Today */
 export function goTo(s, c, target, el) {
   switch (target?.kind) {
-    case 'page': return c.setPage(tickerPage(s, target.id, pageOrder(s)))
+    case 'page': {
+      const done = c.setPage(tickerPage(s, target.id, pageOrder(s)))
+      // a part of the page named (the day's status on Start): brought into view once the page drew it
+      if (target.at) setTimeout(() => globalThis.document?.querySelector?.(target.at)?.scrollIntoView?.({ block: 'start' }), 80)
+      return done
+    }
     case 'item': return c.openItem(target.key, null)
     case 'tab': return jumpToTab(s, c, target.ref)
     case 'drawer': return c.setDrawer(target.id)
@@ -402,7 +428,7 @@ function tileMaker(s, c, chosen, project, hud = false) {
     if (x.id === 'c:next') return html`<${NextTile} key=${x.id} s=${s} c=${c} />`
     if (x.id === 'c:done') return html`<${DoneTile} key=${x.id} s=${s} />`
     if (x.id === 'c:waiting') {
-      const n = scope ? countInProject(nowRows.filter(asksYou), scope) : counts.now ?? 0
+      const n = startWaiting(s, scope) ?? (scope ? countInProject(nowRows.filter(asksYou), scope) : counts.now ?? 0)
       return html`<${CountTile} key=${x.id} n=${n} label=${h.waitingNow} tone=${n ? 'warning' : null} scope=${scope}
         before=${scope ? null : before[x.id]} title=${h.openPage(briefingTitle(s))} onClick=${() => c.setPage('briefing')} />`
     }
@@ -454,6 +480,14 @@ function areasAll(areas, name) {
   return { name, ...Object.fromEntries([...AREA_FIGS.map(([k]) => k), 'waitingTabs', 'waitingRows'].map(k => [k, sum(k)])) }
 }
 
+/** The areas of the start page and their line All: with Work through on what it shows under each area (flow.js
+ *  flowAreas, All counted once), else the start page's own count (homeAreas, All their sum) */
+function startAreas(s, allName) {
+  if (flowOn(s)) return flowAreas(s)
+  const areas = homeAreas(s.tabs?.tabs ?? [], s.model?.sections, returnsOf(s), s.now || Date.now())
+  return { areas, all: areasAll(areas, allName) }
+}
+
 /** One line of the areas: the name, then the numbers, each a jump to the page that holds those things
  *  (areaJump, the area as its filter); a zero is damped and leads nowhere. The name picks the area for the
  *  start page (pressed while it is the one shown), in the control view it opens Work for it. A line that
@@ -479,10 +513,10 @@ function AreaRow({ area, name, on, desk, c, onPick }) {
  *  is more than one. On the start page a name shows that area only and a second click all again (the
  *  lines stand in for the project chips); in the control view (`desk`) a name opens Work for that area.
  *  Every number jumps (g a focuses the names, j and k walk them) */
-export function HomeAreas({ areas, project, c, desk = false }) {
+export function HomeAreas({ areas, all: whole = null, project, c, desk = false }) {
   const h = T().home
   const want = String(project ?? '').toLowerCase()
-  const all = areasAll(areas, h.all)
+  const all = whole ? { ...whole, name: h.all } : areasAll(areas, h.all)
   return html`<section class="home-shelf home-areas" aria-labelledby="home-areas">
     <header class="home-shelf-head"><h2 class="home-shelf-title" id="home-areas">${h.areasTitle}</h2></header>
     ${areas.length ? html`<table class="home-area-table" id="home-areas-list" role="table">
@@ -550,12 +584,10 @@ function DeskParts({ s, c, chosen }) {
  *  the areas, and what comes next (the next date, the quota). Everything else has a page of its own */
 function HomeDesk({ s, c }) {
   const h = T().home
-  const tabs = s.tabs?.tabs ?? []
   const now = s.now || Date.now()
   const on = new Set(homeChosen(s.model, s.home))
-  const areas = homeAreas(tabs, s.model?.sections, returnsOf(s), now)
   // the head's number is the line All's: every area and what has none, its jump the same as that number's
-  const all = areasAll(areas, h.all)
+  const { areas, all } = startAreas(s, h.all)
   const waiting = all.waiting
   const relayDown = s.relay?.enabled && !s.relay?.online
   const next = nextEvent(s.model, now)
@@ -572,7 +604,7 @@ function HomeDesk({ s, c }) {
         <${Dot} token="warning" /><span>${h.controlOffline}</span></button>` : null}
     </header>
     ${s.ui.tickerOnStart ? html`<${TickerBand} s=${s} c=${c} only="news" />` : null}
-    ${on.has('s:areas') ? html`<${HomeAreas} areas=${areas} project=${null} c=${c} desk />` : html`<p class="muted small">${h.areasOff}</p>`}
+    ${on.has('s:areas') ? html`<${HomeAreas} areas=${areas} all=${all} project=${null} c=${c} desk />` : html`<p class="muted small">${h.areasOff}</p>`}
     <${DeskParts} s=${s} c=${c} chosen=${[...on]} />
     <p class="desk-next">
       <span class="label-caps">${h.nextUp}</span>
@@ -586,7 +618,8 @@ function HomeDesk({ s, c }) {
 }
 
 /** The bar over Work, Chat and Sessions: the area they show (✕ shows every area again) and, on Work,
- *  the star that shows only the pinned rows. Nothing on the other pages, nothing when there is no choice */
+ *  the star that shows only the pinned rows, not over Work through, which shows every open row whatever is pinned
+ *  (round 6 B). Nothing on the other pages, nothing when there is no choice */
 export function AreaBar({ s, c }) {
   const h = T().home
   const page = s.ui.page
@@ -594,7 +627,8 @@ export function AreaBar({ s, c }) {
   const chosen = homeChosen(s.model, s.home)
   const start = page === START_PAGE && (homeView(chosen) !== 'areas' || chosen.some(id => id.startsWith('d:')))
   if (!AREA_PAGES.has(page) && !start) return null
-  const work = page === 'briefing'
+  // the star of Work acts in the files tab too (areas.js areaScope), so its chip stands there as well
+  const work = (page === 'briefing' && workViewNow(s) !== 'flow') || page === '@files'
   const pins = s.home?.pins ?? []
   if (!s.ui.area && !(work && (pins.length || s.ui.pinnedOnly))) return null
   // Chat under an area without an agent tab says so and offers every area, rather than an empty page
@@ -647,7 +681,7 @@ function HomeBoard({ s, c }) {
   const catalog = homeCatalog(s.model, { workers: s.workers?.status !== 'none' })
   const chosen = homeChosen(s.model, s.home)
   const on = new Set(chosen)
-  const areas = on.has('s:areas') ? homeAreas(tabs, s.model?.sections, returnsOf(s), s.now || Date.now()) : []
+  const { areas, all: areasWhole } = on.has('s:areas') ? startAreas(s, h.all) : { areas: [], all: null }
   const named = areas.filter(a => !a.none)
   // an area can come from a row the chips do not count (an overdue one elsewhere): picking it still holds
   // one area filter for the whole cockpit (ui.area): the start page shows that area, Work, Chat and Sessions too
@@ -666,7 +700,7 @@ function HomeBoard({ s, c }) {
   const pageBadge = id => (s.model?.pages ?? []).find(p => p.id === id)?.badge
   const byKey = indexRows(s.model)
   const pinned = (s.home?.pins ?? []).map(k => byKey.get(k)).filter(Boolean).filter(r => inProject(r, project))
-  const areasShelf = on.has('s:areas') ? html`<${HomeAreas} areas=${areas} project=${project} c=${c} />` : null
+  const areasShelf = on.has('s:areas') ? html`<${HomeAreas} areas=${areas} all=${areasWhole} project=${project} c=${c} />` : null
   // when every chip has an area line, the lines pick the project and the chips would say it twice
   const chips = projects.length > 1 && !(areasShelf && areasCoverProjects(projects, named)) ? html`<div class="home-chips" role="toolbar" aria-label=${h.projectsLabel}>
       <button type="button" class=${`home-chip${project ? '' : ' is-on'}`} aria-pressed=${String(!project)} onClick=${() => c.setArea(null)}>${h.all}</button>

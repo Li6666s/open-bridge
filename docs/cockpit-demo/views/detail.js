@@ -5,7 +5,7 @@
 import { html, useEffect, useState } from '../vendor/htm-preact-3.1.1.module.js'
 import {
   detailNeedsLoad, duration, formatDay, indexRows, short,
-  stateToken, canTab, settledRefs, statusSplit, tabNextStep, areaScope, homeAreas,
+  stateToken, canTab, settledRefs, statusSplit, tabCloseOffer, tabNextStep, areaScope, homeAreas, startWaiting,
   skipFixable, skipText, queueLiveKeys, queueView, dayQueue, tabStateKey, originOf, workKindOf, itemRow
 } from '../logic.js'
 import { T, language } from '../text.js'
@@ -25,9 +25,10 @@ function Overview({ s, c }) {
   if (!m) return html`<div class="panel panel-pad"><${Skeleton} lines=${6} /></div>`
   // under an area filter the count is the area's, as its line on the overview has it; the rest of the
   // headline (free time, what comes) is the day's
+  // with Work through on the count is its own, the start page's line for the area (flow.js startWaiting)
   const area = s.ui.area ? homeAreas(s.tabs?.tabs, m.sections, [], s.now || Date.now())
     .find(a => !a.none && a.name.toLowerCase() === s.ui.area.trim().toLowerCase()) : null
-  const waiting = s.ui.area ? area?.waiting ?? 0 : m.briefing_badge ?? 0
+  const waiting = startWaiting(s, s.ui.area) ?? (s.ui.area ? area?.waiting ?? 0 : m.briefing_badge ?? 0)
   const head = html`
     <span class="eyebrow">${t.overviewTitle}</span>
     <h2 class="detail-title">${t.forYouNow(waiting)}${m.headline_rest ? ` · ${m.headline_rest}` : ''}</h2>
@@ -41,10 +42,14 @@ function Overview({ s, c }) {
   </div>`
 }
 
-/** The day: dates, status, what is clear, what needs tidying, the workplace and the pages of group day.
+/** The lines of Small fixes: each one in the page's own sentence for its kind (extras.tend, briefing_view), the
+ *  text the server wrote for a kind it has none for and for an older server that sends no facts */
+const tendLines = (ex, t) => (Array.isArray(ex.tend) && ex.tend.length ? ex.tend.map(x => t.tend[x.kind]?.(x) ?? x.text) : ex.hygiene)
+
+/** The day: dates, status, what is clear, the small fixes, the workplace and the pages of group day.
  *  In the middle of Today as one panel, or on Start where a work tab exists as one card per block,
  *  where the pages of group day stand as a shelf of their own (DayPages); `pages` false leaves those out
- *  (the overview's day: dates, status and tidying, the long log stays on Work) */
+ *  (the overview's day: dates, status and small fixes, the long log stays on Work) */
 export function DayView({ s, c, cards = false, pages = true }) {
   const t = T()
   const m = s.model
@@ -60,7 +65,7 @@ export function DayView({ s, c, cards = false, pages = true }) {
     (ex.clear ?? []).length ? { id: 'clear', title: t.clearTitle,
       body: html`<ul class="plain">${ex.clear.map((x, i) => html`<li key=${i}><${StateLine} token="success" word=${x} /></li>`)}</ul>` } : null,
     (ex.hygiene ?? []).length ? { id: 'hygiene', title: t.hygieneTitle,
-      body: html`<ul class="plain">${ex.hygiene.map((x, i) => html`<li key=${i}><${StateLine} token="warning" word=${x} /></li>`)}</ul>` } : null,
+      body: html`<ul class="plain">${tendLines(ex, t).map((x, i) => html`<li key=${i}><${StateLine} token="warning" word=${x} /></li>`)}</ul>` } : null,
     ex.workplace ? { id: 'workplace', title: t.workplaceTitle,
       body: html`<p class="row-in">${ex.workplace.replace(/\s*\S+\?$/, '')}
         ${wpPage ? html`<${Btn} size="xs" variant="secondary" onClick=${() => c.setPage(wpPage.id)}>${t.workplaceOpen}<//>` : null}</p>` } : null,
@@ -141,9 +146,9 @@ function MetaList({ row, s }) {
   return html`<dl class="meta">${items.map(([k, v]) => html`<div class="meta-item" key=${k}><dt>${t.meta[k]}</dt><dd>${v}</dd></div>`)}</dl>`
 }
 
-export function Segmented({ label, values, current, onPick, busy }) {
+export function Segmented({ label, values, current, onPick, busy, u }) {
   return html`<div class="seg" role="group" aria-label=${label}>
-    ${values.map(([v, word]) => html`<button type="button" key=${v} class=${`seg-btn${current === v ? ' is-on' : ''}`}
+    ${values.map(([v, word]) => html`<button type="button" key=${v} class=${`seg-btn${current === v ? ' is-on' : ''}`} data-u=${u ? `${u}-${v}` : undefined}
       aria-pressed=${String(current === v)} disabled=${busy} onClick=${() => current !== v && onPick(v)}>${word}</button>`)}
   </div>`
 }
@@ -219,6 +224,40 @@ function ActionsBlock({ row, s, c }) {
   </div>`
 }
 
+/** The one close of a tab, wherever a point or a card has one (round 6d; the rule is logic.js tabCloseOffer): with
+ *  an open task or inbox item behind the tab Done and close tab (verb tab_done, which the server resolves) and Close
+ *  tab only beside it, else Close tab alone; nothing while the tab works or asks. A close whose answers went unseen
+ *  arms on the first click (the second-click pattern of RowSteps, falling back after a few seconds). `strong` makes
+ *  the lead button primary, `only` leaves out Done and close tab where the place offers its own (FlowAside's Done),
+ *  `looking` where the tab's screen stands beside it (the Chat's room: what it handed back is in view, so no second
+ *  click), `onClosed` runs after a close or a Done that went through (the Chat walks on) */
+export function TabClose({ tab, s, c, size = 'xs', strong = false, only = false, looking = false, onClosed = null }) {
+  const t = T()
+  const offer = tabCloseOffer(tab, s)
+  const [armed, setArmed] = useState(false)
+  useEffect(() => {
+    if (!armed) return undefined
+    const id = setTimeout(() => setArmed(false), 4000)
+    return () => clearTimeout(id)
+  }, [armed])
+  if (!offer) return null
+  const busy = !!s.ui?.busy?.[tab.ref]
+  const went = r => { if (r?.ok) onClosed?.(r) }
+  const close = async () => {
+    if (offer.unseen && !looking && !armed) { setArmed(true); return }
+    setArmed(false)
+    went(await c.act('tab_close', { tab_ref: tab.ref }))
+  }
+  const both = offer.done && !only
+  const word = offer.done ? t.btnCloseTabOnly : t.btnCloseTab
+  return html`<span class="tab-close">
+    ${both ? html`<${Btn} size=${size} variant=${strong ? 'primary' : 'secondary'} busy=${busy}
+      u="tab-done" onClick=${async () => went(await c.act('tab_done', { tab_ref: tab.ref }))}>${t.btnDoneCloseTab}<//>` : null}
+    <${Btn} size=${size} variant=${strong && !both ? 'primary' : 'secondary'} busy=${busy} pressed=${armed ? true : undefined}
+      u="tab-close" title=${armed ? t.closeTabUnseen : undefined} onClick=${close}>${armed ? t.closeTabSure(word) : word}<//>
+  </span>`
+}
+
 export function TabControls({ tab, s, c, compact = false, slim = false }) {
   const t = T()
   const busy = !!s.ui.busy[tab.ref]
@@ -240,7 +279,7 @@ export function TabControls({ tab, s, c, compact = false, slim = false }) {
       yes: () => html`<${Btn} size="xs" variant="primary" busy=${busy} onClick=${() => c.act('tab_yes', { tab_ref: tab.ref })}>${t.btnYes}<//>`,
       no: () => html`<${Btn} size="xs" variant="secondary" busy=${busy} onClick=${() => c.act('tab_no', { tab_ref: tab.ref })}>${t.btnNo}<//>`,
       go_on: () => html`<${Btn} size="xs" variant="secondary" busy=${busy} onClick=${() => c.act('tab_go_on', { tab_ref: tab.ref })}>${t.btnGoOn}<//>`,
-      close: () => html`<${Btn} size="xs" variant="secondary" busy=${busy} onClick=${() => c.act('tab_close', { tab_ref: tab.ref })}>${t.btnCloseTab}<//>`,
+      close: () => html`<${TabClose} tab=${tab} s=${s} c=${c} strong />`,
       jump: () => html`<${Btn} size="xs" variant="ghost" busy=${busy} onClick=${() => c.act('tab_jump', { tab_ref: tab.ref })}>${t.btnToTab}<//>`,
       view: () => html`<${Btn} size="xs" variant="ghost" onClick=${() => c.openTabView(tab.ref)}>${t.btnTabView}<//>`,
     }
@@ -253,8 +292,7 @@ export function TabControls({ tab, s, c, compact = false, slim = false }) {
         <${Btn} size="xs" variant="secondary" busy=${busy} onClick=${() => c.act('tab_no', { tab_ref: tab.ref })}>${t.btnNo}<//>` : null}
       ${tab.state === 'waiting' && !tab.filed_by && !settled && !tab.is_control ? html`<${Btn} size="xs" variant="secondary" busy=${busy}
         onClick=${() => c.act('tab_go_on', { tab_ref: tab.ref })}>${t.btnGoOn}<//>` : null}
-      ${tab.state === 'waiting' && (tab.filed_by || settled) && !tab.is_control && canTab(s, 'close') ? html`<${Btn} size="xs" variant="secondary" busy=${busy}
-        onClick=${() => c.act('tab_close', { tab_ref: tab.ref })}>${t.btnCloseTab}<//>` : null}
+      <${TabClose} tab=${tab} s=${s} c=${c} strong />
       ${canTab(s, 'focus') ? html`<${Btn} size="xs" variant="ghost" busy=${busy} onClick=${() => c.act('tab_jump', { tab_ref: tab.ref })}>${t.btnToTab}<//>` : null}
       ${canTab(s, 'screen') ? html`<${Btn} size="xs" variant="ghost" onClick=${() => c.openTabView(tab.ref)}>${t.btnTabView}<//>` : null}
       ${tab.live ? html`<${Btn} size="xs" variant="ghost" pressed=${open} onClick=${() => c.setOpenMsg(open ? null : tab.ref)}>${t.btnMessage}<//>` : null}

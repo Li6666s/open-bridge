@@ -549,7 +549,7 @@ Themes change user-facing vocabulary only — never tools or goals.
   [1] professional      Lead, Specialists, Tasks         (en, default)
   [2] professional-de   Leitung, Spezialisten, Aufgaben  (de)
   [3] professional-fr   Responsable, Spécialistes, Tâches (fr)
-  [4] professional-zh-cn   负责人、专家、任务 (zh-CN)
+  [4] professional-zh-cn 负责人、专家模块、任务 (zh-CN)
   [5] custom            Skip — copy themes/_template.yaml later
 ```
 

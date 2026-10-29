@@ -6,19 +6,30 @@
 // own boxes. A tab or a workspace of its own may get a name
 // here (RenameField); task tabs and the control session keep theirs (logic.js canRename). "Organize with AI"
 // in the sidebar's head asks the model for a tidier order of this Bridge's workspaces (views/organize.js).
+// Round 6, from the Sessions page: on top of Work why the relay has nobody to ask with the button that starts a
+// control session (views/header.js ControlNotice), and why the tabs may be missing or stale (views/tabs.js
+// TabWarnings); a tab's pane names the task it works on, which opens in the drawer over the Chat.
+// Round 6d: the questions stand under the tabs waiting for you, by title, open and handed ones first with their markers,
+// and "all" reaches the ones archived in the last days (read only: an archived one opens without its box). A waiting
+// tab is a short line there, answered only on the right (C2); the Chat opens where this browser was last (C3); a tab
+// says what it came from, a link to it (C5).
+// The open tab's head closes a tab that neither works nor asks through the one close of every place (views/detail.js
+// TabClose: Done and close tab where a task or an item stands behind it) and walks on; a line of Waiting for you
+// stays one line (C2), so its close is that head's.
 // The rules every component keeps stand at the head of components.js.
 
 import { html, useEffect, useLayoutEffect, useRef, useState } from '../vendor/htm-preact-3.1.1.module.js'
-import { attentionTabs, canRename, canRenameWorkspace, canTab, chatStamp, guideOf, isAnswered, listedChats, roomsOf, screenLines, shellQuote, short, stateToken, statusQueue, tabWalkView, walkRefs, tabStateKey } from '../logic.js'
+import { ASK_ARCHIVE_DAYS, askList, attentionTabs, canRename, canRenameWorkspace, canTab, chatLanding, chatStamp, duration, guideOf, indexRows, isAnswered, listedChats, roomShown, roomsOf, screenLines, shellQuote, short, stateToken, statusQueue, tabOrigin, tabWalkView, waitLage, walkRefs, tabStateKey, wantsYou } from '../logic.js'
 import { T, language } from '../text.js'
 import { AgentList, AgentMark, AgentsPage, agentBadge } from './agents.js'
-import { ChatFoot, ChatThread, useQuickLive, useStickToEnd } from './chat.js'
-import { Segmented } from './detail.js'
+import { AskMark, ChatFoot, ChatIntro, ChatThread, useQuickLive, useStickToEnd } from './chat.js'
+import { Segmented, TabClose } from './detail.js'
 import { Btn, Dot, Empty, Icon, StateLine, WalkBar } from './parts.js'
-import { GuideLine, GuideTree } from './guide.js'
-import { chatAreaOf } from './nav.js'
+import { GuideTree } from './guide.js'
+import { ControlNotice } from './header.js'
+import { chatAreaOf, openOrigin } from './nav.js'
 import { AskLine, TabReply } from './reply.js'
-import { useTabScreen } from './tabs.js'
+import { TabWarnings, useTabScreen } from './tabs.js'
 
 const CHATS_SHOWN = 6
 const GUIDE_VIEWS = ['guide', 'both', 'screen']
@@ -27,11 +38,10 @@ const GUIDE_VIEWS = ['guide', 'both', 'screen']
  *  or the terminal as before (ui.guideView, kept in this browser) */
 const guideView = s => (GUIDE_VIEWS.includes(s.ui?.guideView) ? s.ui.guideView : 'both')
 
-/** The room picked, else the chat (the open quick chat is ui.quickConv). Never picked on its own from
- *  the tabs: a tab that starts waiting would take the pane away while you type */
-function pickedRoom(s) {
-  return s.ui.room ?? { kind: 'chat' }
-}
+/** The room picked, else the chat (the open quick chat is ui.quickConv); one kept from before a reload that is
+ *  gone shows the chat (logic.js roomShown). Never picked on its own from the tabs once the Chat is open: a tab
+ *  that starts waiting would take the pane away while you type */
+const pickedRoom = roomShown
 
 function Item({ on, onClick, onDblClick, children, title, cls = '' }) {
   return html`<button type="button" class=${`room-item ${cls}${on ? ' is-on' : ''}`} aria-current=${on ? 'true' : undefined}
@@ -41,8 +51,24 @@ function Item({ on, onClick, onDblClick, children, title, cls = '' }) {
 /** A click that picks a room; the second click of a double click picks nothing again (it opens the rename) */
 const firstClick = fn => e => { if ((e?.detail ?? 1) <= 1) fn() }
 
+/** What a tab came from (logic.js tabOrigin), left out where it is the task `slug` the tab already names */
+function shownOrigin(s, tab, slug) {
+  const from = tabOrigin(s, tab, language())
+  return from && !(slug && from.key === `task:${slug}`) ? from : null
+}
+
 /** Whether the workplace knows this tab by its name (a task, an inbox item, a team role): it keeps that name */
 const taskTab = tab => !!(tab.slug || tab.item || tab.team)
+
+/** The task a tab works on: its own (a task tab), else the newest live session in it linked to one (by hand, by its
+ *  task tab, or recognised from what it did); null for none and for the control session */
+function taskOfTab(s, tab) {
+  if (tab.is_control) return null
+  if (tab.slug) return tab.slug
+  const linked = (s.sessions?.sessions ?? []).filter(x => x.task && x.tab?.ref === tab.ref)
+    .sort((a, b) => (b.started_ms ?? 0) - (a.started_ms ?? 0))[0]
+  return linked?.task ?? null
+}
 
 /** The new name of a tab or a workspace, in place of its row: Enter or Save takes it (trimmed, never
  *  empty), Esc or Cancel leaves the old one. The field stands instead of the row's button, never inside it */
@@ -91,43 +117,56 @@ function LoadChip({ load }) {
     ${part(load.subagents, 'subagent', t.rooms.subagents)}${part(load.workflows, 'workflow', t.rooms.workflows)}</span>`
 }
 
-function TabItem({ tab, on, s, c, where = false }) {
+/** A tab's row in its workspace: its dot, name and state, and under it what it came from (logic.js tabOrigin; the
+ *  link to it stands in the tab's head), unless that is its own task, whose name it carries already. `dim`: it stands in Waiting for you above, so here it is a grey line that
+ *  only says it waits (round 6d C2) */
+function TabItem({ tab, on, s, c, where = false, dim = false }) {
   const t = T()
   if (renaming(s, 'tab', tab.ref)) {
     return html`<${RenameField} value=${tab.name} label=${t.rooms.renameTab}
       onSave=${title => saveName(c, 'tab_rename', { tab_ref: tab.ref, title })} onCancel=${() => c.stopRename()} />`
   }
-  return html`<${Item} on=${on} cls="room-tab" title=${tab.ask?.text || tab.last || tab.name} onClick=${firstClick(() => c.pickRoom({ kind: 'tab', id: tab.ref }))}
+  const from = shownOrigin(s, tab, tab.slug)
+  return html`<${Item} on=${on} cls=${`room-tab${dim ? ' is-dim' : ''}${from ? ' has-from' : ''}`} title=${tab.ask?.text || tab.last || tab.name} onClick=${firstClick(() => c.pickRoom({ kind: 'tab', id: tab.ref }))}
     onDblClick=${canRename(s, tab) ? () => c.startRename('tab', tab.ref) : undefined}>
-    <${Dot} token=${stateToken(tabStateKey(tab))} pulse=${tab.state === 'working'} />
+    <${Dot} token=${dim ? 'muted' : stateToken(tabStateKey(tab))} pulse=${tab.state === 'working'} />
     <span class="room-name">${tab.is_control ? t.controlSession : tab.name}</span>
     <${LoadChip} load=${tab.load} />
-    <span class="room-meta muted small">${where ? tab.workspace : t.state[tabStateKey(tab)] ?? tab.state}</span>
+    <span class="room-meta muted small">${where ? tab.workspace : dim ? t.state.waiting : t.state[tabStateKey(tab)] ?? tab.state}</span>
+    ${from ? html`<span class="room-from muted small">${t.rooms.from(from.title)}</span>` : null}
   <//>`
 }
 
+/** The questions (logic.js askList): open and handed ones first, each by its title on a line of its own (what tells
+ *  questions apart: the job, the machine, the state), its marker and time under it; "all"
+ *  shows every one of the last days, the archived ones too (s.chatArchive, read once), greyed and without ×, or
+ *  says that the archive holds none */
 function Chats({ convs, s, c, here }) {
   const t = T()
-  const [all, setAll] = useState(false)
-  const shown = all ? convs : convs.slice(0, CHATS_SHOWN)
+  const all = !!s.ui.asksAll
+  const live = askList(convs, s, language())
+  const ids = new Set(live.map(x => x.conv.id))
+  const old = all ? askList((s.chatArchive?.convs ?? []).filter(x => !ids.has(x.id)), s, language()).map(x => ({ ...x, archived: true })) : []
+  const shown = all ? [...live, ...old] : live.slice(0, CHATS_SHOWN)
   return html`<div class="room-chats">
-    <${Item} on=${here.kind === 'chat' && !s.ui.quickConv} cls="room-chat" onClick=${() => { c.newQuick(); c.pickRoom({ kind: 'chat' }) }}>
-      <span class="room-name">+ ${t.quickNew}</span><//>
-    ${shown.map(x => html`<div class="room-chat-row" key=${x.id}>
+    ${shown.map(({ conv: x, title, mark, archived }) => html`<div class=${`room-chat-row${archived ? ' is-archived' : ''}`} key=${x.id}>
       <${Item} on=${here.kind === 'chat' && s.ui.quickConv === x.id} cls="room-chat" title=${x.turns[0]?.q}
         onClick=${() => { c.pickQuick(x.id); c.pickRoom({ kind: 'chat' }) }}>
         ${x.running ? html`<${Dot} token="info" pulse />` : html`<span class="room-glyph"><${Icon} name="chat" size=${12} /></span>`}
-        <span class="room-name">${short(x.turns[0]?.q ?? '', 40)}</span>
-        <span class="room-meta muted small">${chatStamp(x.last_ms ?? x.started_ms, s.now, language())}</span>
+        <span class="room-name">${title}</span>
+        <span class="room-sub"><${AskMark} mark=${mark} archived=${archived} />
+          <span class="room-meta muted small">${chatStamp(x.last_ms ?? x.started_ms, s.now, language())}</span></span>
       <//>
-      ${x.running ? null : html`<button type="button" class="room-x" title=${t.quickForgetHint} aria-label=${t.quickForget} onClick=${() => c.quickForget(x.id)}>×</button>`}
+      ${x.running || archived ? null : html`<button type="button" class="room-x" title=${t.quickForgetHint} aria-label=${t.quickForget} onClick=${() => c.quickForget(x.id)}>×</button>`}
     </div>`)}
-    ${convs.length > CHATS_SHOWN ? html`<button type="button" class="btn-link small room-more" onClick=${() => setAll(!all)}>
-      ${all ? t.cardLess : t.rooms.allChats(convs.length)}</button>` : null}
+    ${all && s.chatArchive?.status === 'loading' ? html`<p class="muted small room-more">${t.asks.loading}</p>` : null}
+    ${all && s.chatArchive?.status === 'error' ? html`<p class="muted small room-more">${t.asks.failed}</p>` : null}
+    ${all && s.chatArchive?.status === 'ok' && !old.length ? html`<p class="muted small room-more">${t.asks.noneArchived(ASK_ARCHIVE_DAYS)}</p>` : null}
+    <button type="button" class="btn-link small room-more" onClick=${() => c.showAllAsks(!all)}>${all ? t.cardLess : t.rooms.allAsks}</button>
   </div>`
 }
 
-function WorkspaceGroup({ w, s, c, here }) {
+function WorkspaceGroup({ w, s, c, here, waits }) {
   const t = T()
   const on = here.kind === 'ws' && here.id === w.key
   const head = renaming(s, 'ws', w.ref) && w.ref
@@ -143,8 +182,7 @@ function WorkspaceGroup({ w, s, c, here }) {
       ${w.unread ? html`<span class="room-badge mono"><span class="sr-only">${t.rooms.unread(w.unread)}</span><span aria-hidden="true">${w.unread}</span></span>` : null}
       ${w.bridge ? html`<span class="chip room-bridge">${w.bridge.name}</span>` : null}
     <//>`}
-    ${w.tabs.map(tab => html`<${TabItem} key=${tab.ref} tab=${tab} on=${here.kind === 'tab' && here.id === tab.ref} s=${s} c=${c} />`)}
-    ${w.chats.length || (s.rooms?.control && w.title === s.rooms.control) ? html`<${Chats} convs=${w.chats} s=${s} c=${c} here=${here} />` : null}
+    ${w.tabs.map(tab => html`<${TabItem} key=${tab.ref} tab=${tab} on=${here.kind === 'tab' && here.id === tab.ref} s=${s} c=${c} dim=${waits.has(tab.ref)} />`)}
   </section>`
 }
 
@@ -165,47 +203,33 @@ function useLeaving(list, atMs) {
   return out
 }
 
-/** One tab that waits for you: its name and workspace (a click shows it on the right), its question (or,
- *  once the decision guide has read it, what it is about and where it stands), and the answers; a row
- *  that left, or was answered here and still shows that very question (the same words in the same
- *  stretch of its state, logic.js isAnswered), is greyed with what happened instead of buttons. The same
- *  question asked again after the tab worked gets its buttons back */
-const CONTROLS = new Set(['button', 'a', 'input', 'textarea', 'select', 'label', 'summary'])
-
-/** Whether a click began on a control between `node` and the row `row` (the row itself is none) */
-function fromControl(node, row) {
-  for (let n = node; n && n !== row; n = n.parentNode) {
-    if (CONTROLS.has(n.localName) || n.isContentEditable) return true
-  }
-  return false
-}
-
-function AskRow({ tab, left, s, c }) {
+/** One tab that waits for you, as a short entry (round 6d C2): its dot, name and how long, and one line of where it
+ *  stands (logic.js waitLage: its workspace, what it asks or its last words); a state other than waiting says its
+ *  word, "waits" being the group's heading. A click opens it on the right, where its question and the answers stand
+ *  (they are never repeated here). A row that left, or was answered here and still shows that very question (the
+ *  same words in the same stretch of its state, logic.js isAnswered), stays one poll longer, greyed with what happened */
+function WaitLine({ tab, left, s, c, here }) {
   const t = T()
   const answered = s.ui?.answered?.[tab.ref] ?? null
   const done = left || isAnswered(answered, tab)
-  const pick = () => c.pickRoom({ kind: 'tab', id: tab.ref })
-  // a click anywhere in the row opens the tab, not only on its name; one on a control of the row (an
-  // answer, the text field) does that control's work alone. The name stays the button for the keyboard
-  const onRow = e => { if (!fromControl(e.target, e.currentTarget)) pick() }
-  return html`<div class=${`reply-row is-pickable${done ? ' is-left' : ''}`} onClick=${onRow}>
-    <button type="button" class="reply-head" onClick=${pick}>
-      <${Dot} token=${stateToken(tabStateKey(tab))} pulse=${tab.state === 'working'} />
-      <span class="reply-name">${tab.name}</span>
-      <span class="room-meta muted small">${tab.workspace}</span>
-    </button>
-    ${!done && guideView(s) !== 'screen' && guideOf(s, tab).status === 'fresh' ? html`<${GuideLine} tab=${tab} s=${s} />` : html`<${AskLine} tab=${tab} />
-      ${done || guideView(s) === 'screen' ? null : html`<${GuideLine} tab=${tab} s=${s} />`}`}
-    ${done ? html`<p class="reply-done muted small">${answered ? t.reply.answered(answered.q) : t.reply.movedOn}</p>`
-      : html`<${TabReply} tab=${tab} s=${s} c=${c} compact />`}
-  </div>`
+  const key = tabStateKey(tab)
+  const word = done ? (answered ? t.reply.answeredWord : t.reply.movedOn) : key === 'waiting' ? null : t.state[key] ?? tab.state
+  const lage = waitLage(tab)
+  return html`<${Item} on=${here.kind === 'tab' && here.id === tab.ref} cls=${`room-wait${done ? ' is-left' : ''}`}
+    title=${done && answered ? t.reply.answered(answered.q) : tab.ask?.text || tab.last || tab.name} onClick=${() => c.pickRoom({ kind: 'tab', id: tab.ref })}>
+    <${Dot} token=${stateToken(key)} pulse=${tab.state === 'working'} />
+    <span class="room-name">${tab.name}</span>
+    ${word ? html`<span class="room-meta muted small" data-word=${done ? 'done' : key}>${word}</span>` : null}
+    <span class="room-meta muted small mono">${duration(s.now - (tab.since_ms || s.now))}</span>
+    ${lage ? html`<span class="room-lage muted small">${lage}</span>` : null}
+  <//>`
 }
 
-/** "Waiting for you" on top of the sidebar: the tabs that want attention (logic.js attentionTabs). While
+/** "Waiting for you" near the top of the sidebar, over the questions: the tabs that want attention (logic.js attentionTabs). While
  *  the pointer or the focus is in it, its rows keep the order last shown and a tab that starts asking goes
- *  last: sorted, a new dialog would push every row down by its height, and a click meant for one row's
- *  answer would land on another tab's option. The sorted order comes back when the pointer leaves */
-function WaitingGroup({ s, c }) {
+ *  last: sorted, a new tab would push every row down, and a click meant for one row would land on another
+ *  tab. The sorted order comes back when the pointer leaves */
+function WaitingGroup({ s, c, here }) {
   const t = T()
   const order = useHeldOrder(attentionTabs(s.tabs?.tabs), 'urgency', tab => tab.ref)
   const rows = useLeaving(order.list, s.tabs?.at_ms ?? 0)
@@ -214,7 +238,7 @@ function WaitingGroup({ s, c }) {
     onPointerEnter=${order.hold} onPointerLeave=${order.release} onFocusIn=${order.hold}
     onFocusOut=${e => { if (!e.currentTarget.contains(e.relatedTarget)) order.release() }}>
     <h3 class="label-caps room-group">${t.reply.asks}</h3>
-    ${rows.map(({ tab, left }) => html`<${AskRow} key=${tab.ref} tab=${tab} left=${left} s=${s} c=${c} />`)}
+    ${rows.map(({ tab, left }) => html`<${WaitLine} key=${tab.ref} tab=${tab} left=${left} s=${s} c=${c} here=${here} />`)}
   </section>`
 }
 
@@ -241,24 +265,21 @@ function useHeldOrder(list, mode, keyOf = w => w.key) {
 }
 
 /** The tabs by status (logic.js statusQueue), each row with its workspace, so you walk them top to bottom:
- *  answer or close what needs you or waits, then the rest (Work through and the tab's bar walk them). Below stand the control
- *  session and the quick chats, which have no status of
- *  that kind. A tab that changes its status starts its time again, so it goes last in its new group and
+ *  answer or close what needs you or waits, then the rest (Work through and the tab's bar walk them). Below stands the control
+ *  session, which has no status of that kind (the questions stand on top of the sidebar). A tab that changes its status starts its time again, so it goes last in its new group and
  *  the rows above it stay where they were */
 function StatusGroups({ s, c, here }) {
   const t = T()
   const groups = statusQueue(s.tabs?.tabs)
   const control = (s.tabs?.tabs ?? []).find(x => x.is_control)
-  const chats = listedChats(s.quick?.convs, s.quick?.keep_hours, s.now)
   return html`<div class="room-status-list">
     ${groups.map(g => html`<section class="room-status" key=${g.state}>
       <h3 class="label-caps room-group"><${StateLine} token=${stateToken(g.state)} word=${t.rooms.status[g.state]} /> <span class="mono muted">${g.tabs.length}</span></h3>
       ${g.tabs.map(tab => html`<${TabItem} key=${tab.ref} tab=${tab} on=${here.kind === 'tab' && here.id === tab.ref} s=${s} c=${c} where />`)}
     </section>`)}
     ${!groups.length ? html`<${Empty}>${t.tabsEmpty}<//>` : null}
-    ${control || chats.length ? html`<section class="room-ws">
-      ${control ? html`<${TabItem} tab=${control} on=${here.kind === 'tab' && here.id === control.ref} s=${s} c=${c} />` : null}
-      <${Chats} convs=${chats} s=${s} c=${c} here=${here} />
+    ${control ? html`<section class="room-ws">
+      <${TabItem} tab=${control} on=${here.kind === 'tab' && here.id === control.ref} s=${s} c=${c} />
     </section>` : null}
   </div>`
 }
@@ -298,12 +319,16 @@ const tabFacts = (tabs, ref) => {
 }
 
 /** The sidebar of the Work area: the order of the tabs on top, where it is reached without scrolling past
- *  the asks; then Waiting for you (left out by status, whose first groups hold the same tabs), the
- *  workspaces or the status groups, and the Bridges on this machine. The A2A agents have an area of their own */
+ *  the tabs; then Waiting for you as short lines (left out by status, whose first groups hold the same tabs), the
+ *  questions as a group of their own right under it in every order (round 6d C1, with the way to a new one in its
+ *  head), the workspaces or the status groups, and the Bridges on this machine. The A2A agents have an area of
+ *  their own */
 export function Sidebar({ s, c, rooms, here }) {
   const t = T()
   const sort = ['urgency', 'status'].includes(s.ui?.roomsSort) ? s.ui.roomsSort : 'terminal'
   const order = useHeldOrder(rooms.workspaces, sort === 'urgency' ? 'urgency' : 'terminal')
+  // the tabs Waiting for you lists: in their workspace a grey line only
+  const waits = new Set(sort === 'status' ? [] : attentionTabs(s.tabs?.tabs).filter(wantsYou).map(x => x.ref))
   return html`<nav class="panel rooms-side" aria-label=${t.rooms.side}
     onPointerEnter=${order.hold} onPointerLeave=${order.release} onFocusIn=${order.hold}
     onFocusOut=${e => { if (!e.currentTarget.contains(e.relatedTarget)) order.release() }}>
@@ -312,9 +337,11 @@ export function Sidebar({ s, c, rooms, here }) {
         values=${[['terminal', t.rooms.sortTerminal], ['urgency', t.rooms.sortUrgency], ['status', t.rooms.sortStatus]]} />
       <${WalkStart} s=${s} c=${c} />
     </div>
-    ${sort === 'status' ? null : html`<${WaitingGroup} s=${s} c=${c} />`}
-    ${rooms.chats.length && sort !== 'status' ? html`<section class="room-ws"><h3 class="label-caps">${t.rooms.chats}</h3>
-      <${Chats} convs=${rooms.chats} s=${s} c=${c} here=${here} /></section>` : null}
+    ${sort === 'status' ? null : html`<${WaitingGroup} s=${s} c=${c} here=${here} />`}
+    <section class="room-ws room-asks"><div class="room-group-head"><h3 class="label-caps room-group">${t.rooms.chats}</h3>
+        <button type="button" class="btn-link small room-new" aria-current=${here.kind === 'chat' && !s.ui.quickConv ? 'true' : undefined}
+          onClick=${() => { c.newQuick(); c.pickRoom({ kind: 'chat' }) }}>+ ${t.rooms.newAsk}</button></div>
+      <${Chats} convs=${listedChats(s.quick?.convs, s.quick?.keep_hours, s.now)} s=${s} c=${c} here=${here} /></section>
     <div class="room-group-head">
       <h3 class="label-caps room-group">${t.rooms.workspaces}</h3>
       ${canTab(s, 'rename') ? html`<${Btn} size="xs" variant="ghost" title=${t.organize.buttonTitle} busy=${!!s.ui?.organize?.busy}
@@ -322,7 +349,7 @@ export function Sidebar({ s, c, rooms, here }) {
     </div>
     ${s.tabs?.workspaces == null ? html`<p class="muted small">${t.rooms.noList}</p>` : null}
     ${sort === 'status' ? html`<${StatusGroups} s=${s} c=${c} here=${here} />`
-      : order.list.length ? order.list.map(w => html`<${WorkspaceGroup} key=${w.key} w=${w} s=${s} c=${c} here=${here} />`)
+      : order.list.length ? order.list.map(w => html`<${WorkspaceGroup} key=${w.key} w=${w} s=${s} c=${c} here=${here} waits=${waits} />`)
       : html`<${Empty}>${t.tabsEmpty}<//>`}
     ${rooms.bridges.length ? html`<h3 class="label-caps room-group">${t.rooms.bridges}</h3>
       ${rooms.bridges.map(b => html`<${Item} key=${b.id} on=${here.kind === 'bridge' && here.id === b.id} title=${b.purpose}
@@ -353,22 +380,31 @@ function TabPane({ s, c, tab }) {
     if (r?.ok && verb !== 'tab_jump') onward()
     return r
   } }
-  const closeTab = async () => { const r = await c.act('tab_close', { tab_ref: tab.ref }); if (r?.ok) onward() }
+  // the task it works on, opened in the drawer over the Chat (round 6), and what it came from when that is anything
+  // else (round 6d C5): a question, a job, an inbox item, another task
+  const slug = taskOfTab(s, tab)
+  const from = shownOrigin(s, tab, slug)
+  const taskTitle = slug ? indexRows(s.model).get(`task:${slug}`)?.title ?? slug : null
   return html`<section class=${`panel chat-main rooms-main has-walk${replying ? ' has-reply' : ''}${view === 'guide' ? ' is-guide-only' : ''}`} aria-labelledby="room-title">
     <header class="tabview-head">
       <${StateLine} token=${stateToken(tabStateKey(tab))} strong=${tab.state === 'needs-you'} word=${t.state[tabStateKey(tab)] ?? tab.state} />
-      <h2 class="sec-title tabview-title" id="room-title" title=${taskTab(tab) && !tab.is_control ? t.rooms.taskName : undefined}>
+      <h2 class="sec-title tabview-title" id="room-title" title=${taskTab(tab) && !tab.is_control ? t.rooms.taskName : tab.is_control ? undefined : tab.name}>
         ${tab.is_control ? t.controlSession : tab.name}</h2>
       ${canRename(s, tab) ? html`<${Btn} size="xs" variant="ghost" icon="pencil" label=${t.rooms.rename} title=${t.rooms.rename}
         onClick=${() => c.startRename('tab', tab.ref)} />` : null}
       <span class="muted small">${tab.workspace}</span>
+      ${slug ? html`<button type="button" class="btn-link small room-task" title=${t.infoOpenTask}
+        onClick=${() => c.openItem(`task:${slug}`, { task: slug, title: taskTitle })}>${t.sessionTask(short(taskTitle, 60))}</button>` : null}
+      ${from ? html`<button type="button" class="btn-link small room-from-link" data-from=${from.kind} title=${t.rooms.fromTitle}
+        onClick=${() => openOrigin(s, c, from)}>${t.rooms.from(short(from.title, 60))}</button>` : null}
       <span class="tabview-live muted small" aria-live="off">${err ? html`<${StateLine} token="danger" word=${t.tabViewFailed(err)} />`
         : screen ? t.tabViewLive : t.loading}</span>
       ${guided ? html`<span class="guide-view"><${Segmented} label=${t.guide.viewLabel} current=${view}
         values=${GUIDE_VIEWS.map(v => [v, t.guide.view[v]])} onPick=${v => c.setGuideView(v)} /></span>` : null}
-      <${Btn} size="xs" variant="primary" icon="send" title=${t.rooms.writeTitle} onClick=${() => c.openTabView(tab.ref)}>${t.rooms.write}<//>
-      ${tab.is_control || !canTab(s, 'close') || (tab.state !== 'waiting' && tab.state !== 'shell') ? null
-        : html`<${Btn} size="xs" variant="ghost" icon="close" onClick=${closeTab}>${t.btnCloseTab}<//>`}
+      <span class="room-head-acts">
+        <${Btn} size="xs" variant="primary" icon="send" title=${t.rooms.writeTitle} onClick=${() => c.openTabView(tab.ref)}>${t.rooms.write}<//>
+        <${TabClose} tab=${tab} s=${s} c=${c} looking onClosed=${onward} />
+      </span>
     </header>
     ${replying ? html`<div class="reply-pane">
       ${view === 'guide' ? null : html`<${AskLine} tab=${tab} />`}
@@ -387,16 +423,20 @@ function TabPane({ s, c, tab }) {
 function ChatPane({ s, c }) {
   const t = T()
   const q = s.quick ?? {}
-  const conv = (q.convs ?? []).find(x => x.id === s.ui.quickConv) ?? null
+  const live = (q.convs ?? []).find(x => x.id === s.ui.quickConv) ?? null
+  // one picked from the archive under "all" reads as it was, without a box to go on in
+  const archived = live ? null : (s.chatArchive?.convs ?? []).find(x => x.id === s.ui.quickConv) ?? null
+  const conv = live ?? archived
   const body = useStickToEnd(conv, useQuickLive(conv?.id))
   return html`<section class="panel chat-main rooms-main" aria-label=${t.askTitle}>
-    <header class="tabview-head"><h2 class="sec-title tabview-title">${conv ? short(conv.turns[0]?.q ?? '', 80) : t.quickNew}</h2>
+    <header class="tabview-head"><h2 class="sec-title tabview-title">${conv ? askList([conv], s, language())[0].title : t.rooms.newAsk}</h2>
+      ${archived ? html`<${AskMark} archived />` : null}
       <span class="muted small">${t.rooms.chatHint}</span></header>
     <div class="tabview-body quick-body" ref=${body} tabindex="-1" role="log" aria-label=${t.quickHistory}>
       ${q.config_error || !q.available ? html`<p><${StateLine} token="warning" word=${q.config_error ?? t.quickUnavailable} /></p>` : null}
-      ${!conv ? html`<div class="quick-empty"><p class="muted">${t.quickIntro}</p></div>` : html`<${ChatThread} s=${s} c=${c} conv=${conv} />`}
+      ${!conv ? html`<${ChatIntro} q=${q} />` : html`<${ChatThread} s=${s} c=${c} conv=${conv} />`}
     </div>
-    <${ChatFoot} key=${conv?.id ?? 'new'} s=${s} c=${c} conv=${conv} autofocus=${false} />
+    ${archived ? null : html`<${ChatFoot} key=${conv?.id ?? 'new'} s=${s} c=${c} conv=${conv} autofocus=${false} />`}
   </section>`
 }
 
@@ -443,7 +483,7 @@ function AreaSwitch({ s, c, area }) {
   const peers = s.agents?.peers ?? []
   if (!peers.length) return null
   return html`<div class="rooms-area">
-    <${Segmented} label=${t.chatArea.label} current=${area} onPick=${v => c.setChatArea(v)}
+    <${Segmented} label=${t.chatArea.label} u="chat" current=${area} onPick=${v => c.setChatArea(v)}
       values=${[['work', t.chatArea.work], ['a2a', html`${t.chatArea.a2a(peers.length)}<${AgentMark} kind=${agentBadge(s)} />`]]} />
   </div>`
 }
@@ -454,6 +494,18 @@ export function RoomsPage({ s, c }) {
   const here = pickedRoom(s)
   const area = chatAreaOf(s)
   useEffect(() => { c.loadAgents() }, [])
+  // nothing kept and nothing picked: the Chat picks once, as soon as the questions and the tabs are read (round 6d
+  // C3, logic.js chatLanding); after that it never switches on its own
+  const landed = useRef(false)
+  const ready = !!s.quick && Array.isArray(s.tabs?.tabs)
+  useEffect(() => {
+    if (landed.current || !ready) return
+    landed.current = true
+    const go = chatLanding(s, language())
+    if (!go) return
+    if (go.conv) c.pickQuick(go.conv)
+    c.pickRoom(go.room)
+  }, [ready])
   if (area === 'a2a') {
     return html`<div class="col col-page roomspage">
       <div class="rooms-grid">
@@ -475,6 +527,8 @@ export function RoomsPage({ s, c }) {
   }
   pane = pane ?? html`<${ChatPane} s=${s} c=${c} />`
   return html`<div class="col col-page roomspage">
+    <${ControlNotice} s=${s} c=${c} />
+    <${TabWarnings} s=${s} />
     <div class="rooms-grid">
       <div class="rooms-left"><${AreaSwitch} s=${s} c=${c} area=${area} /><${Sidebar} s=${s} c=${c} rooms=${rooms} here=${here} /></div>
       ${pane}

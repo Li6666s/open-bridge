@@ -615,3 +615,348 @@ def test_a_mute_rule_on_shelve_ideas_is_kept_and_said(repo):
     out = _json.loads(r.stdout)
     assert _inbox(repo).get(out["inbox"]).state == "dropped"
     assert any("mute" in w for w in out["warnings"])
+
+
+# ---------------------------------------------------------------- merge: two tasks about the same thing become one
+
+KEEP = (
+    "---\n"
+    "slug: keeper\n"
+    "type: feature\n"
+    "status: doing\n"
+    "priority: P1\n"
+    "created: 2026-09-01\n"
+    "last_updated: 2026-09-01\n"
+    "headline: Keep this one\n"
+    "sync:\n"
+    "  bridge_only: true\n"
+    "---\n\n# Keep this one\n\n## Situation\n\nThe kept task.\n\n## Notes\n\n- 2026-09-02: first note of the keeper\n"
+)
+GONE = (
+    "---\n"
+    "slug: merged-one\n"
+    "type: feature\n"
+    "status: review\n"
+    "priority: P2\n"
+    "created: 2026-09-03\n"
+    "last_updated: 2026-09-04\n"
+    "headline: The other one\n"
+    "brief:\n"
+    "  goal: The same thing from another side\n"
+    "---\n\n# The other one\n\n## Next Steps\n\n- [x] a ticked step\n- [ ] an open step\n  - [ ] a nested open step\n\n"
+    "## Notes\n\n- 2026-09-03: started it\n- 2026-09-04: asked the vendor\n"
+)
+
+
+def _two(repo, keep=KEEP, gone=GONE, docs=("a.md", "b.pdf")):
+    for slug, text in (("keeper", keep), ("merged-one", gone)):
+        d = repo / "work" / "tasks" / slug
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "STATUS.md").write_text(text, encoding="utf-8")
+    deliv = repo / "work" / "tasks" / "merged-one" / "deliverables"
+    deliv.mkdir(exist_ok=True)
+    for name in docs:
+        (deliv / name).write_text("doc\n", encoding="utf-8")
+    (deliv / ".hidden").write_text("x\n", encoding="utf-8")
+    _log_with_today(repo)
+    return repo / "work" / "tasks" / "keeper" / "STATUS.md"
+
+
+def test_close_merged_into_sets_the_outcome_and_the_task_it_went_into(repo):
+    r = run(repo, "close", "alpha", "--merged-into", "keeper", "--json")
+    assert r.returncode == 0, r.stderr
+    today = _dt.date.today()
+    text = (repo / "work" / "done" / f"{today:%Y-%m}" / "alpha" / "STATUS.md").read_text(encoding="utf-8")
+    assert "status: done\n" in text and "outcome: merged\n" in text and "merged_into: keeper\n" in text
+    assert text.index("closed:") < text.index("outcome: merged") < text.index("merged_into: keeper")
+    assert f"- {today.isoformat()}: Merged into keeper" in text
+    out = _json.loads(r.stdout)
+    assert out["outcome"] == "merged" and out["merged_into"] == "keeper"
+    rows = [ln for ln in (repo / "work" / "log.md").read_text(encoding="utf-8").splitlines() if "| alpha |" in ln]
+    assert rows and rows[-1].endswith("merged into keeper |")
+
+
+def test_close_merged_into_refuses_declined_and_a_bad_slug(repo):
+    assert run(repo, "close", "alpha", "--merged-into", "keeper", "--declined").returncode in (1, 2)
+    assert run(repo, "close", "alpha", "--merged-into", "Bad Slug").returncode in (1, 2)
+    assert (repo / "work" / "tasks" / "alpha" / "STATUS.md").is_file()
+
+
+def test_merge_copies_goal_notes_and_open_steps_links_the_documents_and_closes_the_other(repo):
+    keep = _two(repo)
+    r = run(repo, "merge", "keeper", "--from", "merged-one", "--json")
+    assert r.returncode == 0, r.stderr
+    today = _dt.date.today()
+    month = f"{today:%Y-%m}"
+    done = repo / "work" / "done" / month / "merged-one"
+    assert not (repo / "work" / "tasks" / "merged-one").exists() and (done / "STATUS.md").is_file()
+    gone = (done / "STATUS.md").read_text(encoding="utf-8")
+    assert "outcome: merged\n" in gone and "merged_into: keeper\n" in gone
+    assert (done / "deliverables" / "a.md").is_file()                     # the documents move with the folder
+    text = keep.read_text(encoding="utf-8")
+    block = text[text.index("<!-- merged-from: merged-one -->"):text.index("<!-- /merged-from: merged-one -->")]
+    assert "## Merged from merged-one\n" in block
+    assert "The other one\n" in block and "The same thing from another side\n" in block
+    assert "- 2026-09-03: started it\n" in block and "- 2026-09-04: asked the vendor\n" in block
+    assert "- [ ] an open step\n" in block and "  - [ ] a nested open step\n" in block and "a ticked step" not in block
+    assert f"- work/done/{month}/merged-one/STATUS.md\n" in block
+    assert f"- work/done/{month}/merged-one/deliverables/a.md\n" in block
+    assert f"- work/done/{month}/merged-one/deliverables/b.pdf\n" in block and ".hidden" not in block
+    assert text.index("<!-- /merged-from: merged-one -->") < text.index("## Notes")   # before the notes
+    assert f"related:\n  - work/done/{month}/merged-one/STATUS.md  # merged-from: merged-one\n" in text
+    assert f"  - work/done/{month}/merged-one/deliverables/b.pdf  # merged-from: merged-one\n" in text
+    assert f"- {today.isoformat()}: Merged in merged-one: The other one" in text
+    assert f"last_updated: {today.isoformat()}" in text
+    out = _json.loads(r.stdout)
+    assert out == {"keep": "keeper", "slug": "merged-one", "moved_to": f"work/done/{month}/merged-one",
+                   "notes": 2, "steps": 2, "docs": 2, "related": 3, "warnings": []}
+    rows = (repo / "work" / "log.md").read_text(encoding="utf-8").splitlines()
+    assert any("| merged-one |" in ln and ln.endswith("merged into keeper |") for ln in rows)
+    assert any("| keeper |" in ln and ln.endswith("merged in merged-one |") for ln in rows)
+    assert "keeper" in (repo / "work" / "board.md").read_text(encoding="utf-8")
+
+
+def test_merge_takes_a_heading_of_its_own_and_puts_the_block_at_the_end_without_notes(repo):
+    keep = _two(repo, keep=KEEP.split("## Notes")[0].rstrip("\n") + "\n", docs=())
+    r = run(repo, "merge", "keeper", "--from", "merged-one", "--heading", "Taken over from {slug}", "--json")
+    assert r.returncode == 0, r.stderr
+    text = keep.read_text(encoding="utf-8")
+    assert "## Taken over from merged-one\n" in text
+    assert text.index("<!-- /merged-from: merged-one -->") < text.index("## Notes")   # the note made the section after it
+    out = _json.loads(r.stdout)
+    assert out["docs"] == 0 and out["related"] == 1
+
+
+def test_merge_appends_to_a_block_list_of_related_and_leaves_a_flow_list_alone(repo):
+    keep = _two(repo, keep=KEEP.replace("sync:\n", "related:\n  - docs/x.md\n  - docs/y.md\nsync:\n"), docs=())
+    assert run(repo, "merge", "keeper", "--from", "merged-one").returncode == 0
+    month = f"{_dt.date.today():%Y-%m}"
+    assert (f"related:\n  - docs/x.md\n  - docs/y.md\n  - work/done/{month}/merged-one/STATUS.md  # merged-from: merged-one\n"
+            "sync:\n") in keep.read_text(encoding="utf-8")
+    third = repo / "work" / "tasks" / "third-one"
+    third.mkdir(parents=True)
+    (third / "STATUS.md").write_text(GONE.replace("merged-one", "third-one"), encoding="utf-8")
+    text = keep.read_text(encoding="utf-8")
+    start = text.index("related:\n")
+    keep.write_text(text[:start] + "related: [docs/x.md]\n" + text[text.index("sync:\n"):], encoding="utf-8")
+    r = run(repo, "merge", "keeper", "--from", "third-one", "--json")
+    assert r.returncode == 0, r.stderr
+    out = _json.loads(r.stdout)
+    assert out["related"] == 0 and out["warnings"] and "related" in out["warnings"][0]
+    assert "related: [docs/x.md]\n" in keep.read_text(encoding="utf-8")
+
+
+def test_merge_refuses_without_writing(repo):
+    keep = _two(repo)
+    before = keep.read_bytes()
+    for args in (("keeper", "--from", "keeper"), ("keeper", "--from", "ghost"), ("ghost", "--from", "merged-one"),
+                 ("keeper", "--from", "river"), ("river", "--from", "merged-one")):
+        r = run(repo, "merge", *args)
+        assert r.returncode == 1, (args, r.stderr)
+    month = repo / "work" / "done" / f"{_dt.date.today():%Y-%m}" / "merged-one"
+    month.mkdir(parents=True)
+    assert run(repo, "merge", "keeper", "--from", "merged-one").returncode == 1        # its place in done is taken
+    month.rmdir()
+    keep.write_text(keep.read_text(encoding="utf-8") + "\n<!-- merged-from: merged-one -->\n", encoding="utf-8")
+    assert run(repo, "merge", "keeper", "--from", "merged-one").returncode == 1        # a block for it is there already
+    keep.write_bytes(before)
+    assert keep.read_bytes() == before and (repo / "work" / "tasks" / "merged-one" / "STATUS.md").is_file()
+
+
+def test_a_failed_close_takes_the_block_and_the_related_lines_out_again(repo, monkeypatch):
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("task_under_test", SCRIPT)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    keep = _two(repo)
+    before = keep.read_bytes()
+
+    def boom(*a, **kw):
+        raise OSError("disk full")
+    monkeypatch.setattr(mod, "close_task", boom)
+    with pytest.raises(OSError):
+        mod.merge_task(repo, "keeper", "merged-one")
+    assert keep.read_bytes() == before
+    assert (repo / "work" / "tasks" / "merged-one" / "STATUS.md").is_file()
+
+
+def test_unmerge_takes_the_merge_back(repo):
+    keep = _two(repo)
+    before = keep.read_bytes()
+    gone_before = (repo / "work" / "tasks" / "merged-one" / "STATUS.md").read_bytes()
+    assert run(repo, "merge", "keeper", "--from", "merged-one").returncode == 0
+    assert (repo / ".bridge" / "task-merges.json").is_file()        # what the undo restores, kept beside the run
+    r = run(repo, "unmerge", "keeper", "--from", "merged-one", "--as", "review", "--json")
+    assert r.returncode == 0, r.stderr
+    back = repo / "work" / "tasks" / "merged-one" / "STATUS.md"
+    assert back.is_file() and (repo / "work" / "tasks" / "merged-one" / "deliverables" / "a.md").is_file()
+    # both files as they were before the merge, byte for byte: no note, no new last_updated, the status before
+    assert back.read_bytes() == gone_before and keep.read_bytes() == before
+    assert "status: review\n" in back.read_text(encoding="utf-8")
+    out = _json.loads(r.stdout)
+    assert out["keep"] == "keeper" and out["slug"] == "merged-one" and out["status"] == "review" and out["restored"] is True
+    assert out["moved_to"] == "work/tasks/merged-one" and out["removed"] == {"block": True, "related": 3}
+    assert "keeper<merged-one" not in _json.loads((repo / ".bridge" / "task-merges.json").read_text(encoding="utf-8"))
+    rows = (repo / "work" / "log.md").read_text(encoding="utf-8").splitlines()
+    assert any("| keeper |" in ln and ln.endswith("merge of merged-one taken back |") for ln in rows)
+
+
+def test_unmerge_restores_the_kept_task_when_only_its_brief_was_written_meanwhile(repo):
+    keep = _two(repo)
+    before = keep.read_bytes()
+    assert run(repo, "merge", "keeper", "--from", "merged-one").returncode == 0
+    text = keep.read_text(encoding="utf-8")
+    # the describe pass wrote a new brief for the merged text: no change of what the task says
+    keep.write_text(text.replace("sync:\n", "brief:\n  goal: Both sides of the same thing\nsync:\n", 1), encoding="utf-8")
+    r = run(repo, "unmerge", "keeper", "--from", "merged-one", "--json")
+    assert r.returncode == 0, r.stderr
+    assert keep.read_bytes() == before
+
+
+def test_unmerge_after_a_change_by_hand_takes_out_what_the_merge_added_and_writes_no_note(repo):
+    keep = _two(repo)
+    gone_before = (repo / "work" / "tasks" / "merged-one" / "STATUS.md").read_bytes()
+    assert run(repo, "merge", "keeper", "--from", "merged-one").returncode == 0
+    today = _dt.date.today().isoformat()
+    text = keep.read_text(encoding="utf-8")
+    keep.write_text(text.replace("## Situation\n\nThe kept task.\n", "## Situation\n\nThe kept task, changed by hand.\n"),
+                    encoding="utf-8")
+    r = run(repo, "unmerge", "keeper", "--from", "merged-one", "--json")
+    assert r.returncode == 0, r.stderr
+    text = keep.read_text(encoding="utf-8")
+    assert "The kept task, changed by hand." in text                       # the change by hand stays
+    assert "merged-from" not in text and "related:" not in text
+    assert "Merged in merged-one" not in text and "taken back" not in text     # the merge's note goes, the undo writes none
+    assert "- 2026-09-02: first note of the keeper\n" in text
+    # the merged task was not touched while closed: it comes back as it was
+    assert (repo / "work" / "tasks" / "merged-one" / "STATUS.md").read_bytes() == gone_before
+    assert _json.loads(r.stdout)["restored"] is False
+    assert f"- {today}:" not in text
+
+
+def test_unmerge_of_a_merged_task_changed_while_closed_writes_no_note_and_keeps_its_blocker(repo):
+    blocked = GONE.replace("headline: The other one\n", "headline: The other one\nblocked_by: waits on the vendor\n"
+                           "blocked_since: 2026-09-01\n")
+    _two(repo, gone=blocked)
+    assert run(repo, "merge", "keeper", "--from", "merged-one").returncode == 0
+    done = next((repo / "work" / "done").glob("*/merged-one/STATUS.md"))
+    done.write_text(done.read_text(encoding="utf-8") + "\nA line written while it was closed.\n", encoding="utf-8")
+    r = run(repo, "unmerge", "keeper", "--from", "merged-one", "--as", "review")
+    assert r.returncode == 0, r.stderr
+    back = (repo / "work" / "tasks" / "merged-one" / "STATUS.md").read_text(encoding="utf-8")
+    assert "blocked_by: waits on the vendor\n" in back and "blocked_since: 2026-09-01\n" in back
+    assert "status: review\n" in back and "outcome:" not in back and "merged_into" not in back and "closed:" not in back
+    assert "Merged into keeper" not in back and "Reopened" not in back
+    assert "A line written while it was closed." in back
+
+
+def test_a_merged_task_keeps_its_blocker_while_closed_and_after_the_undo(repo):
+    blocked = GONE.replace("headline: The other one\n", "headline: The other one\nblocked_by: waits on the vendor\n"
+                           "blocked_since: 2026-09-01\n")
+    _two(repo, gone=blocked)
+    assert run(repo, "merge", "keeper", "--from", "merged-one").returncode == 0
+    done = next((repo / "work" / "done").glob("*/merged-one/STATUS.md")).read_text(encoding="utf-8")
+    assert "blocked_by: waits on the vendor\n" in done and "blocked_since: 2026-09-01\n" in done
+    assert run(repo, "unmerge", "keeper", "--from", "merged-one").returncode == 0
+    back = (repo / "work" / "tasks" / "merged-one" / "STATUS.md").read_text(encoding="utf-8")
+    assert back == blocked
+    # a plain close still drops the blocker
+    assert run(repo, "close", "merged-one").returncode == 0
+    assert "blocked_by" not in next((repo / "work" / "done").glob("*/merged-one/STATUS.md")).read_text(encoding="utf-8")
+
+
+def test_merge_leaves_the_bookkeeping_of_earlier_merges_out_of_the_section(repo):
+    noisy = GONE.replace("- 2026-09-04: asked the vendor\n", "- 2026-09-04: asked the vendor\n- 2026-09-05: Merged into other-task\n"
+                         "- 2026-09-05: Reopened: merge into other-task taken back\n- 2026-09-06: Merged in third-one: A third\n"
+                         "- 2026-09-06: Merge of third-one taken back\n- 2026-09-07: Reopened\n")
+    keep = _two(repo, gone=noisy)
+    r = run(repo, "merge", "keeper", "--from", "merged-one", "--json")
+    assert r.returncode == 0, r.stderr
+    text = keep.read_text(encoding="utf-8")
+    block = text[text.index("<!-- merged-from: merged-one -->"):text.index("<!-- /merged-from: merged-one -->")]
+    assert "- 2026-09-03: started it\n" in block and "- 2026-09-04: asked the vendor\n" in block
+    assert "- 2026-09-07: Reopened\n" in block                               # a reopen of its own is no merge bookkeeping
+    assert "other-task" not in block and "third-one" not in block
+    assert _json.loads(r.stdout)["notes"] == 3
+
+
+@pytest.mark.parametrize("related", [
+    "related:\n- docs/x.md\n- docs/y.md\n",                                    # indentless, as PyYAML writes it
+    "related:\n  - docs/x.md\n  - \"docs/a long\n    name.md\"\n",                # an item that goes on in a second line
+    "related:\n- docs/x.md\n- \"docs/a long\n  name.md\"\n",
+])
+def test_merge_and_unmerge_keep_a_related_list_of_any_block_style_readable(repo, related):
+    yaml = pytest.importorskip("yaml")
+    keep = _two(repo, keep=KEEP.replace("sync:\n", related + "sync:\n"), docs=())
+    old = yaml.safe_load(keep.read_text(encoding="utf-8").split("---", 2)[1])["related"]
+    r = run(repo, "merge", "keeper", "--from", "merged-one", "--json")
+    assert r.returncode == 0, r.stderr
+    month = f"{_dt.date.today():%Y-%m}"
+    front = yaml.safe_load(keep.read_text(encoding="utf-8").split("---", 2)[1])
+    assert front["related"] == old + [f"work/done/{month}/merged-one/STATUS.md"]
+    assert front["sync"] == {"bridge_only": True}
+    text = keep.read_text(encoding="utf-8")
+    keep.write_text(text.replace("## Situation\n\nThe kept task.\n", "## Situation\n\nChanged by hand.\n"), encoding="utf-8")
+    assert run(repo, "unmerge", "keeper", "--from", "merged-one").returncode == 0     # the edit path, not the restore
+    front = yaml.safe_load(keep.read_text(encoding="utf-8").split("---", 2)[1])
+    assert front["related"] == old and front["sync"] == {"bridge_only": True}
+
+
+def test_merge_leaves_a_related_list_it_cannot_extend_safely_alone_and_says_so(repo, monkeypatch):
+    yaml = pytest.importorskip("yaml")
+    mod = _task_module()
+    # an edit that would not read back as the old items plus the new ones is not written
+    monkeypatch.setattr(mod, "_yaml_item", lambda path: "[broken")
+    keep = _two(repo, keep=KEEP.replace("sync:\n", "related:\n  - docs/x.md\nsync:\n"), docs=())
+    out = mod.merge_task(repo, "keeper", "merged-one")
+    front = yaml.safe_load(keep.read_text(encoding="utf-8").split("---", 2)[1])
+    assert front["related"] == ["docs/x.md"] and out["related"] == 0
+    assert out["warnings"] and "related" in out["warnings"][0]
+
+
+def _task_module():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("task_under_test_r4", SCRIPT)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_unmerge_keeps_other_related_items_and_refuses_what_no_merge_made(repo):
+    keep = _two(repo, keep=KEEP.replace("sync:\n", "related:\n  - docs/x.md\nsync:\n"), docs=())
+    r = run(repo, "unmerge", "keeper", "--from", "merged-one")
+    assert r.returncode == 1                                                  # nothing merged yet
+    assert run(repo, "merge", "keeper", "--from", "merged-one").returncode == 0
+    assert run(repo, "unmerge", "merged-one", "--from", "keeper").returncode == 1   # the other way round
+    text = keep.read_text(encoding="utf-8")
+    cut = text.replace("<!-- merged-from: merged-one -->\n", "")
+    keep.write_text(cut, encoding="utf-8")
+    assert run(repo, "unmerge", "keeper", "--from", "merged-one").returncode == 1   # the block was changed by hand
+    keep.write_text(text, encoding="utf-8")
+    assert run(repo, "unmerge", "keeper", "--from", "merged-one").returncode == 0
+    assert "related:\n  - docs/x.md\nsync:\n" in keep.read_text(encoding="utf-8")
+
+
+def test_reopen_drops_merged_into(repo):
+    assert run(repo, "close", "alpha", "--merged-into", "keeper").returncode == 0
+    assert run(repo, "reopen", "alpha").returncode == 0
+    text = (repo / "work" / "tasks" / "alpha" / "STATUS.md").read_text(encoding="utf-8")
+    assert "merged_into" not in text and "outcome:" not in text
+
+
+def test_a_task_closed_as_merged_fits_the_status_schema(repo):
+    yaml = pytest.importorskip("yaml")
+    jsonschema = pytest.importorskip("jsonschema")
+    _two(repo)
+    assert run(repo, "merge", "keeper", "--from", "merged-one").returncode == 0
+    text = next((repo / "work" / "done").glob("*/merged-one/STATUS.md")).read_text(encoding="utf-8")
+    front = yaml.safe_load(text.split("---", 2)[1])
+    front = _json.loads(_json.dumps(front, default=str))      # dates as the schema reads them: strings
+    schema = yaml.safe_load((ROOT / "work" / "templates" / "_schema.status.yaml").read_text(encoding="utf-8"))
+    schema.pop("required", None)                              # the fixture carries no sync block of its own
+    jsonschema.validate(front, schema)
+    assert front["outcome"] == "merged" and front["merged_into"] == "keeper"
+    bad = {**front, "merged_into": "Not A Slug"}
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(bad, schema)

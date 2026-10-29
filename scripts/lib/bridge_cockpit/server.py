@@ -17,6 +17,7 @@ scripts/web/ with a fixed set of extensions.
 from __future__ import annotations
 
 import collections
+import datetime as dt
 import hashlib
 import hmac
 import json
@@ -25,6 +26,7 @@ import queue
 import re
 import secrets
 import shutil
+import stat
 import sys
 import threading
 import time
@@ -35,24 +37,28 @@ from pathlib import Path
 from typing import Any, Callable
 
 from . import VERSION
+from . import activity as act
 from . import card as cd
 from . import details
 from .. import work_find
 from . import model as m
 from .actions import ActionError, Actions
-from .actions_base import note_go
+from .actions_base import SPEC, note_go
 from .collector import Collector
 from .daybook import DayBook
 from .returns import Launches
 from .launch import LaunchError, LaunchModel
 from .ticker import Ticker
 from .graph import Graph
-from .config import WebConfig, load_web_config
+from .config import WORK_VIEWS, WebConfig, flow_defaults, load_web_config
 from .relay import Relay, default_key_dir, load_key
 from .agents import Agents
 from .bridges import Bridges
 from .triage import Triage
 from .describe import Describer
+from .themes import Themes
+from .activity import Activity
+from .instruct import Instruct
 from .history import History
 from .quick import Quick
 from .review import Review
@@ -61,7 +67,7 @@ from .guide import Guide
 from .usage import Usage
 from .runner import Runner, RunnerRefused
 from .design import stylesheet
-from .store import WebStore, append_log, atomic_write_json
+from .store import WebStore, append_clicks, append_log, atomic_write_json
 try:                       # Jev is an optional integration: without its file it is simply off
     from . import jev
 except ImportError:
@@ -214,6 +220,9 @@ class App:
         self.bridges = Bridges(self.root)
         self.triage = Triage(self)
         self.describe = Describer(self)                # each item's brief, written and kept (describe.py)
+        self.themes = Themes(self)                     # the themes of the Work through page (themes.py)
+        self.activity = Activity(self)                 # a point's Activity tab: feed, documents, summary (activity.py)
+        self.instruct = Instruct(self)                 # the instruction line of Work through (instruct.py)
         self.history = History(self.state_dir, self.clock)
         self.collector = Collector(self)
         self.relay = Relay(self.state_dir, cfg, clock, self.tx, key=load_key(key_dir or default_key_dir()))
@@ -250,10 +259,13 @@ class App:
 
     def note(self, text: str, tone: str = "info", go: dict | None = None) -> dict | None:
         """A note for every page, with where it leads when it names a place (actions_base.note_go); returns that
-        place as sent, None for none. A target the scrub would change is dropped, never sent changed."""
+        place as sent, None for none. A target the scrub would change is dropped, never sent changed. It carries
+        its date beside the time (at_ms): the history lists the notes under their day, and a server that runs past
+        midnight keeps yesterday's."""
         if not text:
             return None
-        entry = {"at": m.clock_time(self.clock()), "text": self.scrub(text), "tone": tone}
+        now = self.clock()
+        entry = {"at": m.clock_time(now), "at_ms": int(now), "text": self.scrub(text), "tone": tone}
         target = note_go(go)
         if target and all(self.scrub(v) == v for v in target.values()):
             entry["go"] = target
@@ -413,15 +425,41 @@ class App:
                 "driver": {"caps": self.driver_caps()}, "home": self.store.home(),
                 "sessions": self.sessions_state(), "quick": self.quick.state(), "quick_live": self.quick.live_state(), "agents": self.agents.state(), "triage": self.triage.state(), "jev": jev.status(self) if jev else dict(JEV_OFF),
                 "launch": self.launch_model.state(), "ticker": self.ticker.state(), "guide": self.guide.state(),
-                "tour": self.tour_state(), "work": self.work_state(),
+                "tour": self.tour_state(), "work": self.work_state(), "themes": self.themes.state(),
+                # the model calls of the Activity tab and the instruction line: the runs left today (activity.py)
+                "flow_ai": self.activity.flow_ai(),
                 "rooms": {"layout": self.cfg.chat_layout, "root": str(self.root), "control": self.cfg.control,
                           "bridges": self.bridges.state()}}
 
     def work_state(self) -> dict:
         """The work tab as the config sets it: the view it opens on (cockpit.work_view) and whether the start
-        page's focus leads on into the files view (cockpit.focus_to_files) and which tasks are files (cockpit.files_scope)"""
+        page's focus leads on into the files view (cockpit.focus_to_files), which tasks are files (cockpit.files_scope),
+        the Work through page (cockpit.flow: on or off, its reasons to drop, its return delay) and the views its
+        switch offers (cockpit.work_views). With Work through on also who the person is (cockpit.person_name):
+        a task whose next step names them waits on nobody else. The files tab's question to its records
+        (cockpit.files_search): on or off, the words of its block list and the questions left today"""
+        flow = dict(getattr(self.cfg, "flow", None) or flow_defaults())
+        person = getattr(self.cfg, "person_name", None) if flow.get("enabled") is True else None
         return {"view": getattr(self.cfg, "work_view", "due"), "focus_to_files": bool(getattr(self.cfg, "focus_to_files", False)),
-                "files_scope": getattr(self.cfg, "files_scope", "active")}
+                "files_scope": getattr(self.cfg, "files_scope", "active"), "flow": flow,
+                "views": list(getattr(self.cfg, "work_views", None) or WORK_VIEWS),
+                "files_search": {"enabled": bool(act.block(self, "files").get("enabled")),
+                                 "block": list(act.block(self, "files").get("block") or []),
+                                 "left": self.activity.budget_left("files")},
+                **({"person": person} if person else {})}
+
+    def records_held(self, res: dict) -> dict:
+        """The records of the files tab, each with `held`: the words of the block list that keep it from a question
+        (actions_work.record_check, the check the question makes). Only with the question on and a block list, so
+        a Bridge without either reads nothing more than the records"""
+        cfg = act.block(self, "files")
+        words = list(cfg.get("block") or [])
+        if not cfg.get("enabled") or not words:
+            return res
+        from .actions_work import record_check
+        themes = self.themes.load()
+        return {**res, "records": [{**r, "held": record_check(self, words, themes, r["path"], r["slug"], r["kind"])["held"]}
+                                   for r in res.get("records") or []]}
 
     def tour_state(self) -> dict:
         """The first-run tour: whether a first visit offers it (cockpit.tour) and how it ended, if it did"""
@@ -442,20 +480,70 @@ class App:
 
     def link_tab_sessions(self) -> bool:
         """A session in a task tab (BRIDGE_TAB_SLUG names an open task) is linked to that task by itself;
-        True when a link is new. A team tab names its task too; an inbox tab names no task."""
+        True when a link is new. A team tab names its task too; an inbox tab names no task. A pair refused on
+        the page ("Not this task") stays unlinked."""
         changed = False
+        refused = self.store.session_refused()
         for x in self.sessions.state():
             slug = x.get("tab_slug") or ""
-            if x.get("sid") and self.task_open(slug):
+            if x.get("sid") and self.task_open(slug) and slug not in (refused.get(x["sid"]) or {}):
                 changed = self.store.link_session(x["sid"], slug, x.get("name") or "", x.get("cwd") or "", "tab") or changed
         return changed
 
+    def infer_on(self) -> bool:
+        """Whether a live session's task is recognised from its transcript: Work through on, and its switch"""
+        flow = getattr(self.cfg, "flow", None) or {}
+        return flow.get("enabled") is True and flow.get("infer_sessions", True) is True
+
+    def open_links(self) -> dict:
+        """The kept session links whose task is open: a link to a task that closed (done, merged) is kept, so a
+        resume or a reopen finds it, but it counts as no task and blocks no recognition (sessions.infer)"""
+        return {sid: v for sid, v in self.store.session_links().items()
+                if isinstance(v, dict) and isinstance(v.get("task"), str) and self.task_open(v["task"])}
+
+    def session_tasks(self) -> dict:
+        """The task each live session works on, {sid: {task, how, since_ms}}: a link by hand, else a tab's link
+        (every start from the cockpit), else the open task it is seen working on (sessions.infer) unless the pair
+        was refused; a link counts only while its task is open (open_links). A link's since is when it was made,
+        never before the session started"""
+        links, refused = self.open_links(), self.store.session_refused()
+        seen = self.sessions.seen_state() if self.infer_on() else {}
+        slugs = self.open_slugs() if seen else set()
+        out = {}
+        for x in self.sessions.state():
+            sid = x.get("sid") or ""
+            link, saw = links.get(sid), seen.get(sid)
+            started = x.get("started_ms") if isinstance(x.get("started_ms"), int) else 0
+            if link and isinstance(link.get("task"), str):
+                at = link.get("at_ms") if isinstance(link.get("at_ms"), (int, float)) else 0
+                out[sid] = {"task": link["task"], "how": "tab" if link.get("how") == "tab" else "hand",
+                            "since_ms": int(max(at, started)) or None}
+            elif saw and saw["task"] in slugs and saw["task"] not in (refused.get(sid) or {}):
+                out[sid] = {"task": saw["task"], "how": "seen", "since_ms": saw.get("since_ms")}
+        return out
+
+    def tab_tasks(self) -> dict:
+        """{tab ref: task} of the live sessions that work on one (session_tasks), the newest session of a tab
+        deciding, as the page reads it (views/rooms.js taskOfTab); the control tab is left to the caller"""
+        tasks = self.session_tasks()
+        out: dict[str, tuple] = {}
+        for x in self.sessions.state():
+            ref = (x.get("tab") or {}).get("ref")
+            task = (tasks.get(x.get("sid") or "") or {}).get("task")
+            started = x.get("started_ms") if isinstance(x.get("started_ms"), (int, float)) else 0
+            if isinstance(ref, str) and ref and task and (ref not in out or started > out[ref][0]):
+                out[ref] = (started, task)
+        return {ref: task for ref, (_, task) in out.items()}
+
     def sessions_state(self) -> dict:
-        """The live sessions, each with the task it is linked to, and every kept link: the page shows a
-        task's sessions, the live ones with their tab, the ended ones to go on in"""
+        """The live sessions, each with the task it works on (session_tasks: task, task_how, task_since_ms), and
+        every kept link: the page shows a task's sessions, the live ones with their tab, the ended ones to go on in"""
         links = self.store.session_links()
+        tasks = self.session_tasks()
         # copies: the scan's own list is what the next scan compares with
-        live = [{**x, "task": (links.get(x.get("sid") or "") or {}).get("task")} for x in self.sessions.state()]
+        live = [{**x, "task": (tasks.get(x.get("sid") or "") or {}).get("task"),
+                 "task_how": (tasks.get(x.get("sid") or "") or {}).get("how"),
+                 "task_since_ms": (tasks.get(x.get("sid") or "") or {}).get("since_ms")} for x in self.sessions.state()]
         sids = {x.get("sid") for x in live}
         kept = [{"sid": sid, **v, "live": sid in sids} for sid, v in links.items() if self.task_open(v.get("task", ""))]
         kept.sort(key=lambda v: -v.get("at_ms", 0))
@@ -485,8 +573,13 @@ class App:
             relay = frozenset(h["session"] for h in self.relay.heartbeats(self.clock()))
             changed = self.sessions.refresh(self.tabs.tab_list(), self.clock(), self.tabs.control_ref(), relay)
             linked = self.link_tab_sessions()
-            ran = self.sessions.refresh_runs(self.clock(), self.open_slugs(), self.store.session_links(), self.root)
-            if linked or changed or ran:
+            slugs, links = self.open_slugs(), self.store.session_links()
+            ran = self.sessions.refresh_runs(self.clock(), slugs, links, self.root)
+            # the task a live session is seen working on, read from its transcript only while Work through is on; a
+            # link to a task that closed no longer keeps a session from being read
+            seen = (self.sessions.infer(slugs, self.store.session_refused(), self.open_links(), self.root) if self.infer_on()
+                    else self.sessions.clear_seen())
+            if linked or changed or ran or seen:
                 self.broadcast("sessions", self.sessions_state())
         except Exception as exc:  # noqa: BLE001 - the sessions page is an extra, never a reason for the tabs to stop
             self.log_error(f"sessions: {exc!r}")
@@ -527,6 +620,55 @@ class App:
         """What every card is built with besides its item (card.py): the triage items and the brief proposals,
         by key. A failure here never stops the page: the cards are built without them."""
         return {"triage": self.card_triage(), "describe": self.describe_items()}
+
+    def workers_view(self) -> dict | None:
+        """The worker view the Resources section keeps (scripts/bridge-resources.py workers), None without one"""
+        try:
+            data = json.loads((self.root / ".bridge" / "resources" / "workers-view.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        return data if isinstance(data, dict) and isinstance(data.get("runs"), list) else None
+
+    def ack_closed_findings(self) -> None:
+        """A job's inbox item closed (its own, worker:<host>:<id>, or a question handed over about it) marks the
+        job's finding seen, with the close note: the person or the tab that closed it looked. Read from the
+        inbox folder itself, again only when an item changed: its folder or its events/ folder, where inbox.py
+        writes a close (a file added there leaves the item folder's own time as it was); a failure here never
+        stops a pass"""
+        folder = self.root / "work" / "inbox"
+
+        def events_ns(path: str) -> int:
+            try:
+                return os.stat(os.path.join(path, "events")).st_mtime_ns
+            except OSError:
+                return 0
+        try:
+            sign = tuple(sorted((e.name, e.stat().st_mtime_ns, events_ns(e.path)) for e in os.scandir(folder) if e.is_dir()))
+        except OSError:
+            return
+        view = self.workers_view()
+        if sign == getattr(self, "_acks_inbox_sign", None) or view is None:
+            return
+        try:
+            from .describe import _module
+            inbox = _module("_cockpit_inbox", "inbox.py").Inbox(folder, actor="web")
+            items = []
+            for it in inbox.items():
+                closes = [e for e in it.events if e.verb in ("close", "executed")]
+                if it.state == "done" and closes:
+                    items.append({"id": it.id, "key": it.key, "summary": it.summary, "detail": it.detail,
+                                  "closed_at": closes[-1].at, "note": closes[-1].data.get("text") or ""})
+            now = dt.datetime.fromtimestamp(self.clock() / 1000, dt.timezone.utc)
+            found = m.closed_acks(items, view, self.store.acks_read(), now)
+        except Exception as exc:  # noqa: BLE001 - an unreadable inbox leaves the findings as they are
+            self.log_error(f"acks from the inbox: {exc!r}")
+            return
+        self._acks_inbox_sign = sign
+        for key, fp, note, item_id in found:
+            self.store.ack(key, fp, note, item_id)
+        if found:
+            self.collector.rebuild()
+            self.broadcast("acks", {"keys": sorted({k for k, *_ in found})})
 
     def card_triage(self) -> dict:
         try:
@@ -842,7 +984,7 @@ class Handler(BaseHTTPRequestHandler):
                                  "config": {"port": app.port, "relay": cfg.relay, "tabs_seconds": cfg.tabs_seconds,
                                             "full_minutes": cfg.full_minutes, "voice": cfg.voice, "target": cfg.target,
                                             "control": cfg.control, "profile": cfg.profile,
-                                            "areas": list(cfg.areas)}})
+                                            "areas": list(cfg.areas), "clicks": bool(getattr(cfg, "usage_clicks", True))}})
         elif path == "/api/state":
             self.send_json(200, app.state_payload())
         elif path == "/api/events":
@@ -860,6 +1002,10 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/history":
             # what the dashboard closed, dropped, settled or hid, newest first, each with its undo
             self.send_json(200, {"ok": True, "entries": app.history.state()})
+        elif path == "/api/chats/archive":
+            # the questions archived in the last days, for "all" under the questions (round 6d), read only
+            days = int(one("days")) if one("days").isdigit() else 7
+            self.send_json(200, {"ok": True, "convs": app.quick.archived(days)})
         elif path == "/api/agents":
             # the A2A peers with what their cards say (fetched in the background) and the conversations;
             # fresh=1 is the page's "check again": every card is fetched, also one inside its CARD_TTL
@@ -868,13 +1014,12 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/workers":
             # the full worker view the Resources section keeps (scripts/bridge-resources.py workers), read only
             # a Bridge without one (no workers declared) is no error: view null, and the page shows no Worker tab
-            path_ = app.root / ".bridge" / "resources" / "workers-view.json"
-            try:
-                data = json.loads(path_.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                data = None
-            ok = isinstance(data, dict) and isinstance(data.get("runs"), list)
-            self.send_json(200, {"ok": True, "view": data if ok else None})
+            # a job filed by Analyse in a tab names its item, so its row shows that tab (actions_pages.py), and a job
+            # whose finding was marked seen carries `acked` (model.workers_with_acks)
+            data = app.workers_view()
+            if data:
+                app.actions.worker_items(data["runs"])
+            self.send_json(200, {"ok": True, "view": m.workers_with_acks(data, app.store.acks()) if data else None})
         elif path == "/api/ticker":
             # the news ticker as the page gets it in the state payload and the `ticker` event (ticker.py)
             self.send_json(200, {"ok": True, "ticker": app.ticker.state()})
@@ -959,6 +1104,11 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(200, app.scrub_tree(data))
             else:
                 self.send_error_json("unreadable", app.scrub((run.err or run.out or "the search did not answer").strip())[-200:])
+        elif path == "/api/records":
+            # the start of the files tab: every task, stream and closed task as a record (lib/work_find.py records),
+            # read in place, read only; with the question on and a block list, each with the words that hold it
+            # back (actions_work.record_check), so the page counts what a question would send as the server does
+            self.send_json(200, app.scrub_tree(app.records_held(work_find.records(app.root))))
         elif path == "/api/inbox":
             item_id = one("id")
             if not details.INBOX_ID_RE.match(item_id):
@@ -993,6 +1143,15 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/graph":
             # the knowledge graph of the config entries, tasks and the files they name (graph.py), read only
             self.send_json(200, {"ok": True, **app.scrub_tree(app.graph.view())})
+        elif path == "/api/flow/activity":
+            # the Activity tab of one point (activity.py), read only, kept 20 s unless fresh=1
+            try:
+                self.send_json(200, app.activity.view(one("key"), fresh=one("fresh") == "1"))
+            except ActionError as error:
+                self.send_error_json(error.code, error.message, error.field, status=error.status)
+        elif path == "/api/flow/doc":
+            # one document of a task's deliverables/, its bytes with a policy for its type (activity.doc_headers)
+            self.get_flow_doc(one("slug"), one("path"))
         elif path == "/api/graph/node":
             found = app.graph.node(one("id"))
             if found is None:
@@ -1001,6 +1160,48 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(200, {"ok": True, **app.scrub_tree(found)})
         else:
             self.send_error_json("not_found", "unknown endpoint")
+
+    def get_flow_doc(self, slug: str, rel: str) -> None:
+        """A document opened from the Activity tab in a tab of its own: streamed, never through a link, and only a
+        regular file as it is when opened (a file swapped after the check is refused, a pipe never waited on)"""
+        app = self.app
+        if not act.flow_on(app):
+            self.send_error_json("flow_off", act.TEXT[act._lang(app)]["off"], status=409)
+            return
+        try:
+            target = act.doc_path(app.root, slug, rel)
+        except ActionError as error:
+            self.send_error_json(error.code, error.message, error.field, status=error.status)
+            return
+        fh = None
+        if target is not None:
+            try:
+                fh = os.fdopen(os.open(target, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), "rb")
+            except OSError:
+                fh = None
+        if fh is None:
+            self.send_error_json("not_found", "no such document")
+            return
+        with fh:
+            st = os.fstat(fh.fileno())
+            if not stat.S_ISREG(st.st_mode):
+                self.send_error_json("not_found", "no such document")
+                return
+            headers = act.doc_headers(target.name)
+            self.send_response(200)
+            self.send_header("Content-Type", headers.pop("Content-Type"))
+            self.send_header("Content-Length", str(st.st_size))
+            self.security_headers()
+            for key, value in headers.items():
+                self.send_header(key, value)
+            self.end_headers()
+            left = st.st_size
+            while left > 0:
+                chunk = fh.read(min(64 * 1024, left))
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+                left -= len(chunk)
 
     def get_static(self, path: str) -> None:
         if path == "/":
@@ -1114,8 +1315,20 @@ class Handler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length") or "0")
         except ValueError:
             length = -1
-        if length > MAX_BODY:
-            self.send_error_json("payload_too_large", "the body is larger than 64 KB")
+        cap = MAX_BODY
+        if path == "/api/flow/attach":
+            # the one path with a larger body (a document as base64), answered before any of it is read when off
+            words = act.TEXT[act._lang(self.app)]
+            if not act.flow_on(self.app):
+                self.send_error_json("flow_off", words["off"], status=409)
+                return
+            attach = act.block(self.app, "attach")
+            if not attach.get("enabled"):
+                self.send_error_json("attach_off", words["attach_off"], status=409)
+                return
+            cap = act.attach_body_cap(attach["max_mb"])
+        if length > cap:
+            self.send_error_json("payload_too_large", f"the body is larger than {cap // 1024} KB")
             self.close_connection = True
             return
         if length < 0:
@@ -1136,10 +1349,11 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(200, app.actions.execute(body.get("verb"), body.get("args")))
             elif path == "/api/ask":
                 for name in body:
-                    if name not in ("kind", "args", "via", "model", "conv", "place"):
+                    if name not in ("kind", "args", "via", "model", "conv", "place", "origin", "keys"):
                         raise ActionError(400, "invalid_argument", "unknown field", str(name)[:40])
                 status, payload = app.actions.ask(body.get("kind"), body.get("args"), via=body.get("via", "control"),
-                                                  model=body.get("model"), conv=body.get("conv"), place=body.get("place"))
+                                                  model=body.get("model"), conv=body.get("conv"), place=body.get("place"),
+                                                  origin=body.get("origin"), keys=body.get("keys"))
                 self.send_json(status, payload)
             elif path == "/api/reload":
                 for name in body:
@@ -1180,6 +1394,24 @@ class Handler(BaseHTTPRequestHandler):
                     raise ActionError(400, "invalid_argument", "view must be a view id", "view")
                 app.actions.audit_line("page_view", page, view=view or "-")
                 self.send_json(200, {"ok": True})
+            elif path == "/api/clicks":
+                # the click origin log: which control from which place, a batch of names and counts into usage.jsonl
+                # beside audit.log, never a title or a text (store.clean_clicks); cockpit.usage.clicks: false, nothing
+                for name in body:
+                    if name != "events":
+                        raise ActionError(400, "invalid_argument", "unknown field", str(name)[:40])
+                if not getattr(app.cfg, "usage_clicks", True):
+                    self.send_json(200, {"ok": True, "kept": 0, "off": True})
+                    return
+                try:
+                    pages = {p.get("id") for p in (app.collector.model or {}).get("pages") or [] if isinstance(p, dict)}
+                    kept = append_clicks(app.state_dir / "usage.jsonl", body.get("events"), app.clock(), verbs=SPEC, pages=pages)
+                except ValueError as error:
+                    raise ActionError(400, "invalid_argument", str(error), "events") from None
+                self.send_json(200, {"ok": True, "kept": kept})
+            elif path == "/api/flow/attach":
+                # a document attached to a point's task (verb flow_attach, under the write lock)
+                self.send_json(200, app.actions.execute("flow_attach", body))
             elif path == "/api/triage/run":
                 app.triage.handle_post(self, body)
             elif path.startswith("/api/jev/") and jev is None:

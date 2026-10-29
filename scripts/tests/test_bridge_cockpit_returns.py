@@ -225,3 +225,163 @@ def test_ended_at_is_public_and_none_for_an_unreadable_time(tmp_path):
     assert returns.ended_at(tmp_path, ITEM) is None
     assert returns.inbox_settled(tmp_path, ITEM) is True
     assert returns.ended_at(tmp_path, "../escape") is None
+
+
+# ---------------------------------------------------------------- a quiet tab, and a task's result line
+
+def asking(text="Delete the old page or redirect it?", **extra):
+    return {"text": text, "options": [], "hash": "h1", "yes_no": text.endswith("?"), "draft": False, **extra}
+
+
+def test_a_still_tab_without_a_question_is_idle_and_with_one_asks(tmp_path):
+    """A tab that stopped working asks only when its screen holds a question (asks.py): a tab that went still
+    with last words that ask nothing is idle, not asking (review F1)."""
+    clock = Clock(T0)
+    b = book(tmp_path, clock)
+    stage = lambda tabs: {x["key"]: x for x in returns.build(b.all(), tabs, {}, tmp_path, T0 + 5 * MIN)}["task:alpha"]["stage"]
+    assert stage([tab("waiting", slug="alpha", ask=asking("All tests pass, the branch is pushed."))]) == "idle"
+    # nothing read off its screen (no screens, the questions off, not read yet): it may ask, as model.is_idle says
+    assert stage([tab("waiting", slug="alpha", ask=None)]) == "asks"
+    assert stage([tab("waiting", slug="alpha")]) == "asks"
+    # its agent ended and left the shell: nothing can ask there
+    assert stage([tab("shell", slug="alpha", ask=None)]) == "idle"
+    assert stage([tab("waiting", slug="alpha", ask=asking())]) == "asks"       # a question mark
+    assert stage([tab("waiting", slug="alpha", ask=asking("Pick one", options=[{"n": 1, "label": "Delete"}]))]) == "asks"
+    assert stage([tab("needs-you", slug="alpha", ask=None)]) == "asks"         # a dialog the terminal reports
+    assert stage([tab("working", slug="alpha", ask=None)]) == "working"
+
+
+def task_note(root, slug, day, text, kind="tasks"):
+    d = root / "work" / kind / slug
+    d.mkdir(parents=True, exist_ok=True)
+    p = d / "STATUS.md"
+    body = p.read_text(encoding="utf-8") if p.is_file() else f"---\nstatus: doing\n---\n# {slug}\n\n## Notes\n\n"
+    p.write_text(body + f"- {day}: {text}\n", encoding="utf-8")
+
+
+def test_a_result_note_on_the_task_since_the_start_is_its_result(tmp_path):
+    clock = Clock(T0)
+    b = book(tmp_path, clock)
+    start = dt.datetime.fromtimestamp(T0 / 1000).date()
+    before = (start - dt.timedelta(days=1)).isoformat()
+    tabs = [tab("waiting", slug="alpha", ask=asking("All done."))]
+    task_note(tmp_path, "alpha", before, "Result: an old answer from an earlier run")
+    task_note(tmp_path, "alpha", start.isoformat(), returns.start_line("go", "en"))     # the cockpit's own line
+    task_note(tmp_path, "alpha", start.isoformat(), "Results look promising, more later")  # not the head
+    r = {x["key"]: x for x in returns.build(b.all(), tabs, {}, tmp_path, T0 + 5 * MIN)}["task:alpha"]
+    assert r["stage"] == "idle" and r["result"] is None
+    task_note(tmp_path, "alpha", start.isoformat(), "Ergebnis: Treiber installiert, Neustart offen")
+    r = {x["key"]: x for x in returns.build(b.all(), tabs, {}, tmp_path, T0 + 5 * MIN)}["task:alpha"]
+    assert r["stage"] == "result"
+    assert r["result"] == {"kind": "note", "text": "Ergebnis: Treiber installiert, Neustart offen", "key": None, "at_ms": None}
+    # the agent wrote it itself: nothing more goes to the task's notes
+    assert returns.log_line(r, "en") is None
+    # the newest result line wins, in either language
+    task_note(tmp_path, "alpha", start.isoformat(), "Result: driver installed and rebooted")
+    r = {x["key"]: x for x in returns.build(b.all(), tabs, {}, tmp_path, T0 + 5 * MIN)}["task:alpha"]
+    assert r["result"]["text"] == "Result: driver installed and rebooted"
+
+
+def test_done_still_comes_before_a_result_line(tmp_path):
+    clock = Clock(T0)
+    b = book(tmp_path, clock)
+    day = dt.datetime.fromtimestamp(T0 / 1000).date().isoformat()
+    task_note(tmp_path, "alpha", day, "Result: shipped", kind="done/2026-10")
+    r = {x["key"]: x for x in returns.build(b.all(), [], {}, tmp_path, T0 + 5 * MIN)}["task:alpha"]
+    assert r["stage"] == "done" and r["result"]["text"] == "Result: shipped"
+
+
+def test_a_result_line_is_read_from_a_stream_too_and_never_outside_work(tmp_path):
+    clock = Clock(T0)
+    b = returns.Launches(tmp_path / "state", clock)
+    b.record([{"key": "task:beta", "item": "beta", "title": "Beta", "mode": "go"},
+              {"key": "task:x", "item": "../x", "title": "X", "mode": "go"}])
+    day = dt.datetime.fromtimestamp(T0 / 1000).date().isoformat()
+    task_note(tmp_path, "beta", day, "Result: the stream has its answer", kind="streams")
+    out = {x["key"]: x for x in returns.build(b.all(), [], {}, tmp_path, T0 + 5 * MIN)}
+    assert out["task:beta"]["stage"] == "result"
+    assert out["task:x"]["result"] is None
+    assert returns.task_result(tmp_path, "../x", T0) is None
+
+
+def test_a_result_line_of_an_earlier_start_the_same_day_is_not_this_starts(tmp_path):
+    """A task note carries a day only: a result line from a run earlier that day stands before the cockpit's
+    own start line of this start and is not its answer."""
+    clock = Clock(T0)
+    b = book(tmp_path, clock)
+    day = dt.datetime.fromtimestamp(T0 / 1000).date().isoformat()
+    task_note(tmp_path, "alpha", day, returns.start_line("go", "en"))
+    task_note(tmp_path, "alpha", day, "Result: the first run's answer")
+    task_note(tmp_path, "alpha", day, returns.start_line("report", "de"))      # this start, in either language
+    tabs = [tab("waiting", slug="alpha", ask=asking("Done."))]
+    r = {x["key"]: x for x in returns.build(b.all(), tabs, {}, tmp_path, T0 + 5 * MIN)}["task:alpha"]
+    assert r["stage"] == "idle" and r["result"] is None
+    task_note(tmp_path, "alpha", day, "Result: this run's answer")
+    r = {x["key"]: x for x in returns.build(b.all(), tabs, {}, tmp_path, T0 + 5 * MIN)}["task:alpha"]
+    assert r["stage"] == "result" and r["result"]["text"] == "Result: this run's answer"
+
+
+def test_a_start_keeps_who_decided_it_and_only_as_a_word(tmp_path):
+    """by (suggestion, batch, instruction) goes along with the start for the Activity tab; nothing acts on it"""
+    clock = Clock(T0)
+    b = returns.Launches(tmp_path / "state", clock)
+    b.record([{"key": "task:alpha", "item": "alpha", "title": "Alpha", "mode": "go", "by": "instruction"},
+              {"key": "task:beta", "item": "beta", "title": "Beta", "mode": "go", "by": 7},
+              {"key": "task:gamma", "item": "gamma", "title": "Gamma", "mode": "report"}])
+    got = {x["key"]: x for x in returns.Launches(tmp_path / "state", clock).all()}
+    assert got["task:alpha"]["by"] == "instruction"
+    assert "by" not in got["task:beta"] and "by" not in got["task:gamma"]
+
+
+def test_a_note_that_asks_the_person_is_a_question_not_a_result(tmp_path):
+    """A note that begins with the question head (the prompt asks for 'Question:', German 'Frage:') stands as a
+    question of the start, also after its tab is gone; any other note is its result, and a close settles both"""
+    clock = Clock(T0)
+    b = book(tmp_path, clock)
+    for i, (head, stage) in enumerate((("Question: close it, nothing left to do?", "asks"),
+                                       ("Frage: close it?", "asks"), ("Result: the vendor has it", "result"))):
+        event(tmp_path, ITEM, T0 + (2 + i) * MIN, "note", head)
+        out = {x["key"]: x for x in returns.build(b.all(), [], {}, tmp_path, T0 + 10 * MIN)}
+        assert out[f"inbox:{ITEM}"]["stage"] == stage, head
+        assert out[f"inbox:{ITEM}"]["result"].get("asks", False) is (stage == "asks")
+    # its tab at work again: it took up the answer, the question is not the stage any more
+    event(tmp_path, ITEM, T0 + 6 * MIN, "note", "Question: and the old page?")
+    out = {x["key"]: x for x in returns.build(b.all(), [tab("working", item=ITEM)], {}, tmp_path, T0 + 10 * MIN)}
+    assert out[f"inbox:{ITEM}"]["stage"] == "working"
+    event(tmp_path, ITEM, T0 + 7 * MIN, "close", "closed on your word")
+    out = {x["key"]: x for x in returns.build(b.all(), [], {}, tmp_path, T0 + 10 * MIN)}
+    assert out[f"inbox:{ITEM}"]["stage"] == "done" and "asks" not in out[f"inbox:{ITEM}"]["result"]
+
+
+def test_a_question_answered_in_the_terminal_does_not_ask_again_once_its_tab_is_still(tmp_path):
+    """The question was answered in the tab: the tab worked and went still again with nothing asked on its screen.
+    Its newest note is still the old question, but the tab has been still since after it, so it no longer asks"""
+    clock = Clock(T0)
+    b = book(tmp_path, clock)
+    event(tmp_path, ITEM, T0 + 2 * MIN, "note", "Question: close it, nothing left to do?")
+    stage = lambda t: {x["key"]: x for x in returns.build(b.all(), [t], {}, tmp_path, T0 + 20 * MIN)}[f"inbox:{ITEM}"]
+    # still since before the question, or its screen asks, or nothing read off it: it asks
+    assert stage(tab("waiting", item=ITEM, since_ms=T0 + MIN, ask=asking("All done."))) ["stage"] == "asks"
+    assert stage(tab("waiting", item=ITEM, since_ms=T0 + 10 * MIN, ask=asking()))["stage"] == "asks"
+    assert stage(tab("waiting", item=ITEM, since_ms=T0 + 10 * MIN, ask=None))["stage"] == "asks"
+    assert stage(tab("needs-you", item=ITEM, since_ms=T0 + 10 * MIN, ask=asking("All done.")))["stage"] == "asks"
+    # still since well after the question, its screen asks nothing: answered and through
+    got = stage(tab("waiting", item=ITEM, since_ms=T0 + 10 * MIN, ask=asking("All done, the old page redirects now.")))
+    assert got["stage"] == "idle" and not got["result"].get("asks")
+
+
+def test_the_persons_start_note_is_no_answer(tmp_path):
+    clock = Clock(T0)
+    b = book(tmp_path, clock)
+    event(tmp_path, ITEM, T0 + MIN, "note", "Start note: I want to analyse it more closely")
+    out = {x["key"]: x for x in returns.build(b.all(), [], {}, tmp_path, T0 + 2 * MIN)}
+    assert out[f"inbox:{ITEM}"]["stage"] == "started" and out[f"inbox:{ITEM}"]["result"] is None
+
+
+def test_a_start_keeps_the_chat_it_came_from(tmp_path):
+    clock = Clock(T0)
+    b = returns.Launches(tmp_path / "state", clock)
+    b.record([{"key": f"inbox:{ITEM}", "item": ITEM, "title": "T", "mode": "go", "conv": "q0123456789"},
+              {"key": "task:alpha", "item": "alpha", "title": "A", "mode": "go", "conv": "not a chat"}])
+    out = {x["key"]: x for x in returns.build(returns.Launches(tmp_path / "state", clock).all(), [], {}, tmp_path, T0)}
+    assert out[f"inbox:{ITEM}"]["conv"] == "q0123456789" and out["task:alpha"]["conv"] is None

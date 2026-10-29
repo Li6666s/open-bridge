@@ -1,4 +1,4 @@
-# themes/professional-zh-CN.yaml
+# themes/professional-zh-cn.yaml
 # Simplified Chinese locale: professional vocabulary.
 # CORE file — lives on the default/core branch.
 #
@@ -41,8 +41,8 @@ vocabulary:
   onboarding: "上手设置"
 
   repos: "项目列表"
-  remote: "远程仓库"
-  remotes: "远程仓库"
+  remote: "远程主机"
+  remotes: "远程主机"
   channel: "消息频道"
   channels: "消息频道组"
   schedule: "计划任务"

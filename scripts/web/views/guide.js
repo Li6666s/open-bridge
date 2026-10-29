@@ -40,12 +40,12 @@ function About({ entry }) {
 }
 
 /** The ways into the session beside a reading: the terminal jumps to the tab, the tab's live screen opens
- *  here, and what Haiku read unfolds below */
-function Ways({ tab, s, c, entry, open, setOpen }) {
+ *  here, and what Haiku read unfolds below. `bare`: the host shows its own ways to the tab, only what was read */
+function Ways({ tab, s, c, entry, open, setOpen, bare = false }) {
   const g = T().guide
   return html`<span class="guide-ways">
-    ${canTab(s, 'focus') ? html`<${Btn} size="xs" variant="ghost" icon="external" onClick=${() => c.act('tab_jump', { tab_ref: tab.ref })}>${g.toTab}<//>` : null}
-    <${Btn} size="xs" variant="ghost" icon="tabs" onClick=${() => c.openTabView(tab.ref)}>${g.watch}<//>
+    ${!bare && canTab(s, 'focus') ? html`<${Btn} size="xs" variant="ghost" icon="external" onClick=${() => c.act('tab_jump', { tab_ref: tab.ref })}>${g.toTab}<//>` : null}
+    ${bare ? null : html`<${Btn} size="xs" variant="ghost" icon="tabs" onClick=${() => c.openTabView(tab.ref)}>${g.watch}<//>`}
     ${entry?.read ? html`<${Btn} size="xs" variant="ghost" pressed=${open} onClick=${() => setOpen(!open)}>${open ? g.hideRead : g.showRead}<//>` : null}
   </span>`
 }
@@ -66,8 +66,10 @@ function ReadBlock({ read }) {
 }
 
 /** The reading of one waiting tab as a tree; nothing while the guide is off or the tab does not wait.
- *  `compact` (a narrow column) leaves out the words a step would send */
-export function GuideTree({ tab, s, c, compact = false }) {
+ *  `compact` (a narrow column) leaves out the words a step would send; `bare` (a card of the Work through
+ *  page, whose own To tab remembers the jump) leaves To tab and Watch to its host; `about` false (that card too, whose
+ *  title says it) leaves out what the session is about */
+export function GuideTree({ tab, s, c, compact = false, bare = false, about = true }) {
   const t = T()
   const g = t.guide
   const { status, entry } = guideOf(s, tab)
@@ -87,19 +89,20 @@ export function GuideTree({ tab, s, c, compact = false }) {
   const busy = !!s.ui?.busy?.[tab.ref]
   const read = html`<${Btn} size="xs" variant="ghost" icon="reload" busy=${busy} onClick=${() => c.guideRead(tab.ref)}>
     ${status === 'none' ? g.read : g.again}<//>`
-  const ways = html`<${Ways} tab=${tab} s=${s} c=${c} entry=${entry} open=${open} setOpen=${setOpen} />`
+  const ways = html`<${Ways} tab=${tab} s=${s} c=${c} entry=${entry} open=${open} setOpen=${setOpen} bare=${bare} />`
   const readOut = open ? html`<${ReadBlock} read=${entry?.read} />` : null
+  const head = about ? html`<${About} entry=${entry} />` : null
   if (status === 'none') {
     return html`<div class="guide is-empty" role="group" aria-label=${g.title}>
       <p class="muted small guide-empty"><${Icon} name="spark" size=${12} /> ${g.noneYet}</p>${read}${ways}</div>`
   }
   if (status === 'running') {
     return html`<div class="guide is-running" role="group" aria-label=${g.title} aria-busy="true">
-      <${About} entry=${entry} /><${Thinking} label=${g.reading} />${ways}${readOut}</div>`
+      ${head}<${Thinking} label=${g.reading} />${ways}${readOut}</div>`
   }
   if (status === 'error') {
     return html`<div class="guide is-error" role="group" aria-label=${g.title}>
-      <${About} entry=${entry} />
+      ${head}
       <p class="small"><${StateLine} token="danger" word=${g.failed(entry.error)} /></p>${read}${ways}${readOut}</div>`
   }
   const choices = status === 'fresh' ? guideChoices(tab, entry, s) : []
@@ -134,7 +137,7 @@ export function GuideTree({ tab, s, c, compact = false }) {
   const ago = duration((s.now || Date.now()) - (entry.at_ms ?? s.now ?? Date.now()))
   return html`<div class=${`guide${status === 'stale' ? ' is-stale' : ''}${compact ? ' is-compact' : ''}`} role="group" aria-label=${g.title}>
     <div class="guide-root">
-      <${About} entry=${entry} />
+      ${head}
       <span class="label-caps guide-cap"><${Icon} name="spark" size=${12} /> ${g.where}</span>
       <p class="guide-where">${entry.where}</p>
       ${entry.waits_for ? html`<p class="guide-waits small"><span class="muted">${g.waitsFor}</span> ${entry.waits_for}</p>` : null}

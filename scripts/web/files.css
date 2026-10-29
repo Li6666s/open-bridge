@@ -1,28 +1,76 @@
 /* SPDX-License-Identifier: MIT */
 /*
- * The cockpit's files view (views/dossier.js). Loaded right after style.css,
+ * The cockpit's files tab (views/dossier.js). Loaded right after style.css,
  * so the cascade stands as it did when these rules were part of it. Colors only through the
  * DESIGN.md tokens (var(--token)), the same rules as style.css.
  */
 
-/* the files view of the work tab (views/dossier.js): one framed surface per file, a sibling of the start page's
-   cards. The column stays the scroller; the page inside it is centred at a reading width, so a hidden sidebar
-   leaves the file in the middle rather than on the left */
+/* the files tab (views/dossier.js): one framed surface per file, a sibling of the start page's
+   cards, in the middle of Work through's grid (round 6d, flow.css .flow-grid). The column stays the scroller */
 .dz { min-width: 0; }
-.dz-page { display: flex; flex-direction: column; gap: var(--space-md); width: 100%; max-width: 880px; margin: 0 auto; min-width: 0; padding-bottom: var(--space-2xl); }
 .dz-head { flex-wrap: wrap; justify-content: space-between; gap: 10px 16px; padding: 2px 0; }
 .dz-head .work-switch { margin: 0; }
-/* the search: small and quiet in the head of the view */
-.dz-find {
-  display: flex; align-items: center; gap: 6px; flex: 0 1 320px; min-width: 0; height: 34px; padding: 0 4px 0 12px;
+/* the left column of the files tab (FilesList): the search first, large; the chips; the records on hairlines */
+.dz-head .dz-home { margin-right: auto; }
+.fs-top { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.fs-top .fs-find { flex: 1 1 auto; }
+.fs-find { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.fs-find-box {
+  display: flex; align-items: center; gap: 10px; flex: 1 1 auto; min-width: 0; height: 48px; padding: 0 16px;
   border: 1px solid var(--border); border-radius: var(--radius-full); background: var(--surface-raised); color: var(--on-surface-muted);
   transition: border-color var(--motion);
 }
-.dz-find:focus-within { border-color: var(--accent-line); }
-.dz-find .icon { flex: none; }
-.dz-find-input { flex: 1 1 auto; min-width: 0; height: 100%; padding: 0; border: 0; outline: 0; background: none; color: var(--ink); font: inherit; font-size: var(--text-sm); }
-.dz-find-input::placeholder { color: var(--on-surface-muted); }
-.dz-find .btn { border-radius: var(--radius-full); }
+.fs-find-box:focus-within { border-color: var(--accent-line); }
+.fs-find-box .icon { flex: none; }
+.fs-find-input { flex: 1 1 auto; min-width: 0; height: 100%; padding: 0; border: 0; outline: 0; background: none; color: var(--ink); font: inherit; font-size: var(--text-body); }
+.fs-find-input::placeholder { color: var(--on-surface-muted); }
+.fs-ask { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.fs-askq { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.fs-askq .input { flex: 1 1 auto; min-width: 0; }
+.fs-ask-note { margin: 0; }
+.fs-chips { display: flex; flex-wrap: wrap; gap: 8px 20px; }
+.fs-chip-group { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.fs-chip-label { margin-right: 2px; }
+.fs-chip[aria-pressed="true"] { border-color: var(--accent-line); color: var(--ink); }
+.fs-answer { display: flex; flex-direction: column; gap: 8px; padding: 14px 20px 16px; border: 1px solid var(--accent-line); border-radius: var(--radius-xl); background: var(--surface); }
+.fs-answer-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.fs-answer-text { margin: 0; color: var(--ink); overflow-wrap: anywhere; }
+.fs-answer-files { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
+.fs-records { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.fs-list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; }
+.fs-item { padding: 10px 0; border-top: 1px solid var(--border); min-width: 0; }
+.fs-item .fs-open { font-weight: 600; text-align: left; overflow-wrap: anywhere; }
+.fs-meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; margin-top: 2px; }
+.fs-area { display: inline-flex; align-items: center; gap: 6px; color: var(--on-surface); }
+.fs-hit { margin: 4px 0 0; overflow-wrap: anywhere; }
+.fs-walk { margin: 0; flex: none; }
+/* round 6d: the tab laid out as Work through (flow.css .flow-grid, its breakpoints too): the search, its chips and the
+   records in the left column, which scrolls in itself and keeps where it stood; the record open marked by a bar on its
+   left; the record in the middle at the width it gets, Work through's right column beside it */
+.dz-side .fs-top { flex-direction: column; align-items: stretch; }
+/* the question to the AI in the left column: its field over its button, as the search over the walk */
+.dz-side .fs-askq { flex-direction: column; align-items: stretch; }
+.dz-side .fs-find-box { height: 40px; padding: 0 12px; }
+.dz-side .fs-chips { gap: 8px 12px; }
+.fs-item.is-on { padding-left: 10px; box-shadow: inset 3px 0 0 var(--accent-line); background: var(--surface-raised); }
+.dz-main .dz-head { padding: 0; }
+.dz-pick { margin: 0; padding: var(--space-xl) 0; text-align: center; }
+/* nothing open (DossierView is-home): the search, its chips and the records take the whole width, the search beside
+   its walk, the records in columns; the first click on one opens the three columns */
+.flow-grid.dz-grid.is-home { grid-template-columns: minmax(0, 1fr); }
+.dz-grid.is-home > .dz-side { position: static; max-height: none; overflow: visible; gap: 14px; }
+.dz-grid.is-home .fs-top { flex-direction: row; align-items: center; }
+.dz-grid.is-home .fs-askq { flex-direction: row; align-items: center; }
+.dz-grid.is-home .fs-find-box { height: 48px; padding: 0 16px; }
+.dz-grid.is-home .fs-chips { gap: 8px 20px; }
+.dz-grid.is-home .fs-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); column-gap: var(--space-lg); }
+/* where the columns stack (flow.css, 960 px) an open record and its buttons come before the list, so a click in the
+   list shows its record at once and never below every entry */
+@media (max-width: 960px) {
+  .dz-grid.is-open > .dz-main { order: -1; }
+  .dz-grid.is-open > .flow-aside { order: -1; }
+}
+
 /* what the search found: a quiet list on hairlines, above the file */
 .dz-results { display: flex; flex-direction: column; gap: 8px; min-width: 0; padding: 14px 20px 16px; border: 1px solid var(--border); border-radius: var(--radius-xl); background: var(--surface); }
 .dz-results-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
@@ -44,7 +92,7 @@
   animation: fx-in 0.3s ease-out 1;
 }
 .dz-cover { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
-.dz-eyebrow {
+.dz-eyebrow, .fs-eyebrow {
   margin: 0; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 16px;
   color: var(--secondary); font-size: var(--text-label); font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
 }
@@ -71,23 +119,12 @@
 .dz-left-group .entries { margin: 4px 0 0; }
 .dz-left-why, .dz-left-backlog { margin: 0; }
 .dz-left-open { text-align: left; overflow-wrap: anywhere; }
-.dz-left-shelf { font-size: inherit; }
-/* why a file stands beside the queue (cockpit.files_scope all): a quiet chip in the eyebrow and on the shelves */
+/* why a file stands beside the queue (cockpit.files_scope all): a quiet chip in the eyebrow */
 .dz-reason { display: inline-flex; align-items: center; font-size: var(--text-label); font-weight: 500; letter-spacing: 0;
   text-transform: none; color: var(--on-surface); }
 .dz-reason-waiting { border-color: var(--info); }
 .dz-reason-resting, .dz-reason-deferred { border-color: var(--warning); }
 .dz-reason-drop { border-color: var(--danger); }
-/* every file behind the queue: the chips with their counts, then the files of the one picked, on hairlines */
-.dz-shelves { display: flex; flex-direction: column; gap: 10px; min-width: 0; padding: 14px 20px 16px;
-  border: 1px solid var(--border); border-radius: var(--radius-xl); background: var(--surface); }
-.dz-shelf-chips { display: flex; flex-wrap: wrap; gap: 6px; }
-.dz-shelf-chip { cursor: pointer; font: inherit; font-size: var(--text-sm); color: var(--on-surface); }
-.dz-shelf-chip:hover { border-color: var(--border-strong); }
-.dz-shelf-chip[aria-pressed="true"] { border-color: var(--on-surface); background: var(--surface-muted); }
-.dz-shelf-elsewhere { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
-.dz-shelf-list { margin: 0; }
-.dz-shelf-open { text-align: left; overflow-wrap: anywhere; }
 .dz-slug { font-size: var(--text-mono-label); font-weight: 400; letter-spacing: 0; text-transform: none; color: var(--on-surface-muted); overflow-wrap: anywhere; }
 .dz-title { margin: 0; font-family: var(--font-display); font-weight: 500; font-size: clamp(24px, 2.4vw, 31px); line-height: 1.18; color: var(--ink); overflow-wrap: anywhere; }
 .dz-lead { margin: 0; max-width: 68ch; color: var(--on-surface); font-size: var(--text-body); line-height: 1.5; overflow-wrap: anywhere; }
@@ -191,7 +228,10 @@
 .dz-open .dz-foot .dz-walk { justify-content: flex-start; }
 
 @media (max-width: 700px) {
-  .dz-find { flex: 1 1 100%; }
+  .fs-find { flex-wrap: wrap; }
+  .fs-find-box { flex-basis: 100%; }
+  .fs-top, .fs-askq { flex-wrap: wrap; }
+  .fs-top .fs-find, .fs-askq .input { flex-basis: 100%; }
   .dz-file { padding: 20px 16px 0; gap: 16px; }
   .dz-file > .dz-drawers:not(:empty) + .dz-ask, .dz-file > .dz-ask + .dz-foot, .dz-file > .dz-drawers:not(:empty) + .dz-foot { margin-top: -16px; }
   .dz-drawers, .dz-ask, .dz-foot { margin: 0 -16px; }

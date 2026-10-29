@@ -1,14 +1,50 @@
 # SPDX-License-Identifier: MIT
-"""Verbs on inbox items and tasks: start, put off, hide, drop, close, reopen, review, note, approve, teams.
+"""Verbs on inbox items and tasks: start, put off, hide, drop, close, reopen, review, note, approve, teams, and the
+files tab's question to its records.
 """
 from __future__ import annotations
 
 import json
+import os
+import threading
 
+from .. import work_find as wf
+from . import activity as act
 from . import model as m
 from .details import split_front
-from .history import item as history_item
-from .actions_base import DECLINED_REASONS, SHORT_TIMEOUT, TEAM_RE, ActionError, Ctx, bad_arg, row_go
+from .history import REOPEN_AS, item as history_item
+from .actions_base import (DECLINED_REASONS, MERGE_MAX, SHORT_TIMEOUT, SLUG_RE, TEAM_RE, ActionError, Ctx, bad_arg,
+                           row_go)
+from .quick import MODELS
+from .text import TABLES
+
+FILES_ASK_TIMEOUT = 90
+# one question to the records at a time (v_files_ask), on a lock of its own, never the write lock
+_FILES_ASKING = threading.Lock()
+
+
+def record_check(app, words: list[str], themes, path: str, slug: str, kind: str) -> dict:
+    """What the block list says of one record (cockpit.files_search.block): its front matter, title, row, theme, the
+    text a question would send (work_find.ask_text) and `held`, the words any of them holds: its area (front matter
+    and row, every area name), context, theme, path, title and that text, so a word in the body or in `related:`
+    holds it as well. A word also matches inside a longer one (Steuer holds Steuerberater and Steuerung alike): it
+    holds back more, never less. The question (v_files_ask) and the records the page lists (GET /api/records) both
+    read it, so the page counts what the server sends"""
+    whole = wf.status_text(app.root, path)      # read once, by the search's rules (no symlink, no huge file)
+    front = wf.front_from(whole)
+    title = wf.title_from(whole, slug)
+    row = {} if kind == "done" else ((app.collector.resolve(f"task:{slug}") or {}).get("out") or {})
+    theme = app.themes.theme_name(themes, f"task:{slug}")
+    text = (whole or "")[:wf.ASK_TEXT_MAX]
+    held = wf.held_by([front.get("area"), front.get("context"), row.get("area"), *(row.get("area_names") or []),
+                       theme, path, title, text], words)
+    return {"front": front, "title": title, "row": row, "theme": theme, "text": text, "held": held}
+
+
+def merge_marks(slug: str) -> tuple[str, str]:
+    """The two lines a merged section stands between in the kept task's STATUS.md, as task.py merge writes them
+    (task.py _marks); an undo is only taken while both are there"""
+    return f"<!-- merged-from: {slug} -->", f"<!-- /merged-from: {slug} -->"
 
 
 class WorkVerbs:
@@ -230,11 +266,15 @@ class WorkVerbs:
         self.hide_until(ctx, self.entry(key)["row"], until)
 
     def v_unhide(self, ctx: Ctx, key: str) -> None:
+        """Show again: under the row's own key and under the keys of the same thing (collector.twins: an issue in
+        Due and on the GitHub page), wherever the decision was taken"""
         found = self.entry(key)
-        if not found["hidden"] or not self.app.store.unhide(key):
+        taken = [k for k in self.app.collector.twins(key) if self.app.store.unhide(k)] if found["hidden"] else []
+        if not taken:
             raise self.not_applicable("the row is not hidden")
         if getattr(self.app, "history", None) is not None:
-            self.app.history.mark_undone("unhide", key)
+            for k in taken:                 # only a decision taken back: an expired Later of a twin keeps its entry
+                self.app.history.mark_undone("unhide", k)
         ctx.note(self.tx["unhidden_note"].format(title=m.short(found["row"]["title"], 60)), go=row_go(found["row"]))
 
     def v_drop(self, ctx: Ctx, key: str, reason: str | None = None) -> None:
@@ -256,6 +296,28 @@ class WorkVerbs:
         if muted:
             ctx.extra["muted"] = muted
         self.settle(ctx, row, self.tx["dropped_muted" if muted else "dropped"])
+        self.settle_soon(ctx)
+
+    def v_shelve(self, ctx: Ctx, key: str, reason: str, until: str | None = None) -> None:
+        """"Drop because" on a task (the Work through page): parked without being lost, in one step of task.py shelve,
+        an idea in the inbox deferred until a day and the task closed as declined, the reason on both. Only a finite
+        task: a stream never ends this way, an inbox item or any other row is dropped or settled instead. The reason
+        is one argv word, glued to its flag, so a reason that looks like a flag stays text. Taken back by reopening
+        the task, which closes the idea again (task.py reopen)."""
+        entry = self.entry(key)
+        row = entry["row"]
+        if not row.get("task") or row.get("inbox_id") or row.get("stream") or (entry["out"] or {}).get("stream"):
+            raise self.not_applicable("only a task is shelved; a stream runs on, an inbox item is dropped", "key")
+        slug = self.slug(row)
+        before = self.task_status(slug)     # read before the shelve moves the folder: the undo restores it
+        argv = self.task_cmd("shelve", slug, f"--reason={reason}", *(["--until", until] if until else []))
+        run = ctx.call("task.shelve", slug, argv, SHORT_TIMEOUT)
+        if not run.ok:
+            ctx.note(self.tx["shelve_failed"].format(title=m.short(row["title"], 40), err=m.short(run.err, 100)), bad=True)
+            return
+        ctx.history.append({**history_item(row["key"], row["title"], "task", "shelved", slug, before, work_kind="task"),
+                            "reason": reason})
+        self.settle(ctx, row, self.tx["task_shelved"])
         self.settle_soon(ctx)
 
     def v_inbox_unmute(self, ctx: Ctx, id: str) -> None:  # noqa: A002 - the API name
@@ -383,9 +445,10 @@ class WorkVerbs:
                                                              err=m.short(run.err, 100)), bad=True)
                 continue
             done += 1
-            ctx.history.append(history_item(row["key"], row["title"], "task",
-                                            "declined" if why in DECLINED_REASONS else "done", slug, before,
-                                            work_kind="stream" if out.get("stream") or row.get("stream") else "task"))
+            ctx.history.append({**history_item(row["key"], row["title"], "task",
+                                               "declined" if why in DECLINED_REASONS else "done", slug, before,
+                                               work_kind="stream" if out.get("stream") or row.get("stream") else "task"),
+                                **({"reason": text} if text else {})})
             if len(rows) == 1:
                 self.settle(ctx, row, self.tx["task_declined" if why in DECLINED_REASONS else "task_closed"])
             else:
@@ -427,15 +490,17 @@ class WorkVerbs:
                 if not run.ok:
                     ctx.note(self.tx["done_failed" if outcome == "done" else "drop_failed"].format(err=m.short(run.err, 100)), bad=True)
                     continue
-                ctx.history.append(history_item(key, row["title"], "inbox", "done" if outcome == "done" else "dropped", item))
+                ctx.history.append({**history_item(key, row["title"], "inbox", "done" if outcome == "done" else "dropped", item),
+                                    **({"reason": text} if text else {})})
                 self.settle(ctx, row, self.tx["res_done" if outcome == "done" else "dropped"])
                 self.settle_soon(ctx)
             elif kind == "other":
                 # not collector.settle: its source still lists the row, so it would stay invisible for good;
-                # dismissed it shows under the hidden rows with "show again"
+                # dismissed it shows under the hidden rows with "show again"; a twin's older Later goes first
+                self.clear_twins(key)
                 self.app.store.dismiss(key, outcome, row["title"])
                 self.write_note(ctx, row, self.tx["close_reason"][outcome] + extra)
-                ctx.history.append(history_item(key, row["title"], "other", outcome))
+                ctx.history.append({**history_item(key, row["title"], "other", outcome), **({"reason": text} if text else {})})
                 ctx.settled.append(key)
                 ctx.note(f"{self.tx['dismissed_' + outcome]}: {m.short(row['title'], 60)}")
                 ctx.delta()
@@ -546,21 +611,307 @@ class WorkVerbs:
         if result in ("failed", "manual"):
             app.store.set_team_run(slug, before)
 
+    # ------------------------------------------------------------ Merge of Work through (task.py merge, unmerge)
+
+    def merge_row(self, key: str, field: str) -> dict:
+        """The row of an open finite task under work/tasks/, else merge_not_task: no stream, no inbox item, no
+        other row, no task closed meanwhile"""
+        entry = self.entry(key, field)
+        row, out = entry["row"], entry["out"] or {}
+        slug = row.get("task")
+        if (not key.startswith("task:") or row.get("inbox_id") or not isinstance(slug, str) or not SLUG_RE.match(slug)
+                or row.get("stream") or out.get("stream")
+                or not (self.app.root / "work" / "tasks" / slug / "STATUS.md").is_file()):
+            raise ActionError(409, "merge_not_task", "only open tasks merge: no streams, no inbox items", field)
+        return row
+
+    def v_flow_merge(self, ctx: Ctx, keep: str, keys: list[str]) -> None:
+        """Merge: the tasks of keys close as merged into the task of keep, one task.py merge each in the order given
+        (their goal, notes and open steps come over as a section, their documents are linked). Every row is checked
+        before the first write; a merge that fails is said and the next one goes on. One history entry, per merged
+        task its undo (task_unmerge, back to the status it had) and an item on the kept task."""
+        if len(keys) > MERGE_MAX:
+            raise bad_arg("keys", f"must be 1 to {MERGE_MAX} task keys")
+        if keep in keys:
+            raise bad_arg("keys", "the task that stays is not merged into itself")
+        for key in (keep, *keys):                       # every key first, then what each one is
+            self.entry(key, "keep" if key == keep else "keys")
+        kept = self.merge_row(keep, "keep")
+        rows = [self.merge_row(key, "keys") for key in keys]
+        into = self.slug(kept)
+        merged, failed = [], []
+        for row in rows:
+            slug = self.slug(row)
+            before = self.task_status(slug)     # read before the merge moves the folder: the undo restores it
+            argv = self.task_cmd("merge", into, "--from", slug, "--heading", self.tx["merge_heading"], "--json")
+            run = ctx.call("task.merge", slug, argv, SHORT_TIMEOUT)
+            if not run.ok:
+                failed.append(slug)
+                ctx.note(self.tx["merge_failed"].format(title=m.short(row["title"], 40), err=m.short(run.err, 100)), bad=True)
+                continue
+            merged.append(slug)
+            ctx.history.append({"key": row["key"], "title": str(row["title"])[:200], "kind": "task", "did": "merged",
+                                "ident": slug, "into": into, "work_kind": "task", "undone_ms": None,
+                                "undo": {"verb": "task_unmerge", "args": {"keep": into, "slug": slug,
+                                                                          **({"as": before} if before in REOPEN_AS else {})}}})
+            ctx.history.append({"key": kept["key"], "title": str(kept["title"])[:200], "kind": "task", "did": "merged_in",
+                                "ident": into, "from": slug, "undo": None, "undone_ms": None})
+            self.app.collector.settle(row["key"], self.tx["merge_heading"].replace("{slug}", slug))
+            ctx.settled.append(row["key"])
+        ctx.extra["merge"] = {"keep": into, "merged": merged, "failed": failed}
+        if merged:
+            names = ", ".join(m.short(r["title"], 40) for r in rows if r["task"] in merged)
+            ctx.note(self.tx["merged"].format(names=names, title=m.short(kept["title"], 60)), go=row_go(kept))
+            self.settle_soon(ctx)
+        ctx.delta()
+        self.app.collector.request("both")
+
+    def v_task_unmerge(self, ctx: Ctx, keep: str, slug: str, **kw) -> None:
+        """The undo of one merge: the section and the related lines leave the kept task, the merged task opens again
+        with the status it had (task.py unmerge). Only an undo flow_merge handed out, only while the section stands
+        between its markers as the merge left it. No flow gate: an undo, also from the history drawer."""
+        status = kw.get("as")
+        history = getattr(self.app, "history", None)
+        it = history.open_undo("task_unmerge", {"keep": keep, "slug": slug, **({"as": status} if status else {})}) \
+            if history is not None else None
+        if it is None:
+            raise self.not_applicable("nothing of that to take back", "slug")
+        try:
+            text = (self.app.root / "work" / "tasks" / keep / "STATUS.md").read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            text = ""
+        first, last = merge_marks(slug)
+        lines = [ln.strip() for ln in text.splitlines()]
+        if first not in lines or last not in lines or lines.index(last) < lines.index(first):
+            raise ActionError(409, "merge_changed", "the merged section was changed by hand", "keep")
+        argv = self.task_cmd("unmerge", keep, "--from", slug, *(["--as", status] if status else []), "--json")
+        run = ctx.call("task.unmerge", slug, argv, SHORT_TIMEOUT)
+        if not run.ok:
+            ctx.note(self.tx["reopen_failed"].format(err=m.short(run.err, 100)), bad=True)
+            return
+        history.mark(it)
+        history.mark_where({"key": f"task:{keep}", "did": "merged_in", "from": slug})
+        for key in (f"task:{slug}", f"task:{keep}"):
+            self.app.collector.unsettle(key)
+        ctx.extra["unmerge"] = {"keep": keep, "slug": slug}
+        ctx.note(self.tx["merge_undone"].format(title=m.short(it.get("title") or slug, 60)),
+                 go={"kind": "item", "key": f"task:{slug}"})
+        self.settle_soon(ctx)
+        self.app.collector.request("both")
+
     # ------------------------------------------------------------ describe (describe.py)
 
     def describe_ctx(self, ctx: Ctx):
         """The steps of a describe verb go on its record like any other call"""
         return lambda name, subject, argv, timeout, **kw: ctx.call(name, subject, argv, timeout, **kw)
 
-    def v_describe_run(self, ctx: Ctx, key: str) -> None:
+    def v_describe_run(self, ctx: Ctx, key: str, ahead: bool = False) -> None:
         """One item's brief now: written while no person changed it, else a proposal; the model call runs
-        without the write lock"""
+        without the write lock. A click always runs; a brief prepared ahead (the Work through page) only while
+        the hour's budget has a call left"""
         app = self.app
         tx = app.describe.tx()
-        result = app.describe.run_key(key, why="click", call=self.describe_ctx(ctx), unlocked=ctx.unlocked)
-        ctx.note(tx["written"].format(title=result["title"]) if result["outcome"] == "written" else tx["proposed"])
+        if ahead and app.describe.budget_left() <= 0:
+            raise ActionError(429, "describe_budget", tx["budget"], "ahead")
+        result = app.describe.run_key(key, why="ahead" if ahead else "click", call=self.describe_ctx(ctx),
+                                      unlocked=ctx.unlocked)
+        # a brief prepared ahead stays quiet (no note to every page, so no toast per card); a click says what it did
+        if not ahead:
+            ctx.note(tx["written"].format(title=result["title"]) if result["outcome"] == "written" else tx["proposed"])
         ctx.extra["describe"] = app.describe.state_for(key)
         ctx.extra["outcome"] = result["outcome"]
+        ctx.delta()
+
+    # ------------------------------------------------------------ themes of the Work through page (themes.py)
+
+    def v_flow_themes_run(self, ctx: Ctx, mode: str, keys: list) -> None:
+        """One run of the themes over open points. A key whose row is gone since the page drew it (settled in
+        between) is left out, the others run; only a run with no open key left is refused, before any model call.
+        The model call runs on the themes' own lock, never the write lock (it writes nothing of the Bridge)"""
+        app = self.app
+        rows = []
+        for key in keys:
+            found = app.collector.resolve(key)
+            if found:
+                rows.append({**found["out"], "key": key})
+        if not rows:
+            raise ActionError(409, "stale_row", "the row is no longer there", "keys")
+        done = app.themes.run(mode, rows, call=lambda name, subject, argv, timeout, **kw: ctx.call(name, subject, argv, timeout, **kw))
+        # the page's own run for new points stays quiet; the click that orders all anew says what it did
+        if mode == "regroup":
+            ctx.note(app.themes.tx()["ordered"].format(n=done["n"]))
+        ctx.extra["themes"] = app.themes.state()
+
+    def _theme_row(self, key: str) -> None:
+        if not self.app.collector.resolve(key):
+            raise ActionError(409, "stale_row", "the row is no longer there", "key")
+
+    def v_flow_theme_move(self, ctx: Ctx, key: str, theme: str) -> None:
+        self._theme_row(key)
+        name = self.app.themes.move(key, theme)
+        ctx.note(self.app.themes.tx()["moved"].format(name=name))
+        ctx.extra["themes"] = self.app.themes.state()
+
+    def v_flow_theme_new(self, ctx: Ctx, key: str, name: str) -> None:
+        self._theme_row(key)
+        made = self.app.themes.new(key, name)
+        ctx.note(self.app.themes.tx()["moved"].format(name=made))
+        ctx.extra["themes"] = self.app.themes.state()
+
+    def v_flow_theme_rename(self, ctx: Ctx, theme: str, name: str) -> None:
+        made = self.app.themes.rename(theme, name)
+        ctx.note(self.app.themes.tx()["renamed"].format(name=made))
+        ctx.extra["themes"] = self.app.themes.state()
+
+    # ------------------------------------------------------------ the Activity tab and the instruction line
+
+    def v_flow_activity_summary(self, ctx: Ctx, key: str) -> None:
+        """The summary of a point's activity (activity.py): the kept one while the rows are the same, else one model
+        call outside the write lock. Quiet: the page shows it in place, no note goes to every page"""
+        app = self.app
+        summary = app.activity.summarize(key, call=self.describe_ctx(ctx))
+        ctx.extra["summary"] = summary
+        ctx.extra["flow_ai"] = app.activity.flow_ai()
+        ctx.audit_extra["cached"] = summary["cached"]
+
+    def v_flow_instruct(self, ctx: Ctx, text: str, keys: list, point: bool = False) -> None:
+        """One sentence turned into a plan of steps (instruct.py); nothing runs here, the page runs it on a click"""
+        app = self.app
+        plan = app.instruct.run(text, keys, point, call=self.describe_ctx(ctx))
+        ctx.extra["plan"] = plan
+        ctx.extra["flow_ai"] = app.activity.flow_ai()
+        ctx.audit_extra.update(points=plan["n"], steps=len(plan["steps"]))
+
+    # ------------------------------------------------------------ the files tab's question to its records
+
+    def v_files_ask(self, ctx: Ctx, text: str, paths: list) -> None:
+        """One question over the records the page shows (cockpit.files_search, lib/work_find.py ask_*). A record a word
+        of the block list names in its area (front matter and row), theme, path, title or the text that would go
+        (record_check) is held back before anything is built, so it never reaches the model; a folder that is no
+        record is left out, and when only such folders came the page is stale (files_ask_stale). Off by default,
+        within budget_per_day (counted in activity.py's store, read again once the lock is taken), one at a time.
+        The answer names records by number only"""
+        app = self.app
+        tx = TABLES["de" if str(getattr(app.cfg, "language", "en")).startswith("de") else "en"]["files_ask"]
+        cfg = act.block(app, "files")
+        if not cfg.get("enabled"):
+            raise ActionError(409, "files_ask_off", tx["off"])
+        words = list(cfg.get("block") or [])
+        known = {folder: (slug, kind) for slug, kind, folder in wf.known_folders(app.root)}
+        themes = app.themes.load()
+        recs, held = [], []
+        for path in paths:
+            if path not in known:
+                continue
+            slug, kind = known[path]
+            x = record_check(app, words, themes, path, slug, kind)
+            if x["held"]:
+                held.append(x["held"])
+                continue
+            front, row = x["front"], x["row"]
+            recs.append({"slug": slug, "path": path, "title": x["title"], "status": front.get("status") or kind,
+                         "area": row.get("area") or front.get("area") or front.get("context"), "theme": x["theme"],
+                         "updated": next((str(front[k])[:10] for k in ("last_updated", "closed", "created") if front.get(k)), None),
+                         "text": x["text"]})
+        held_words = [w for w in words if any(w in h for h in held)]
+        if not recs and not held:
+            raise ActionError(409, "files_ask_stale", tx["stale"])
+        if not recs:
+            raise ActionError(409, "files_ask_held", tx["held"].format(n=len(held)))
+        model = act.select_model(app, "files", act.FILES_SERVICE)
+        if model is None:
+            raise ActionError(503, "files_ask_unavailable", tx["unavailable"])
+        if app.activity.budget_left("files") <= 0:
+            raise ActionError(429, "files_ask_budget", tx["budget"])
+        if not _FILES_ASKING.acquire(blocking=False):
+            raise ActionError(409, "files_ask_running", tx["running"])
+        try:
+            # a second click that came in as the first call let go of the lock passed the read above: read it again
+            if app.activity.budget_left("files") <= 0:
+                raise ActionError(429, "files_ask_budget", tx["budget"])
+            data = [{"n": i + 1, **{k: app.scrub(str(r[k])) if r[k] else r[k] for k in ("title", "slug", "status", "area", "theme", "updated")},
+                     "text": app.scrub(r["text"])} for i, r in enumerate(recs)]
+            from .describe import language
+            system, prompt = wf.ask_prompt(app.scrub(text), data, language(app.root))
+            argv = wf.ask_argv(app.runner.claude, model, system, prompt)
+            if not wf.ask_argv_ok(argv, app.runner.claude, MODELS.values()):
+                raise ActionError(409, "files_ask_too_big", tx["too_big"], "paths")
+            run = self.describe_ctx(ctx)("claude.files", "files", argv, FILES_ASK_TIMEOUT)
+            got = wf.ask_parse(run.out if run.ok else "", len(recs))
+            app.activity.count_call("files", got["cost_usd"])
+        finally:
+            _FILES_ASKING.release()
+        ctx.audit_extra.update(records=len(recs), held=len(held))
+        if got["answer"] is None:
+            why = "the answer holds none" if run.ok else ((run.err or "").strip().splitlines()[-1:] or ["no answer"])[0]
+            raise ActionError(502, "files_ask_failed", tx["failed"].format(why=app.scrub(why)[:200]))
+        files = [{**f, "slug": recs[f["n"] - 1]["slug"], "path": recs[f["n"] - 1]["path"], "title": recs[f["n"] - 1]["title"]}
+                 for f in got["files"]]
+        ctx.extra["ask"] = app.scrub_tree({"answer": got["answer"], "files": files, "sent": len(recs),
+                                           "held": {"n": len(held), "words": held_words}, "model": act.alias(got["used"] or model),
+                                           "left": app.activity.budget_left("files"), "at_ms": int(app.clock())})
+
+    def v_flow_attach(self, ctx: Ctx, key: str, name: str, data: bytes) -> None:
+        """A document into the open task's deliverables/, flat, under its safe name (a taken one numbered -2 to -99),
+        never through a link, never over a file; then a note on the task (text.py activity.attached) that the feed
+        folds into the document's row. An inbox row attaches to the task it names. The audit line counts the bytes,
+        never the name"""
+        app = self.app
+        tx = act.TEXT[act._lang(app)]
+        if not act.flow_on(app):
+            raise ActionError(409, "flow_off", tx["off"])
+        if not act.block(app, "attach").get("enabled"):
+            raise ActionError(409, "attach_off", tx["attach_off"])
+        entry = self.entry(key)
+        row = {**entry["row"], **(entry.get("out") or {})}
+        task = act.open_task(app.root, row)
+        if task is None:
+            raise ActionError(409, "attach_no_task", tx["attach_no_task"], "key")
+        slug, folder = task
+        deliv = folder / "deliverables"
+        try:
+            inside = folder.resolve().is_relative_to((app.root / "work").resolve())
+            if folder.is_symlink() or not inside or deliv.is_symlink() or (deliv.exists() and not deliv.is_dir()):
+                raise self.not_applicable(tx["attach_folder"])
+            if not deliv.exists():
+                deliv.mkdir(mode=0o755)
+                os.chmod(deliv, 0o755)
+        except OSError as exc:
+            raise self.not_applicable(tx["attach_failed"].format(err=m.short(str(exc), 100))) from None
+        final = act.free_name(deliv, name)
+        if final is None:
+            raise ActionError(409, "attach_exists", tx["attach_exists"], "name")
+        path = deliv / final
+        try:
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+        except FileExistsError:
+            raise ActionError(409, "attach_exists", tx["attach_exists"], "name") from None
+        except OSError as exc:
+            raise self.not_applicable(tx["attach_failed"].format(err=m.short(str(exc), 100))) from None
+        try:
+            os.fchmod(fd, 0o644)
+            view = memoryview(data)
+            while view:
+                view = view[os.write(fd, view):]
+        except OSError as exc:
+            os.close(fd)
+            path.unlink(missing_ok=True)
+            raise self.not_applicable(tx["attach_failed"].format(err=m.short(str(exc), 100))) from None
+        os.close(fd)
+        ctx.audit_extra["bytes"] = len(data)
+        line = tx["attached"].format(name=final)
+        run = ctx.call("task.note", slug, self.task_cmd("note", slug, "--", line), SHORT_TIMEOUT)
+        if run.ok:
+            ctx.note(line, go=row_go(row))
+        else:
+            ctx.note(self.tx["note_failed"].format(err=m.short(run.err, 100)), bad=True)
+        app.activity.drop([key, f"task:{slug}"])
+        rel = f"deliverables/{final}"
+        found = app.activity.doc_row(key, entry, rel)
+        if found:
+            found["doc"]["attached"] = True
+            found["by"] = {"kind": "you", "name": None}
+        ctx.extra["attach"] = {"path": rel, "name": final, "bytes": len(data), "row": found}
         ctx.delta()
 
     def v_describe_apply(self, ctx: Ctx, key: str, proposal: str, brief: dict | None = None) -> None:

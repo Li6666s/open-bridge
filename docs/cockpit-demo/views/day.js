@@ -5,7 +5,7 @@
 import { html, useEffect, useLayoutEffect, useRef, useState } from '../vendor/htm-preact-3.1.1.module.js'
 import {
   attentionTabs, duration, formatDay, indexRows, pageWarnings, sectionRows, short, stateToken, canTab, actionRow,
-  pageItemActs, workPageOf, workViews, startMode, parseDate, isoDate, launchChoice, rowKind, repoGroups, originOf, ORIGIN_CATEGORIES,
+  pageItemActs, workPageOf, workViews, flowOn, startMode, parseDate, isoDate, launchChoice, rowKind, repoGroups, originOf, ORIGIN_CATEGORIES,
   SECTION_ORDER, dueWhen, rowBudgets, whyWithoutDue, tabStateKey
 } from '../logic.js'
 import { T, language } from '../text.js'
@@ -30,7 +30,8 @@ export function KindTag({ row, s, c, link = false }) {
   const t = T()
   const k = rowKind(row, s)
   const title = k.task ? (indexRows(s?.model).get(`task:${k.task}`)?.title ?? k.task) : null
-  const about = (k.kind === 'inbox' || k.kind === 'issue') && k.task
+  // an issue or item that names its task, unless the task's title only repeats the row's own
+  const about = (k.kind === 'inbox' || k.kind === 'issue') && k.task && title !== row?.title
     ? html`<span class="kind-about"> · ${t.kindAbout} <span class=${`kind-about-what kind-${k.taskKind ?? 'task'}`}><span aria-hidden="true">${KIND_MARK[k.taskKind ?? 'task']}</span> ${t.kind[k.taskKind ?? 'task']}:</span> ${link && c
       ? html`<button type="button" class="btn-link" onClick=${() => c.select(`task:${k.task}`)}>${short(title, 48)}</button>`
       : short(title, 48)}</span>` : null
@@ -441,10 +442,10 @@ function HiddenList({ s, c }) {
   </details>`
 }
 
-/** The views of the work tab as one row of chips: what is due, by source, by Jev */
+/** The views of the work tab as one row of chips: what is due, by source, by Jev, the files, Work through */
 export function WorkSwitch({ s, c }) {
   const t = T()
-  const views = workViews(workPageOf(s.model?.pages), s.jev)
+  const views = workViews(workPageOf(s.model?.pages), s.jev, flowOn(s), s.work?.views ?? null)
   const keys = useRoving()
   if (views.length < 2) return null
   const view = workViewNow(s)
@@ -470,19 +471,23 @@ function useDayHeight(c, on) {
   return ref
 }
 
+/** Without a model yet: a failed pass or a lost connection is said, not an endless skeleton; else the skeleton of a
+ *  page that loads. Due's day column and Work through (views/flow.js) say it alike */
+export function NoModel({ s, cls = 'col col-day' }) {
+  const t = T()
+  const warnings = pageWarnings(s, t).filter(w => w.kind !== 'driver')   // not a reason to hold back the day
+  if (warnings.length) {
+    return html`<div class=${cls}><div class="panel panel-pad">${warnings.map(w => html`<p key=${w.word}>
+      <${StateLine} token=${w.token} strong word=${w.word} /></p>`)}</div></div>`
+  }
+  return html`<div class=${cls} aria-busy="true"><div class="panel panel-pad"><${Skeleton} lines=${7} /></div></div>`
+}
+
 export function DayColumn({ s, c, byKey }) {
   const t = T()
   const m = s.model
   const colRef = useDayHeight(c, !!m)
-  if (!m) {
-    // without a model a failed pass or a lost connection is said, not an endless skeleton
-    const warnings = pageWarnings(s, t).filter(w => w.kind !== 'driver')   // not a reason to hold back the day
-    if (warnings.length) {
-      return html`<div class="col col-day"><div class="panel panel-pad">${warnings.map(w => html`<p key=${w.word}>
-        <${StateLine} token=${w.token} strong word=${w.word} /></p>`)}</div></div>`
-    }
-    return html`<div class="col col-day" aria-busy="true"><div class="panel panel-pad"><${Skeleton} lines=${7} /></div></div>`
-  }
+  if (!m) return html`<${NoModel} s=${s} />`
   const total = (m.sections ?? []).reduce((a, x) => a + (x.total ?? 0), 0)
   const budgets = rowBudgets(m.sections, s.ui.expanded ?? {}, s.ui.dayHeight ?? 0)
   return html`<div class="col col-day" ref=${colRef}>

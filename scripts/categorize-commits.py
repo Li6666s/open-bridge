@@ -593,6 +593,14 @@ SCRIPTS_CORE_ALLOWLIST = frozenset({
     "scripts/tests/test_bridge_cockpit_brief_refs.py",
     "scripts/lib/bridge_cockpit/describe.py",             # each item's brief written and kept by a small model
     "scripts/tests/test_bridge_cockpit_describe.py",
+    "scripts/lib/bridge_cockpit/themes.py",               # the themes of Work through, ordered by a small model
+    "scripts/tests/test_bridge_cockpit_themes.py",
+    "scripts/lib/bridge_cockpit/activity.py",             # Work through: the Activity of a point, its documents, attach
+    "scripts/tests/test_bridge_cockpit_activity.py",
+    "scripts/lib/bridge_cockpit/instruct.py",             # Work through: the instruction line's sentence as checked steps
+    "scripts/tests/test_bridge_cockpit_instruct.py",
+    "scripts/tests/test_bridge_cockpit_sessions.py",      # Work through: the task a live session is seen working on
+    "scripts/tests/test_bridge_cockpit_merge.py",         # Work through: Merge and its undo (flow_merge, task_unmerge)
     "scripts/tests/test_task_brief.py",
     "scripts/tests/test_card_fields.py",
     "scripts/tests/test_workplace_brief.py",
@@ -624,6 +632,10 @@ SCRIPTS_CORE_ALLOWLIST = frozenset({
     "scripts/tests/test_cloud_costs.py",
     "scripts/usage-export.py",                # tokens per Bridge, exported for a cockpit on another machine
     "scripts/tests/test_usage_export.py",
+    "scripts/cockpit-usage.py",               # the cockpit's clicks counted, candidates left as proposals for /bridge-learn
+    "scripts/tests/test_cockpit_usage.py",
+    "scripts/bridge-setup.py",                # the Setup page: what keeps the cockpit from working well, what can be switched on
+    "scripts/tests/test_bridge_cockpit_setup.py",
     "scripts/tests/test_cockpit_costs_contract.py",
     "scripts/lib/bridge_cockpit/server.py",
     "scripts/tests/test_bridge_cockpit.py",
@@ -647,6 +659,15 @@ SCRIPTS_CORE_ALLOWLIST = frozenset({
     "scripts/web/views/day.js",
     "scripts/web/views/detail.js",
     "scripts/web/views/dossier.js",
+    "scripts/web/views/flow.js",
+    "scripts/web/views/verbbar.js",
+    "scripts/web/views/flowside.js",          # Work through: the themes, the right column's verbs and fields
+    "scripts/web/views/flowlist.js",          # Work through: the list with suggestions and the batch
+    "scripts/web/views/flowtabs.js",          # Work through: the tabs under the card, the Activity pane
+    "scripts/web/views/flowinstruct.js",      # Work through: the instruction line and its understood steps
+    "scripts/web/views/flowrun.js",           # Work through: Running now, in the left column and over the overview
+    "scripts/web/views/flowleft.js",          # Work through: Not now, its groups and their lists
+    "scripts/web/views/flowprio.js",          # Work through: Prio, the 2x2 grid of Jev's squares
     "scripts/web/views/focus.js",
     "scripts/web/views/github.js",
     "scripts/web/views/header.js",
@@ -673,12 +694,14 @@ SCRIPTS_CORE_ALLOWLIST = frozenset({
     "scripts/web/logic.js",
     "scripts/web/areas.js",                   # the areas and the area filter, passed on by logic.js
     "scripts/web/files.js",                   # the files view: queue, drawers, search, ask a file
+    "scripts/web/flow.js",                    # the Work through page: its queue, the return card, the five verbs
     "scripts/web/markdown.js",
     "scripts/web/triage.js",
     "scripts/web/motion.js",
     "scripts/web/text.js",
     "scripts/web/text-areas.js",              # the start page's texts, taken in by text.js
     "scripts/web/text-files.js",              # the files view's texts, taken in by text.js
+    "scripts/web/text-flow.js",               # the Work through page's texts, taken in by text.js
     "scripts/web/text-chat.js",               # the chat's area switch texts, taken in by text.js
     "scripts/web/text-card.js",               # the item card's texts, taken in by text.js
     "scripts/web/mock.js",
@@ -686,6 +709,7 @@ SCRIPTS_CORE_ALLOWLIST = frozenset({
     "scripts/web/style.css",
     "scripts/web/areas.css",                  # the areas' rules, loaded right after style.css
     "scripts/web/files.css",                  # the files view's rules, loaded right after style.css
+    "scripts/web/flow.css",                   # the Work through page's rules, loaded right after files.css
     "scripts/web/favicon.ico",                # the cockpit's icon, for tabs, bookmarks and favourites
     "scripts/web/apple-touch-icon.png",
     "scripts/web/icon-192.png",
@@ -706,11 +730,13 @@ SCRIPTS_CORE_ALLOWLIST = frozenset({
     "scripts/tests/bridge_cockpit_costs.test.mjs",
     "scripts/tests/bridge_cockpit_areas.test.mjs",
     "scripts/tests/bridge_cockpit_files.test.mjs",
+    "scripts/tests/bridge_cockpit_flow.test.mjs",
     "scripts/tests/bridge_cockpit_settle.test.mjs",
     "scripts/tests/bridge_cockpit_card.test.mjs",
     "scripts/tests/bridge_cockpit_files_count.test.mjs",
     "scripts/tests/bridge_cockpit_chat_a2a.test.mjs",
     "scripts/tests/bridge_cockpit_toast_go.test.mjs",   # a toast that names its place leads there
+    "scripts/tests/bridge_cockpit_start_counts.test.mjs",   # the start page counts what Work through holds
     "scripts/tests/test_bridge_cockpit_note_go.py",
     "scripts/tests/bridge_cockpit_files_all.test.mjs",
     # Registered with the scheduled archive. It runs DAILY and does only the

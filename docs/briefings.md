@@ -1,7 +1,7 @@
 ---
 summary: "Briefing profiles: each person describes the briefing they want in workflow/briefings/<id>.yaml (sections, trackers, queries, inbox rules, and a view: how it is shown); scripts/briefing.py executes it and the agent advises on the result. Section kinds, provider query keys, selection, views (sources, triage, brevity, plan), change marks, inbox rules, org profiles."
 type: guide
-last_updated: 2026-10-09
+last_updated: 2026-10-28
 related:
   - bridge-cockpit.md
   - ../workflow/briefings/_schema.yaml
@@ -51,6 +51,7 @@ python3 scripts/briefing.py collect --skip tracker --skip calendar   # the quick
 python3 scripts/briefing.py collect --only tracker --only calendar   # only these kinds, the rest listed as skipped
 python3 scripts/briefing.py collect --json --max-items 500   # every row, for a dashboard that pages itself
 python3 scripts/briefing.py collect --fresh       # ask every source now, whatever cache_minutes allows
+python3 scripts/briefing.py collect --json --setup  # also the cockpit's Setup page (scripts/bridge-setup.py)
 python3 scripts/briefing.py owed [<id>]           # streams the profile does not cover, and how to run them
 python3 scripts/briefing.py validate              # every profile; exit 1 on a problem
 ```
@@ -269,7 +270,7 @@ the person's language: `yours_today`, `free_until`, `free_rest`, `busy_until`,
 `no_next`, `muted`, `hidden`, `error`, `workplace`, `more`, `end`, `why`,
 `meanwhile`, `later`, `shutdown`, `activity_title`, `commits`, `boards_title`,
 `st_new`, `st_ready`, `st_in_progress`, `st_review`, `st_blocked`, `agenda_title`,
-`clashes`, `clash_row`, `parallel`, `info_tag`, `all_clear`, `owed`, `overview_file`, `untasked`, and for `report` `report_title`, `lage`, `first_title`, `bucket_more` and the table columns `col_when`, `col_what`, `col_note`, `col_board`, `col_repo`, `col_branch`, `col_days`, `col_commits`. Placeholders in braces stay as they are: a label may use only the placeholders
+`clashes`, `clash_row`, `parallel`, `info_tag`, `all_clear`, `owed`, `overview_file`, `untasked`, the Setup page's `page_setup`, `section_setup_checks`, `section_setup_available` and `section_setup_on` (the `setup_*` words of its rows come from `scripts/bridge-setup.py` in the Bridge's language and are not renamed by a profile), and for `report` `report_title`, `lage`, `first_title`, `bucket_more` and the table columns `col_when`, `col_what`, `col_note`, `col_board`, `col_repo`, `col_branch`, `col_days`, `col_commits`. Placeholders in braces stay as they are: a label may use only the placeholders
 its default has (`validate` names them), and one that would not format falls
 back to the default wording instead of breaking the briefing.
 
@@ -416,7 +417,9 @@ type `draft`, with its title, status and assignees but no number and no link,
 and never its text. It offers only Analyse and Make it a task, each told that
 there is no issue and that the card's text stays where it is; a section's own
 step reaches it only when its `types` name `draft`. `default_steps: false` turns
-the built-in steps off; a section adds its own:
+the built-in steps off; a section adds its own. `cards: all` brings every open card of the boards; a card that is
+not yours (`others`: neither assigned to you nor opened by you, nor found by your search) is a row of the page and its
+filters only, never a row of the briefing's buckets, so the work view keeps to yours as with `cards: mine`:
 
 ```yaml
 - kind: tracker
@@ -581,7 +584,10 @@ shows it) next to its `id`. Its section then names how a step runs:
 runs the step only when that row still offers it, then prints the command's JSON.
 When that JSON carries `undo: "restore:..."`, the token goes back to the same
 command unchecked by act (the row may be gone by then), so the command itself
-must check it. The cockpit shows the steps as a two-click menu on the row
+must check it. A step whose effect only shows later (a machine rebooting) may carry
+`recheck: [seconds, ...]`: the cockpit then reads that section again after each wait
+(whole seconds from 15 to 1800, eight at most) and stops after the last, so the row
+moves on without a standing poll. The cockpit shows the steps as a two-click menu on the row
 and keeps every step in its history, with "take back" where an undo came back.
 A page entry with `steps: buttons` sets every step out as a button of its own, on the row,
 on a tile and in the detail: the first click arms it ("Switch off: sure?"), the second runs it,
@@ -607,11 +613,21 @@ A page entry overrides that per section: `when` and `link` name an item field,
 an empty section that reads as good news, set `empty:` too, for example
 `empty: "all green"`); `badge: false`
 keeps a section out of the number on its tab; `hide_empty: true` leaves a section off its tab
-while it has no rows (an empty section without it shows as one quiet line);
+while it has no rows (an empty section without it shows as one quiet line); `hide_ok: true`
+draws a section only while one of its rows is bad or its source fails, and it still counts
+toward its tab and its alarm (a cloud section the account tiles read, say);
 `actionable: true|false` says whether the dashboard offers Get it done, Advise and Close
 on every row of the section. Without it, a row is actionable when it is a finding (red or
 yellow) or a tracker row; a row that already has an inbox item or a task keeps that path.
 Every row also carries `id`, its source id, which keys the item the dashboard files for it.
+A page with `under: <page id>` is a sub page of that page: no tab of its own; in the cockpit
+its parent becomes a folder with a bar of its places under the tabs (the overview, then each
+sub page in the order `view.pages` lists them) and a ▾ at its tab with the same places, and
+`overview: true` on the sub page gives it a head card of one line per section, and no token or noise card unless
+its own `cards:` names one (they stand on the folder's overview). It names another page of `view.pages`,
+not itself, one level deep, and neither side has `group: work` or `group: day`; `validate`
+says which rule an entry breaks. The cockpit's own Background jobs page is placed the same
+way by an entry of `id` and `under` only: `{id: "@workers", under: ops}`.
 `view.page_skip: [<section id>, ...]` keeps sections off every page, the rest page
 included, while they still run: a section that only feeds a file another page reads. Each section
 also says what it adds to its tab's badge (`weight`: rows not dimmed, for
@@ -624,6 +640,21 @@ tabs unless a page names them. Tab names come from the labels `page_status`,
 `page_dates`, `page_trackers`, `page_today`, `page_more`; `validate` names a page
 section the profile does not have. Two page ids are taken: `briefing` (the
 briefing page itself) and `more` (the page for the rest).
+
+**The Setup page.** `collect --setup` (the cockpit passes it, the terminal briefing never does)
+appends three `command` sections of `scripts/bridge-setup.py`: `setup-checks` (what still keeps the
+cockpit from working well, findings only), `setup-available` (the onboarding catalogue's features
+that are off, with the steps `later` and `silence` through `actions_argv`) and `setup-on` (what is
+on, dim). All three are `bucket: none`, so they never reach the briefing's buckets. `pages` gives
+them a page of their own, id `setup` (label `page_setup`, `bridge-setup` when a profile page has
+that id) in the group `settings`, never the rest page; a dashboard shows that group in its
+settings (the cockpit: Settings, Setup) instead of a tab, and a profile cannot set the group:
+`setup-available` with `actionable: true` and `badge: false`, `setup-on` with `actionable: false`
+and `badge: false`. A profile may name any of the three in `view.pages` and place it on a page of
+its own; a page of its own with the id `setup` that names one of them takes the ones it does not name. The three ids are
+reserved: `validate` refuses a profile section that takes one. `act <profile> setup-available <id>
+<step>` works whether or not the run collected the page. Model and safety: [`bridge-cockpit.md`](bridge-cockpit.md)
+§ The Setup page.
 
 A dashboard can load in two runs: first a run of its own with
 `--skip tracker --skip command` (the kinds that wait on a service; a few

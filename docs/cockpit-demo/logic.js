@@ -8,9 +8,10 @@
 import { TABLES } from './text.js'
 import { inProject } from './areas.js'
 
-// the areas and the files view live in files of their own; every name passes on from here
+// the areas, the files view and the Work through page live in files of their own; every name passes on from here
 export * from './areas.js'
 export * from './files.js'
+export * from './flow.js'
 
 /** The words of one language (text.js, rules/language-policy.md section 3); English for any other */
 const tableOf = lang => (TABLES[lang] ?? TABLES.en).logic
@@ -359,6 +360,101 @@ export function ghSortRows(rows, by) {
     : (by === 'priority' ? prioRank(a.gh?.priority) - prioRank(b.gh?.priority) : 0) || state(a) - state(b) || at(b).localeCompare(at(a)))
 }
 
+// the GitHub page's filter bar (round 6c, views/github.js): Board, Assigned to, Opened by (round 6d: the one Person
+// split in two), Repository, Kind and Board status, one choice each, combined with the figure picked; GH_ME stands
+// for you, GH_NONE for no board and for nobody assigned
+export const GH_DIMS = ['board', 'assignee', 'author', 'repo', 'type', 'status']
+export const GH_ME = '@me'
+export const GH_NONE = '-'
+
+/** Your GitHub login as the rows tell it: the author of a row you opened, else the one assignee of a row assigned to
+ *  you; null when no row says (the filter then lists your login beside Me) */
+export function ghMyLogin(items) {
+  for (const it of items ?? []) if (it.gh?.by_me && it.gh.author) return it.gh.author
+  for (const it of items ?? []) if ((it.flags ?? []).includes('mine') && it.gh?.people?.length === 1) return it.gh.people[0]
+  return null
+}
+
+/** A board column as one value whatever its case and spaces ("In Progress" and "In progress" are one column);
+ *  the bar shows the first spelling it meets (ghStatusWords) */
+export const ghStatusKey = v => String(v ?? '').replace(/\s+/g, ' ').trim().toLowerCase()
+
+/** The spelling the bar shows for each column key: the first a row has */
+export function ghStatusWords(items) {
+  const out = new Map()
+  for (const it of items ?? []) {
+    const raw = String(it.gh?.status ?? '').replace(/\s+/g, ' ').trim()
+    if (raw && !out.has(ghStatusKey(raw))) out.set(ghStatusKey(raw), raw)
+  }
+  return out
+}
+
+/** The values a row has in one dimension: the boards it stands on (no board as GH_NONE; an older server names the
+ *  board only as the group, unless that group is the repository), the people assigned (you as Me, nobody as GH_NONE),
+ *  who opened it (you as Me, none when the server does not say), its repository, its kind, and its column on a board */
+export function ghValues(it, dim, me = null) {
+  const g = it.gh ?? {}
+  const board = g.board !== undefined ? g.board : (it.group && it.group !== g.repo ? it.group : null)
+  if (dim === 'board') return board ? [board, ...(g.also_on ?? [])] : [GH_NONE]
+  if (dim === 'repo') return g.repo ? [g.repo] : []
+  if (dim === 'type') return [g.type ?? 'issue']
+  if (dim === 'status') return board && g.status ? [ghStatusKey(g.status)] : []
+  const flags = it.flags ?? []
+  if (dim === 'author') {
+    const mine = flags.includes('my_pr') || g.by_me === true || (!!me && g.author === me)
+    return mine ? [GH_ME] : g.author ? [g.author] : []
+  }
+  const people = g.people ?? []
+  const mine = flags.includes('mine') || (!!me && people.includes(me))
+  const others = [...new Set(people)].filter(p => p !== me)
+  return [...(mine ? [GH_ME] : []), ...others, ...(people.length || mine ? [] : [GH_NONE])]
+}
+
+/** A row passes the filter: it carries the figure picked (open is every row) and, in each dimension chosen, the
+ *  value chosen; `skip` leaves one dimension open (to count its options) */
+export function ghPasses(it, f, me = null, skip = null) {
+  if (!f) return true
+  if (f.flag && f.flag !== 'open' && !(it.flags ?? []).includes(f.flag)) return false
+  return GH_DIMS.every(d => d === skip || f[d] == null || ghValues(it, d, me).includes(d === 'status' ? ghStatusKey(f[d]) : f[d]))
+}
+
+/** Whether anything is chosen */
+export const ghFiltered = f => !!f && (!!f.flag || GH_DIMS.some(d => f[d] != null))
+
+/** The options of each dimension, each with the rows it would show beside the other choices: Me first, nobody and no
+ *  board last, the boards in the registry's order (`order.board`), the rest the most first; a value chosen earlier
+ *  that no row has any more stays listed with 0, so it can be seen and taken back */
+export function ghFacets(items, f, me = null, order = {}) {
+  const out = {}
+  const edge = v => (v === GH_ME ? -1 : v === GH_NONE ? 1 : 0)
+  for (const d of GH_DIMS) {
+    const n = new Map()
+    for (const it of items ?? []) {
+      if (ghPasses(it, f, me, d)) for (const v of new Set(ghValues(it, d, me))) n.set(v, (n.get(v) ?? 0) + 1)
+    }
+    const kept = f?.[d] == null ? null : d === 'status' ? ghStatusKey(f[d]) : f[d]
+    if (kept != null && !n.has(kept)) n.set(kept, 0)
+    const pos = v => { const i = (order[d] ?? []).indexOf(v); return i < 0 ? 999 : i }
+    out[d] = [...n].map(([value, count]) => ({ value, n: count }))
+      .sort((a, b) => edge(a.value) - edge(b.value) || pos(a.value) - pos(b.value) || b.n - a.n || String(a.value).localeCompare(String(b.value)))
+  }
+  return out
+}
+
+/** The filters kept in this browser, read back clean: per section ("page/section") the dimensions and the figure
+ *  that hold a text; anything else, and a section with nothing chosen, is dropped. A Person kept before round 6d
+ *  becomes Assigned to (Me, a login and nobody pick the same rows assigned there), unless that is chosen already */
+export function ghFilterKept(raw) {
+  const out = {}
+  for (const [key, kept0] of Object.entries(raw && typeof raw === 'object' ? raw : {})) {
+    if (!/^[^/]+\/[^/]+$/.test(key) || !kept0 || typeof kept0 !== 'object') continue
+    const f = typeof kept0.person === 'string' && kept0.assignee == null ? { ...kept0, assignee: kept0.person } : kept0
+    const kept = Object.fromEntries([...GH_DIMS, 'flag'].filter(d => typeof f[d] === 'string' && f[d]).map(d => [d, f[d].slice(0, 120)]))
+    if (Object.keys(kept).length) out[key] = kept
+  }
+  return out
+}
+
 /** Design token for an item tone */
 export function toneToken(tone) {
   return { bad: 'danger', warn: 'warning', dim: 'on-surface-muted' }[tone] ?? 'info'
@@ -518,13 +614,18 @@ const SIDEBAR_STATE = { waiting: 'waiting', 'needs input': 'needs-you', running:
  *  another Bridge's clone, and the quick chats in the control workspace; then the other Bridges on this
  *  machine that have no workspace, and the A2A agents. A workspace the list does not name (or no list
  *  at all) still shows from its tabs, marked known: false */
+/** When a chat last moved, as the server keeps it (quick.py _since): its last answer or question, its handoff, or
+ *  what came back from it */
+export const chatSince = x => Math.max(x.last_ms ?? x.started_ms ?? 0, x.handed?.at_ms ?? 0, x.handed?.outcome?.at_ms ?? 0)
+
 /** The chats a list shows, quick chats and A2A conversations alike: none with a place of its own (the start page's
- *  core and a file's suggested next step: their panels show them, a new one replaces the last) and none untouched past keep_hours (the server archives it with its
- *  next look); one still answering, or an A2A task its owner still holds, always */
+ *  core and a file's suggested next step: their panels show them, a new one replaces the last) and none untouched past keep_hours
+ *  (chatSince, so a handed question whose result came back stays; the server archives it with its next look); one still
+ *  answering, or an A2A task its owner still holds, always */
 export function listedChats(convs, keepHours, nowMs) {
   const cutoff = keepHours > 0 && Number.isFinite(nowMs) ? nowMs - keepHours * 3600000 : null
   return (convs ?? []).filter(x => !x.place && (x.running || x.turns?.at(-1)?.waiting || cutoff == null
-    || (x.last_ms ?? x.started_ms) >= cutoff))
+    || chatSince(x) >= cutoff))
 }
 
 export function roomsOf(s) {
@@ -773,7 +874,7 @@ export const TOAST_MAX = 4
 
 /** What a pushed note does to `{ notes, toasts, toastsMore }`: a new note and, unless `toast` is false, a
  * toast with `id`. Four stay up; one pushed out is counted in `toastsMore`, never lost without a word (the
- * notes drawer keeps it), and named in `out`, so its timer stops. The oldest toast without an action goes
+ * notes in the history keep it), and named in `out`, so its timer stops. The oldest toast without an action goes
  * first, so an Undo stays within its few seconds; only when every one has an action does the oldest go. A
  * note a visible toast already shows changes neither and comes back with `dup` set, so the caller can hand
  * a twin's action and target to that toast (giveTwin). Its `go` is kept only as noteGo takes it. */
@@ -810,9 +911,21 @@ export function dismissState({ toasts, toastsMore = 0 }, id) {
   return { toasts: left, toastsMore: left.length ? toastsMore : 0 }
 }
 
-/** The notes drawer opened from the "+N more" toast: the count goes, the toasts still up stay */
+/** The notes in the history opened from the "+N more" toast: the count goes, the toasts still up stay */
 export function notesOpenedState() {
   return { toastsMore: 0 }
+}
+
+/** Whether a tab alert makes a toast or only a note in the history: a tab that starts waiting toasts while it is out
+ *  of sight, not while its tab view is open or the Chat shows it in its work area (no tab view over it); a tab past
+ *  the hour always toasts */
+export function alertToasts(s, alert) {
+  if (alert?.kind !== 'tab_waiting') return true
+  const ui = s?.ui ?? {}
+  const ref = alert.ref
+  if (!ref) return true
+  if (ui.tabView) return ui.tabView !== ref
+  return !(ui.page === '@chat' && ui.chatArea !== 'a2a' && ui.room?.kind === 'tab' && ui.room.id === ref)
 }
 
 /** Insert or replace a relay record by id; newest first */
@@ -950,11 +1063,11 @@ export function detailNeedsLoad(entry, ver) {
   return !!entry.stale || entry.ver !== ver
 }
 
-/** Marks the details of a row's inbox entry and task as stale (after an action on that row) */
+/** Marks the details of a row's inbox entry, task and Activity (Work through) as stale (after an action on that row) */
 export function invalidateDetails(details, row) {
   if (!row || (!row.inbox_id && !row.task)) return details
-  const mark = (table, id) => (id && table[id] ? { ...table, [id]: { ...table[id], stale: true } } : table)
-  return { ...details, inbox: mark(details.inbox, row.inbox_id), task: mark(details.task, row.task) }
+  const mark = (table, id) => (id && table?.[id] ? { ...table, [id]: { ...table[id], stale: true } } : table ?? {})
+  return { ...details, inbox: mark(details.inbox, row.inbox_id), task: mark(details.task, row.task), activity: mark(details.activity, row.key) }
 }
 
 /** The "more" lists fetched for the run the model shows; one from an older run would freeze the section */
@@ -1173,13 +1286,149 @@ export function screenLines(text) {
 
 // ---------------------------------------------------------------- workers tab (workload view --json)
 
+// red is an outage (gone, switched off, stopped, its last run failed), orange the upkeep a declaration and its machine
+// drift into; the same table as STATE_TONE in scripts/bridge-resources.py
 const WORKER_TONE = { in_sync: 'ok', observed: 'ok', intentionally_absent: 'dim', 'not reported': 'dim', not_provisioned: 'dim', absent: 'bad', disabled: 'bad',
-  drifted: 'warn', inventory_missing: 'warn', source_drift: 'warn', inventory_stale: 'warn' }
+  stopped: 'bad', last_run_failed: 'bad', drifted: 'warn', inventory_missing: 'warn', source_drift: 'warn', inventory_stale: 'warn' }
 
 /** A run's state as a tone: ok, warn, bad, dim; anything unknown is warn, never silently ok */
 export function workerTone(run) {
-  if (run?.retired) return 'dim'
+  // a finding marked seen (`acked`, server.py workers_with_acks) is grey until it changes
+  if (run?.retired || run?.acked) return 'dim'
   return WORKER_TONE[run?.state] ?? (run?.state ? 'warn' : 'ok')
+}
+
+/** The severity of a run's worst finding as the engine files it (high, medium, info), or null: the run's own
+ *  `severity` where the view names one, else read off its findings */
+export function jobSeverity(run) {
+  // seen as it stands: no outage and no upkeep, so no red tile, no badge and no alarm count it
+  if (run?.acked) return 'info'
+  if (typeof run?.severity === 'string' && run.severity && run.severity !== 'none') return run.severity
+  const sev = (run?.findings ?? []).map(f => f?.severity)
+  return ['high', 'medium', 'info'].find(x => sev.includes(x)) ?? null
+}
+
+/** The background jobs in service by what they want: `failing` an outage (the engine's high: gone, stopped, its last
+ *  run failed), `upkeep` a deviation to tend (medium: a unit without its marker, a program outside the repository),
+ *  `ok` the rest of `all`. Only an outage is loud wherever the cockpit counts jobs; upkeep stays calm */
+export function jobCounts(view) {
+  const runs = (view?.runs ?? []).filter(r => !r.retired)
+  const failing = runs.filter(r => jobSeverity(r) === 'high').length
+  const upkeep = runs.filter(r => jobSeverity(r) === 'medium').length
+  const all = view?.stats?.in_service ?? runs.length
+  return { all, failing, upkeep, ok: Math.max(0, all - failing - upkeep) }
+}
+
+// worst first: an outage, then upkeep, then the rest (jobSeverity)
+const SEVERITY_RANK = { high: 0, medium: 1 }
+const severityRank = run => SEVERITY_RANK[jobSeverity(run)] ?? 2
+
+/** When a run ran last and starts next, in ms or null: the last of its recorded runs, and its next start today, read
+ *  off its schedule: an `at HH:MM` still to come on a day its marks say it is due, or `every Ns` after the last run */
+export function runTimes(run, now) {
+  const stamp = Date.parse((run?.strip ?? []).at(-1)?.at ?? run?.day?.trace_at ?? '')
+  const last = Number.isFinite(stamp) ? stamp : null
+  const when = String(run?.when ?? '')
+  const every = when.match(/^every (\d+)s$/)
+  if (every) {
+    const next = last == null ? null : last + Number(every[1]) * 1000
+    return { last, next: next != null && next >= now ? next : null }
+  }
+  if (!(run?.day?.marks ?? []).some(m => m.today)) return { last, next: null }
+  const day = new Date(now)
+  const starts = [...when.matchAll(/\bat (\d\d):(\d\d)\b/g)]
+    .map(m => new Date(day.getFullYear(), day.getMonth(), day.getDate(), Number(m[1]), Number(m[2])).getTime())
+  return { last, next: starts.filter(x => x > now).sort((a, b) => a - b)[0] ?? null }
+}
+
+/** The newest quick chat a row was asked in: the conversation whose `about.key` (quick.py) is the row's key, a job's
+ *  worker:<host>:<id> or a page row's item:<page>/<section>/<id>; null when the row was never asked */
+export function rowConv(convs, key) {
+  if (!key) return null
+  return (convs ?? []).filter(c => c?.about?.key === key)
+    .sort((a, b) => (b.last_ms ?? b.started_ms ?? 0) - (a.last_ms ?? a.started_ms ?? 0))[0] ?? null
+}
+
+/** The background jobs by machine: the always-on machines first (`hosts`, the ones the view was drawn for), then
+ *  those with an outage, then the most jobs. Inside a machine its systems (groupBySystem), those with an outage
+ *  first, then those with upkeep, each run worst first */
+export function groupByHost(runs, { hosts = [], systems = [] } = {}) {
+  const byHost = new Map()
+  for (const r of runs ?? []) {
+    const host = r.host || '?'
+    if (!byHost.has(host)) byHost.set(host, [])
+    byHost.get(host).push(r)
+  }
+  const out = [...byHost].map(([host, list]) => {
+    const sorted = [...list].sort((a, b) => severityRank(a) - severityRank(b))
+    const groups = groupBySystem(sorted, systems).map((g, i) => ({ g, i, rank: Math.min(...g.runs.map(severityRank)) }))
+      .sort((a, b) => a.rank - b.rank || a.i - b.i).map(x => x.g)
+    return { host, always: (hosts ?? []).includes(host), runs: sorted, groups,
+      failing: list.filter(r => jobSeverity(r) === 'high').length, upkeep: list.filter(r => jobSeverity(r) === 'medium').length }
+  })
+  return out.sort((a, b) => b.always - a.always || b.failing - a.failing || b.runs.length - a.runs.length || a.host.localeCompare(b.host))
+}
+
+/** The source id of a page item: `id` where a row has one, else the end of its key (collector.info_out sends
+ *  `key` item:<page>/<section>/<id> and `row_id`, never `id`) */
+function sourceId(it, page, sec) {
+  if (typeof it?.id === 'string') return it.id
+  const head = `item:${page?.id}/${sec?.id}/`
+  const key = String(it?.key ?? '')
+  return key.startsWith(head) ? key.slice(head.length) : typeof it?.row_id === 'string' ? it.row_id : ''
+}
+
+/** The machine a row of another page names: its tag Remote, its id pc:<name>, else its title */
+const rowMachine = (it, id) => String(it?.tags?.Remote ?? (id.startsWith('pc:') ? id.slice(3) : it?.title ?? '')).toLowerCase()
+
+/** A machine's state without its device word (bridge-resources.py machines leads with it, the tags say it already) */
+function machineState(it) {
+  const parts = String(it?.detail ?? '').split(' · ')
+  const device = Object.values(it?.tags ?? {}).map(v => String(v).toLowerCase())
+  return (parts.length > 1 && device.includes(parts[0].toLowerCase()) ? parts.slice(1) : parts).join(' · ')
+}
+
+/** The machines of a folder's overview, one line each: every machine a background job runs on and every machine
+ *  a page of the folder names in a row of its own (a lab's remote). A row `machine:<name>` (bridge-resources.py
+ *  machines, its source id read by sourceId) gives a machine its state and makes it known; a row of another page
+ *  that names a known machine (its tag Remote, its id pc:<name>, else its title) puts the machine on that page
+ *  (`places`). The always-on machines first, then those with an outage, the most jobs */
+export function machineLines({ runs = [], hosts = [], pages = [] } = {}) {
+  const live = (runs ?? []).filter(r => !r.retired && r.host)
+  const inventory = new Map()
+  const rows = []
+  for (const p of pages ?? []) {
+    for (const sec of p.sections ?? []) {
+      for (const it of sec.items ?? []) {
+        const id = sourceId(it, p, sec)
+        if (id.startsWith('machine:')) inventory.set((id.slice(8) || String(it.title ?? '')).toLowerCase(), it)
+        else {
+          const name = rowMachine(it, id)
+          if (name) rows.push({ name, page: p, it })
+        }
+      }
+    }
+  }
+  const lines = new Map()
+  const line = name => {
+    const key = name.toLowerCase()
+    if (!lines.has(key)) lines.set(key, { name, runs: [], places: [] })
+    return lines.get(key)
+  }
+  for (const r of live) line(r.host).runs.push(r)
+  for (const { name, page, it } of rows) {
+    if (!lines.has(name) && !inventory.has(name)) continue
+    const x = line(lines.get(name)?.name ?? inventory.get(name).title ?? name)
+    if (!x.places.some(p => p.page === page.id)) x.places.push({ page: page.id, title: page.title, tone: it.tone ?? null, state: it.detail ?? '' })
+  }
+  const always = new Set((hosts ?? []).map(h => String(h).toLowerCase()))
+  return [...lines.values()].map(x => {
+    const inv = inventory.get(x.name.toLowerCase())
+    const failing = x.runs.filter(r => jobSeverity(r) === 'high').length
+    return { name: x.name, always: always.has(x.name.toLowerCase()), jobs: x.runs.length, failing,
+      upkeep: x.runs.filter(r => jobSeverity(r) === 'medium').length, state: inv ? machineState(inv) : '',
+      tone: failing ? 'bad' : inv?.tone ?? null, places: x.places }
+  }).sort((a, b) => b.always - a.always || b.failing - a.failing || b.jobs - a.jobs || a.name.localeCompare(b.name))
 }
 
 /** How a recorded run is drawn: a shape and a tone, never colour alone */
@@ -1201,13 +1450,21 @@ export function workerFacets(runs, filter = {}) {
   return out
 }
 
-/** Search, facets and "only with a finding" */
-export function filterWorkers(runs, { q = '', kind = null, sphere = null, state = null, host = null, attention = false } = {}) {
+// the words a background job answers to beside its own: its kind in both languages, and the words a person uses for
+// them (every job is a worker, a scheduled or interval run a workflow)
+const JOB_WORDS = { interval: 'interval intervall workflow', daemon: 'service dienst daemon', recurring: 'appointment termin scheduled geplant workflow',
+  agent: 'agent', watch: 'watcher beobachter' }
+const jobWords = r => `worker job hintergrundjob ${JOB_WORDS[r.kind] ?? ''}`
+
+/** Search (its id, title, purpose, system, and the words of its kind, jobWords), facets and "only with a finding" */
+export function filterWorkers(runs, { q = '', kind = null, sphere = null, state = null, host = null, attention = false, outage = false } = {}) {
   const needle = q.trim().toLowerCase()
   return (runs ?? []).filter(r => (!kind || r.kind === kind) && (!sphere || r.sphere === sphere)
     && (!state || r.state === state) && (!host || r.host === host)
-    && (!attention || (r.findings ?? []).some(serious))
-    && (!needle || `${r.id} ${r.title ?? ''} ${r.purpose ?? ''} ${r.system ?? ''}`.toLowerCase().includes(needle)))
+    && (!attention || (!r.acked && (r.findings ?? []).some(serious)))
+    // an outage as jobCounts counts it (the engine's high), what the red tile of Background jobs opens on
+    && (!outage || jobSeverity(r) === 'high')
+    && (!needle || `${r.id} ${r.title ?? ''} ${r.purpose ?? ''} ${r.system ?? ''} ${jobWords(r)}`.toLowerCase().includes(needle)))
 }
 
 /** Runs grouped by system in the order the view lists its systems, the rest after them */
@@ -1477,17 +1734,61 @@ export function railShown(page, chatLayout = 'classic', hidden = false) {
   return !hidden && RAIL.has(page) && !(page === '@chat' && chatLayout === 'workspaces')
 }
 
+/** railShown for the state as it is: Work through (a view of the work tab) has its own columns, the details of
+ *  the point in front on the right, so the tab column folds there too */
+export function railOn(s, hidden = s?.ui?.railHidden) {
+  return railShown(s?.ui?.page, s?.rooms?.layout, hidden) && !(s?.ui?.page === 'briefing' && workViewIn(s) === 'flow')
+}
+
+/** Whether a tab may close (round 6d): it neither works nor asks (waiting at its prompt with no question, options
+ *  or draft read off its screen, asksSomething, or back at its shell; a settled one asks nothing any more, as the server's quiet rule has
+ *  it), it is no control tab, and the driver closes tabs; `can(right)` as canTab. The server holds the same rule
+ *  (actions_tabs.py closable) */
+export function tabCloses(tab, can, settled = false) {
+  return !!tab && !tab.is_control && (tab.state === 'waiting' || tab.state === 'shell') && !(asksSomething(tab.ask) && !settled && !tab.settled)
+    && can('close')
+}
+
+/** Where a waiting tab stands, in one line for its entry under Waiting for you (round 6d C2): its workspace, then the
+ *  first line of what it asks, else its last words; two tabs of one name (two "Claude Code") tell apart by it */
+export function waitLage(tab) {
+  const line = previewText(String(tab?.ask?.text ?? '').split('\n').find(x => x.trim()) ?? '') || previewText(tab?.last)
+  return [tab?.workspace, line].filter(Boolean).join(' · ')
+}
+
+/** Whether the words read off a waiting tab's screen ask anything (model.py asks_something): a question (yes or no,
+ *  a question mark at the end), options, or a draft in its prompt. Every waiting tab has its last words read, so
+ *  words alone ask nothing; a tab that said it is done closes */
+export function asksSomething(ask) {
+  return !!ask && !!(ask.yes_no || ask.options?.length || ask.draft || /\?\s*$/.test(ask.text ?? ''))
+}
+
+/** The close of a tab wherever a point or a card has one (views/detail.js TabClose), null where it may not close
+ *  (tabCloses). `done`: an open task or inbox item stands behind it (the server's `behind`), so Done and close the
+ *  tab leads and Close tab only stands beside it; `unseen`: something came back from it (it filed a row, or a start
+ *  of it holds a result) and nothing behind it is settled yet (its item closed, its task done, here or by its start),
+ *  so a close asks first; `keys` the row keys of what stands behind it */
+export function tabCloseOffer(tab, s) {
+  const settled = !!tab?.settled || (!!tab && settledRefs(s?.model?.returns, s?.tabs?.tabs, s?.now || Date.now()).has(tab.ref))
+  if (!tabCloses(tab, v => canTab(s, v), settled)) return null
+  const keys = [tab.behind?.task ? `task:${tab.behind.task}` : null, tab.behind?.item ? `inbox:${tab.behind.item}` : null].filter(Boolean)
+  const back = !!tab.filed_by || (s?.model?.returns ?? []).some(r => r.tab?.ref === tab.ref && r.result?.text)
+  return { done: keys.length > 0, unseen: back && !settled, keys }
+}
+
 /** The one next step a slim tab card offers, as action keys: answer a question, go on, close a tab
  *  that filed its result or whose start is settled, else go to the tab; `can(right)` says what this cockpit
- *  may do with a tab (canTab) */
+ *  may do with a tab (canTab). Round 6d: a tab that may close (tabCloses) offers the close beside going on or
+ *  going to it, so `close` stands for the one close of every place (views/detail.js TabClose) */
 export function tabNextStep(tab, can, settled = false) {
   const own = !tab.is_control
   const finished = !!tab.filed_by || settled
+  const closes = tabCloses(tab, can, settled)
   if (tab.state === 'needs-you' && can('key')) return ['yes', 'no']
-  if (tab.state === 'waiting' && own && finished && can('close')) return ['close']
-  if (tab.state === 'waiting' && own && !tab.filed_by) return ['go_on']
-  if (can('focus')) return ['jump']
-  return can('screen') ? ['view'] : []
+  if (tab.state === 'waiting' && own && finished && closes) return ['close']
+  if (tab.state === 'waiting' && own && !tab.filed_by) return closes ? ['go_on', 'close'] : ['go_on']
+  const way = can('focus') ? ['jump'] : can('screen') ? ['view'] : []
+  return closes ? [...way, 'close'] : way
 }
 
 /** The time a page section names beside its title: only when its source measured at another time than
@@ -1535,6 +1836,57 @@ export function sectionTile(section) {
   return { count, loud: loud.length, tone, note: loud[0]?.title ?? null, peak, counts, state: 'ok' }
 }
 
+/** The tile of a sub page on the page it stands under (`under:`): red with its findings (a section drawn only with a
+ *  finding counts too), red with the reason of a source that could not be read, orange with the rows that need a look
+ *  (one by its title, several by how many and the sections they stand in, `warnIn`: a log line's title alone reads
+ *  cryptic on a tile); else the size of its first drawn section and how those rows stand. Green only where an alarm section of the page
+ *  reports nothing: rows nothing measures live (a device outside the tailnet, an account) never make it look in order */
+export function subPageTile(page) {
+  const sections = page?.sections ?? []
+  const items = sections.flatMap(sec => sec.items ?? [])
+  const lead = sections.find(sec => !sec.hide_ok) ?? sections[0] ?? null
+  const rows = lead?.items ?? []
+  const base = { big: lead?.total ?? lead?.count ?? rows.length, lead: lead?.title ?? '', note: null, error: false, warnIn: null,
+    counts: { ok: rows.filter(toneFilter('ok')).length, problems: rows.filter(toneFilter('problems')).length, off: rows.filter(toneFilter('off')).length } }
+  const bad = sections.reduce((n, sec) => n + (typeof sec.bad === 'number' ? sec.bad : (sec.items ?? []).filter(it => it.tone === 'bad').length), 0)
+  if (bad) return { ...base, tone: 'danger', big: bad, note: items.find(it => it.tone === 'bad')?.title ?? null }
+  const broken = sections.find(sec => sec.status === 'error')
+  if (broken) return { ...base, tone: 'danger', note: broken.reason || broken.title || '', error: true }
+  const warn = items.filter(it => it.tone === 'warn')
+  if (warn.length > 1) {
+    const where = [...new Set(sections.filter(sec => (sec.items ?? []).some(it => it.tone === 'warn')).map(sec => sec.title).filter(Boolean))]
+    return { ...base, tone: 'warning', big: warn.length, warnIn: where }
+  }
+  if (warn.length) return { ...base, tone: 'warning', big: 1, note: warn[0].title ?? null }
+  const clear = sections.some(sec => sec.alarm && sec.status === 'ok' && !(sec.total ?? sec.count ?? (sec.items ?? []).length))
+  return { ...base, tone: clear ? 'success' : 'neutral' }
+}
+
+/** The head card of a sub page with `overview: true`: one line per drawn section, its tone and what to say (`kind`:
+ *  error, skipped, loud with how many and the first, peak, gauges, empty, one row's title, or rows in order and off),
+ *  never the live sources of the folder's own overview (jobs, tokens, costs). Neighbours that say the same of their
+ *  one row (a lab at rest) fold into one line */
+export function pageSummary(page) {
+  const out = []
+  for (const sec of page?.sections ?? []) {
+    const x = sectionTile(sec)
+    if (sec.hide_empty && !x.count && x.state === 'ok') continue
+    if (sec.hide_ok && !sec.bad && x.state !== 'error') continue
+    const rows = sec.items ?? []
+    const kind = x.state !== 'ok' ? x.state : x.loud ? 'loud' : x.peak ? 'peak' : x.counts ? 'gauges' : !x.count ? 'empty'
+      : rows.length === 1 ? 'one' : 'rows'
+    const line = { ids: [sec.id], titles: [sec.title], tone: x.tone, kind, section: sec, n: x.loud, note: x.note, peak: x.peak, gauges: x.counts,
+      text: kind === 'one' ? rows[0].title ?? '' : kind === 'empty' ? sec.empty ?? '' : '', detail: kind === 'one' ? rows[0].detail ?? '' : '',
+      counts: { ok: rows.filter(toneFilter('ok')).length, off: rows.filter(toneFilter('off')).length } }
+    const prev = out.at(-1)
+    if (kind === 'one' && prev?.kind === 'one' && prev.text === line.text && prev.tone === line.tone) {
+      prev.ids.push(sec.id)
+      prev.titles.push(sec.title)
+    } else out.push(line)
+  }
+  return out
+}
+
 export const USAGE_SOURCES = ['session', 'subagent', 'worker']
 
 /** Today's written tokens and the usual day (the mean of the earlier days with any use; null without one) */
@@ -1548,11 +1900,12 @@ export function usageToday(usage) {
 // ---------------------------------------------------------------- live cards on a page, stacked bars, cloud costs
 
 /** Where a page's live cards stand: `after` maps a section id to the cards right after it, `end` the cards at the
- *  end of the page. A page without `cards:` keeps what `overview: true` alone drew (usage and noise at the end);
+ *  end of the page. A page without `cards:` keeps what `overview: true` alone drew (usage and noise at the end),
+ *  but for a sub page (`under:` a folder), whose tokens and noise stand on the folder's overview already;
  *  a card after a section the page does not show goes to the end */
 export function cardPlan(page) {
   const cards = Array.isArray(page?.cards) ? page.cards
-    : page?.overview ? [{ id: 'usage', after: null }, { id: 'noise', after: null }] : []
+    : page?.overview && !page?.under ? [{ id: 'usage', after: null }, { id: 'noise', after: null }] : []
   const ids = new Set((page?.sections ?? []).map(sec => sec.id))
   const plan = { after: {}, end: [] }
   const seen = new Set()
@@ -1777,20 +2130,111 @@ export function workPageOf(pages) {
   return (pages ?? []).find(p => p?.group === 'work') ?? null
 }
 
-/** The views of the work tab: what is due (the four blocks) always, by source where a work page exists,
- *  by Jev where that page asks for an order and Jev is switched on and has its key, and the files (one task
- *  at a time, views/dossier.js) always, last: an extra view, the default only where cockpit.work_view says so */
-export function workViews(page, jev) {
-  return ['due', ...(page ? ['area'] : []), ...(page?.jev && jev?.enabled && jev?.ready ? ['jev'] : []), 'dossier']
+/** The views on offer: what is due (the four blocks) always, by source where a work page exists, by Jev where
+ *  that page asks for an order and Jev is switched on and has its key, the files (one task at a time,
+ *  views/dossier.js) always, and Work through (views/flow.js) last while cockpit.flow.enabled is on (`flow`): extra
+ *  views, the default only where cockpit.work_view says so. `allowed`, the words of cockpit.work_views (work_state
+ *  views), keeps only the views it names; nothing left, or an older server that sends none, keeps them all */
+function viewsOnOffer(page, jev, flow = false, allowed = null) {
+  const all = ['due', ...(page ? ['area'] : []), ...(page?.jev && jev?.enabled && jev?.ready ? ['jev'] : []), 'dossier', ...(flow ? ['flow'] : [])]
+  if (!Array.isArray(allowed)) return all
+  const ids = new Set(allowed.map(workViewId).filter(Boolean))
+  const kept = all.filter(v => ids.has(v))
+  return kept.length ? kept : all
 }
 
-/** The view the work tab shows: the remembered one where it can, else what is due */
-export function workViewOf(view, page, jev) {
-  return workViews(page, jev).includes(view) ? view : 'due'
+/** The views of the work tab: those on offer (viewsOnOffer) but the files, which are a tab of their own beside it
+ *  (round 6c, FILES_PAGE); where the list keeps only the files, what is due */
+export function workViews(page, jev, flow = false, allowed = null) {
+  const kept = viewsOnOffer(page, jev, flow, allowed).filter(v => v !== 'dossier')
+  return kept.length ? kept : ['due']
+}
+
+// the files tab (views/dossier.js): the records of the work system, searched first, beside the work tab
+export const FILES_PAGE = '@files'
+
+/** Whether the files tab stands in the bar: the files view is on offer (cockpit.work_views keeps it; this server
+ *  always does) */
+export function filesOn(s) {
+  return viewsOnOffer(workPageOf(s?.model?.pages), s?.jev, s?.work?.flow?.enabled === true, s?.work?.views ?? null).includes('dossier')
+}
+
+/** A work tab view 'dossier' a browser or the config (work_view: files) still names, now that the files are a tab of
+ *  their own: null for none, else {view, page}, the view the work tab shows instead (to keep) and the files tab where
+ *  the work tab was open */
+export function filesMoved(s) {
+  if (s?.ui?.workView !== 'dossier') return null
+  return { view: workViewIn(s), page: s.ui.page === 'briefing' && filesOn(s) ? FILES_PAGE : null }
+}
+
+/** The view the work tab shows: the remembered one (none remembered: what is due, as app.js loads it) where it can,
+ *  else Work through where it is on offer, else the first view kept */
+export function workViewOf(view, page, jev, flow = false, allowed = null) {
+  const views = workViews(page, jev, flow, allowed)
+  const want = view ?? 'due'
+  return views.includes(want) ? want : views.includes('flow') ? 'flow' : views[0]
+}
+
+/** The views of the work tab under the state: workViews with the work page, Jev, cockpit.flow.enabled and
+ *  cockpit.work_views of `s` */
+export function workViewsIn(s) {
+  return workViews(workPageOf(s?.model?.pages), s?.jev, s?.work?.flow?.enabled === true, s?.work?.views ?? null)
+}
+
+/** The view of the work tab under the state: workViewOf with the work page, Jev, cockpit.flow.enabled and
+ *  cockpit.work_views of `s` */
+export function workViewIn(s) {
+  return workViewOf(s?.ui?.workView, workPageOf(s?.model?.pages), s?.jev, s?.work?.flow?.enabled === true, s?.work?.views ?? null)
+}
+
+/** Where a way that names a view of the work tab (a jump to the work page, to Jev, to the task check, a click on
+ *  the switch) lands under the state: {view, save}, the view itself where it is on offer and to be kept as the
+ *  tab's view, else the view the tab falls back to (workViewOf), never kept, so a view switched off is not stored */
+export function workViewGo(s, view) {
+  const on = workViewsIn(s).includes(view)
+  return { view: on ? view : workViewIn({ ...s, ui: { ...s?.ui, workView: view } }), save: on }
+}
+
+/** Whether the live sessions stand in Running now of Work through rather than on a tab of their own (round 6): the
+ *  work tab offers Work through (cockpit.flow.enabled, kept by cockpit.work_views), whose Running now lists every
+ *  live session as a card, with a terminal driver or without one. Then the bar has no Sessions tab and every way to
+ *  it leads there (flowPageFor); a Bridge without Work through keeps the tab */
+export function sessionsInFlow(s) {
+  return workViews(workPageOf(s?.model?.pages), s?.jev, s?.work?.flow?.enabled === true, s?.work?.views ?? null).includes('flow')
+}
+
+/** Whether the task check stands in Work through rather than on a tab of its own (round 6 c): the same rule as the
+ *  sessions (sessionsInFlow), the work tab offers Work through. Then its row stands under Not now and every way to the
+ *  check leads there (flowPageFor); a Bridge without Work through keeps the tab, or the check's place on a page */
+export function checkInFlow(s) {
+  return sessionsInFlow(s)
+}
+
+// the verdicts that want a decision (close, stale; verdictToken): waiting, unclear and continue only say how it stands
+const DECIDE_VERDICTS = new Set(['close', 'stale'])
+
+/** How many decisions the last task check left open: the tasks it judged that are still open, whose verdict wants a
+ *  decision (close or stale) and that nobody kept as they are (the count on the row of Work through) */
+export function checkOpen(model) {
+  const byKey = indexRows(model)
+  return (model?.review?.keys ?? []).map(k => byKey.get(k))
+    .filter(r => r?.review && !r.review.kept && DECIDE_VERDICTS.has(r.review.verdict)).length
+}
+
+/** Where a page id leads that is a view now: the Work through page (@flow, a stored page or a link of an older
+ *  page) is the work tab in its view Work through; the Sessions page (@sessions) is its Running now (flowView
+ *  running) where that lists the live sessions (sessionsInFlow of `s`), so every way to the tab lands there: a
+ *  link, a note, the band, the tour, an area's number, a page stored by an older cockpit; the task check's page
+ *  (@check) is its Check tasks (flowView check) the same way (checkInFlow). Null for every other id */
+export function flowPageFor(id, s = null) {
+  if (id === '@flow') return { page: 'briefing', view: 'flow' }
+  if (id === '@sessions' && sessionsInFlow(s)) return { page: 'briefing', view: 'flow', flowView: 'running' }
+  if (id === '@check' && checkInFlow(s)) return { page: 'briefing', view: 'flow', flowView: 'check' }
+  return null
 }
 
 // cockpit.work_view names a view by the word the docs use; the page has its own ids for them
-const WORK_VIEW_IDS = { due: 'due', source: 'area', jev: 'jev', files: 'dossier' }
+const WORK_VIEW_IDS = { due: 'due', source: 'area', jev: 'jev', files: 'dossier', flow: 'flow' }
 
 /** The view id a word of cockpit.work_view names, or null for anything else */
 export function workViewId(word) {
@@ -1864,11 +2308,15 @@ export function workKinds(sections, kinds) {
 }
 
 /** Where the task check stands when inbox and tasks share a page: that page and the label of its tasks
- *  section ({page, label}), else null and the check keeps a tab of its own */
-export function reviewHome(pages, kinds) {
+ *  section ({page, label}), else null and the check keeps a tab of its own. `views`, the views of the work tab
+ *  on offer (workViewsIn): the work page is the check's place only while By source (`area`) is among them; where
+ *  Work through (`flow`) is among them, no page is (round 6 c: the check stands in Work through, checkInFlow) */
+export function reviewHome(pages, kinds, views = null) {
+  if (Array.isArray(views) && views.includes('flow')) return null
   for (const p of pages ?? []) {
     const tasks = (p.sections ?? []).find(sec => sec.kind === 'tasks')
-    if (tasks && workKinds(p.sections, kinds).length) return { page: p.id, label: workLabel(tasks, kinds) }
+    if (!tasks || !workKinds(p.sections, kinds).length) continue
+    return p.group === 'work' && Array.isArray(views) && !views.includes('area') ? null : { page: p.id, label: workLabel(tasks, kinds) }
   }
   return null
 }
@@ -2152,7 +2600,8 @@ export function homeCatalog(model, { workers = true } = {}) {
   for (const id of ['c:waiting', 'c:returns', 'c:tabs', 'c:agents', 'c:workers', 'c:next', 'c:done']) {
     if (id !== 'c:workers' || workers) out.push({ id, kind: 'count' })
   }
-  for (const p of model?.pages ?? []) out.push({ id: `p:${p.id}`, kind: 'page', label: p.title, page: p })
+  // a page of the settings group (the Setup page) is no page of its own: it stands in Settings, Setup
+  for (const p of model?.pages ?? []) if (p.group !== 'settings') out.push({ id: `p:${p.id}`, kind: 'page', label: p.title, page: p })
   for (const x of HOME_SHELVES) out.push({ id: `s:${x}`, kind: 'shelf' })
   for (const x of HOME_OPTIONS) out.push({ id: `o:${x}`, kind: 'option' })
   for (const x of HOME_CORE) out.push({ id: `k:${x}`, kind: 'core' })
@@ -2435,22 +2884,26 @@ export function speechError(code) {
 export const RETURN_STAGES = ['started', 'working', 'asks', 'result', 'done']
 
 /** Where a start stands now: the server knows the answer and the close; the tab's state the page sees itself,
- *  so a tab that just began to wait shows at once, not with the next collection */
+ *  so a tab that just began to wait shows at once, not with the next collection. A still tab asks unless the
+ *  server read its screen and found no question (`idle`); a dialog (needs-you) always asks */
 export function liveStage(r, tabs, nowMs) {
   if (r.stage === 'result' || r.stage === 'done') return r.stage
   const mine = (tabs ?? []).filter(t => !t.is_control && (t.ref === r.tab?.ref || t.slug === r.item || t.item === r.item))
-  if (mine.some(t => t.state !== 'working')) return 'asks'
+  // a question it left on its item (returns.py `asks`) stands without a tab too, until its tab works again
+  if (r.result?.asks && !mine.some(t => t.state === 'working')) return 'asks'
+  if (mine.some(t => t.state !== 'working')) return r.stage === 'idle' && !mine.some(t => t.state === 'needs-you') ? 'idle' : 'asks'
   if (mine.length) return 'working'
   return nowMs - r.at_ms < 180000 ? 'started' : 'lost'
 }
 
-/** The starts handed to the AI by what they want of you: done or answered and to check, a question, at
- *  work, or gone without a word. Newest first within a group, as the server sends them */
+/** The starts handed to the AI by what they want of you: answered or gone quiet and to check, settled (done:
+ *  nothing left to check, at most a tab to close), a question, at work, or gone without a word. Newest first
+ *  within a group, as the server sends them */
 export function aiGroups(returns, tabs, nowMs) {
-  const g = { check: [], asks: [], working: [], lost: [] }
+  const g = { check: [], done: [], asks: [], working: [], lost: [] }
   for (const r of returns ?? []) {
     const live = liveStage(r, tabs, nowMs)
-    const to = live === 'done' || live === 'result' ? 'check' : live === 'asks' ? 'asks' : live === 'lost' ? 'lost' : 'working'
+    const to = live === 'result' || live === 'idle' ? 'check' : live === 'done' ? 'done' : live === 'asks' ? 'asks' : live === 'lost' ? 'lost' : 'working'
     g[to].push({ ...r, live })
   }
   return g
@@ -2462,18 +2915,19 @@ export function settledRefs(returns, tabs, nowMs) {
   return new Set((returns ?? []).filter(r => r.tab?.ref && open.has(r.tab.ref) && liveStage(r, tabs, nowMs) === 'done').map(r => r.tab.ref))
 }
 
-/** What the AI left for you: checks whose tab is still open, tabs settled on their own, and the questions */
+/** What the AI left for you: checks and settled starts whose tab is still open, tabs settled on their own, and
+ *  the questions */
 export function aiWaiting(returns, tabs, nowMs) {
   const g = aiGroups(returns, tabs, nowMs)
   const open = new Set((tabs ?? []).map(t => t.ref))
-  const done = new Set(g.check.filter(r => r.tab?.ref && open.has(r.tab.ref)).map(r => r.tab.ref))
+  const done = new Set([...g.check, ...g.done].filter(r => r.tab?.ref && open.has(r.tab.ref)).map(r => r.tab.ref))
   for (const t of tabs ?? []) if (t.settled && t.state === 'waiting' && !t.is_control) done.add(t.ref)
   return done.size + g.asks.length
 }
 
 /** The tone of a stage: an answer is good news, a question waits on you, work runs, a lost start is red */
 export function stageTone(stage) {
-  return { started: 'info', working: 'info', asks: 'warning', result: 'success', done: 'success', lost: 'danger' }[stage] ?? 'muted'
+  return { started: 'info', working: 'info', asks: 'warning', idle: 'muted', result: 'success', done: 'success', lost: 'danger' }[stage] ?? 'muted'
 }
 
 /** What happened between two states of the page, for the live feed: rows that came and went, a row turned
@@ -2721,35 +3175,31 @@ export function askContext(s, lang = 'de') {
   return out.length <= CONTEXT_MAX ? out : ''
 }
 
-// ---------------------------------------------------------------- the chat's one input: where Enter goes
-
-/** Where a text typed into the chat goes: `quick` (a read-only answer here) or `tab` (an agent tab that may
- *  act), and why: a leading ? or ! (`prefix`, stripped), the first words (`words`: a trailing ? or a
- *  question word asks, an order word starts a tab, in English and German), or `default` (unclear asks).
- *  The word lists are language data in text.js (route) */
-export function routeOf(raw) {
-  const text = String(raw ?? '').trim()
-  if (text.startsWith('?')) return { to: 'quick', by: 'prefix', text: text.slice(1).trim() }
-  if (text.startsWith('!')) return { to: 'tab', by: 'prefix', text: text.slice(1).trim() }
-  const lists = key => Object.values(TABLES).flatMap(t => t.route?.[key] ?? []).map(w => w.toLowerCase())
-  const filler = new Set(lists('fillerWords'))
-  let words = text.toLowerCase().replace(/[.,:;!?]+/g, ' ').split(/\s+/).filter(Boolean)
-  while (words.length > 1 && filler.has(words[0])) words = words.slice(1)
-  // a list entry of two words matches the first two, or its first word alone (German puts the particle last:
-  // "leg eine Aufgabe an")
-  const hit = list => list.some(w => w === words[0] || w === words.slice(0, 2).join(' ') || (w.includes(' ') && w.split(' ')[0] === words[0]))
-  if (text.endsWith('?') || hit(lists('questionWords'))) return { to: 'quick', by: 'words', text }
-  if (hit(lists('orderWords'))) return { to: 'tab', by: 'words', text }
-  return { to: 'quick', by: 'default', text }
-}
+// ---------------------------------------------------------------- the status line of a chat handed on
 
 const HANDOFF_FAILED = new Set(['failed', 'partly', 'aborted', 'error', 'rejected'])
+// the launch outcomes after which a tab works on what it was handed
+const TAB_LIVE = new Set(['started', 'running', 'busy'])
+// the head of a note on an item, which the status line names in its own words
+const NOTE_HEAD_RE = /^\s*(?:Result|Ergebnis|Question|Frage)\s*:\s*/i
+// how long a start without a tab counts as starting (returns.py GRACE_MS, liveStage): later, its tab is gone
+const START_GRACE_MS = 180000
+// how many days of archived questions the Chat's "all of the last days" reads (GET /api/chats/archive)
+export const ASK_ARCHIVE_DAYS = 7
+
+/** A tab start handed on whose tab is gone: no tab carries its item, and its grace is over. A record without
+ *  its time cannot tell, so it is not gone */
+const tabGone = (handed, tab, nowMs) => !tab && TAB_LIVE.has(handed.status) && typeof handed.at_ms === 'number'
+  && nowMs - handed.at_ms >= START_GRACE_MS
 
 /** The status line of a chat that was handed on (quick.py `handed`, or the page's own record of a chat_tab
  *  reply): `word` is a key of text.js handoff, `tone` a state token, `action` what a button beside it does
  *  (retry, jump to the tab, ask_via_tab). The control route reads its relay record; the tab route finds the
- *  tab that carries the inbox item. null without a record */
-export function handoffStatus(handed, relayRecords, tabs) {
+ *  tab that carries the inbox item, and once something came back from that item (askOutcome of
+ *  `handed.outcome`, quick.py handoff_outcome) says it: its question, its result, or a close without a word.
+ *  A tab that waits on you before anything came back says that; a start whose tab is gone with nothing back says
+ *  that too (`gone`, as Work's "Tab gone"), with a new start and its item (`item`). null without a record */
+export function handoffStatus(handed, relayRecords, tabs, nowMs = Date.now()) {
   if (!handed?.status) return null
   const out = (word, tone, action = null, extra = {}) => ({ word, tone, action, ...extra })
   if (handed.status === 'starting') return out('starting', 'info')
@@ -2769,13 +3219,206 @@ export function handoffStatus(handed, relayRecords, tabs) {
     return out('failed', 'danger', 'retry')
   }
   const tab = handed.inbox_id ? (tabs ?? []).find(t => t?.item === handed.inbox_id) : null
-  if (tab && ['started', 'running', 'busy'].includes(handed.status)) return out('inTab', 'success', 'jump', { ref: tab.ref, tab: tab.name })
+  const jump = tab ? ['jump', { ref: tab.ref, tab: tab.name }] : [null, {}]
+  const back = askOutcome({ handed })
+  if (back) {
+    const said = { text: back.text ?? '', at_ms: back.at_ms }
+    if (back.asks) return out('asks', 'warning', jump[0], { ...jump[1], ...said })
+    if (said.text) return out('result', back.closed ? 'success' : 'info', jump[0], { ...jump[1], ...said })
+    if (back.closed) return out('closed', 'success', jump[0], { ...jump[1], ...said })
+  }
+  if (tab?.state === 'needs-you' && TAB_LIVE.has(handed.status)) return out('asksYou', 'warning', ...jump)
+  if (tab && TAB_LIVE.has(handed.status)) return out('inTab', 'success', ...jump)
+  if (tabGone(handed, tab, nowMs)) return out('gone', 'warning', 'retry', { item: handed.inbox_id ?? null })
   if (handed.status === 'started') return out('started', 'info')
   if (handed.status === 'running' || handed.status === 'busy') return out('running', 'info')
   if (handed.status === 'manual') return out('manual', 'warning')
   if (handed.status === 'nothing') return out('nothing', 'warning', 'retry')
   if (HANDOFF_FAILED.has(handed.status)) return out('failed', 'danger', 'retry')
   return out('failed', 'danger', 'retry')
+}
+
+// ---------------------------------------------------------------- questions found again (round 6d)
+
+/** What came back from the item a question was handed on as: quick.py handoff_outcome writes it onto the
+ *  conversation's `handed` record as { text, closed, at_ms, asks }. `text` without its head ("Result:",
+ *  "Question:"), null when the item closed without a word. null while nothing came back */
+export function askOutcome(conv) {
+  const raw = conv?.handed?.outcome
+  if (!raw || typeof raw !== 'object') return null
+  const text = String(raw.text ?? '').replace(NOTE_HEAD_RE, '').trim() || null
+  if (!text && !raw.closed && !raw.asks) return null
+  return { text, asks: raw.asks === true, closed: raw.closed === true, at_ms: raw.at_ms ?? null }
+}
+
+/** The marker of a handed question in every list: `asksYou` (its tab asks you, or came back with a question),
+ *  `done` (its item closed, or it came back while no tab works on it any more; `text` its outcome), `inTab`
+ *  (its tab took it and works), `gone` (its tab ended, or never came, and nothing came back); null for a question
+ *  never handed on, or one whose start failed. `ref` the tab that carries it, while there is one */
+export function askMark(conv, tabs, nowMs = Date.now()) {
+  const handed = conv?.handed
+  if (!handed || handed.to !== 'tab') return null
+  const tab = handed.inbox_id ? (tabs ?? []).find(t => t?.item === handed.inbox_id) ?? null : null
+  const outcome = askOutcome(conv)
+  const ref = tab?.ref ?? null
+  const live = TAB_LIVE.has(handed.status)
+  if (outcome?.asks || (!outcome && tab?.state === 'needs-you' && live)) return { word: 'asksYou', tone: 'warning', text: outcome?.text ?? null, ref }
+  if (outcome && (outcome.closed || !tab)) return { word: 'done', tone: 'success', text: outcome.text, ref }
+  if (!outcome && tabGone(handed, tab, nowMs)) return { word: 'gone', tone: 'warning', text: null, ref }
+  return live || outcome ? { word: 'inTab', tone: 'info', text: outcome?.text ?? null, ref } : null
+}
+
+/** "heute 07:34", "gestern 07:34", "20.10. 07:34": when a question was asked, for titles that read alike */
+export function askStamp(ms, nowMs, lang) {
+  if (typeof ms !== 'number' || !Number.isFinite(ms)) return ''
+  const w = (TABLES[lang] ?? TABLES.en).asks
+  const d = new Date(ms)
+  const hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`
+  if (isoDate(ms) === isoDate(nowMs)) return `${w.today} ${hm}`
+  if (isoDate(ms) === isoDate(nowMs - DAY)) return `${w.yesterday} ${hm}`
+  return chatStamp(ms, nowMs, lang)
+}
+
+const WORKER_KEY = /^worker:([^:]+):(.+)$/
+
+// the words a question about a job opens with (text.py ask_worker, both languages): its id, machine and state
+const WORKER_ASK = /^(?:Background job|Hintergrundjob) (\S+) (?:on|auf) ([^\s:]+): ([^.]{1,60})\./
+
+/** The day of a job's newest failure (its strip), short: 16.10. (de), 10/16 (en); null without one */
+function failedDay(run, lang) {
+  const at = (run?.strip ?? []).filter(e => e?.verdict === 'failed' || e?.verdict === 'expired').map(e => Date.parse(e.at))
+    .filter(Number.isFinite).sort((a, b) => b - a)[0]
+  if (at === undefined) return null
+  const d = new Date(at)
+  return String(lang).startsWith('de') ? `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.` : `${d.getMonth() + 1}/${d.getDate()}`
+}
+
+/** The title of a question: what it is about (a job with its machine, its state and the day of its failure, the
+ *  row or task it was asked on, the inbox item it became; a question about a job from before it carried that, by
+ *  its opening words), else its first sentence, or the title in guillemets a row's prompt carries, cut at a word */
+export function askTitle(conv, s, lang) {
+  const about = conv?.about && typeof conv.about === 'object' ? conv.about : {}
+  const said = WORKER_ASK.exec(String(conv?.turns?.[0]?.q ?? '').trim())
+  const job = WORKER_KEY.exec(about.key ?? '') ?? (said ? [null, said[2], said[1]] : null)
+  if (job) {
+    const [, host, id] = job
+    const run = (s?.workers?.data?.runs ?? []).find(r => r?.host === host && r?.id === id)
+    const state = run?.state ?? about.state
+    const words = (TABLES[lang] ?? TABLES.en).workerState ?? {}
+    const word = state ? words[state] ?? state : said && !about.key ? said[3].trim() : null
+    // the day only where the state is the failure (a job in order since keeps no old date)
+    const day = word && (state === 'last_run_failed' || !state) ? failedDay(run, lang) : null
+    return [run?.title || id, host, word && day ? `${word} ${day}` : word].filter(Boolean).join(' · ')
+  }
+  if (typeof about.title === 'string' && about.title.trim()) return short(about.title, 80)
+  const rows = indexRows(s?.model)
+  for (const key of [about.key, about.task && `task:${about.task}`, about.inbox && `inbox:${about.inbox}`]) {
+    const title = key ? rows.get(key)?.title : null
+    if (title) return short(title, 80)
+  }
+  const text = String(conv?.turns?.[0]?.q ?? '').replace(/\s+/g, ' ').trim()
+  const quoted = /«([^»]{3,})»/.exec(text)
+  return short(quoted ? quoted[1] : text.split(/(?<=[.!?])\s/)[0], 60)
+}
+
+/** The questions a list shows, each with its title, marker and whether it is open (answering, unanswered or
+ *  handed on): the open ones first, then the answered, the newest first in each. Titles that read alike carry
+ *  when they were asked */
+export function askList(convs, s, lang) {
+  const tabs = s?.tabs?.tabs
+  const out = (convs ?? []).map(conv => {
+    const mark = askMark(conv, tabs, s?.now || Date.now())
+    const last = conv.turns?.at(-1)
+    return { conv, title: askTitle(conv, s, lang), mark, open: !!(conv.running || mark || (last && !last.a && !last.error)) }
+  })
+  const seen = new Map()
+  for (const x of out) seen.set(x.title, (seen.get(x.title) ?? 0) + 1)
+  for (const x of out) if (seen.get(x.title) > 1) x.title = `${x.title} · ${askStamp(x.conv.started_ms, s?.now, lang)}`
+  const at = x => x.conv.last_ms ?? x.conv.started_ms ?? 0
+  return out.sort((a, b) => (b.open ? 1 : 0) - (a.open ? 1 : 0) || at(b) - at(a))
+}
+
+/** How many hours a question stays in the list (quick.py state keep_hours, cockpit.chat_keep_hours); 24 when
+ *  the server did not say, its own default (config.py) */
+export const keepHoursOf = quick => (Number.isFinite(quick?.keep_hours) ? quick.keep_hours : 24)
+
+// the rooms of the Chat as cmux a browser keeps (round 6d C3), and how long a question counts as just answered
+const KEPT_ROOMS = new Set(['tab', 'ws', 'bridge', 'chat'])
+const FRESH_ANSWER_MS = 3600000
+
+/** The room this browser kept (localStorage bridge-cockpit.chatRoom), read back only in its known shapes and
+ *  marked `kept`: a kept room that is gone gives way to the chat (roomShown). null for anything else */
+export function roomKept(raw) {
+  let v
+  try { v = JSON.parse(raw) } catch { return null }
+  if (!v || typeof v !== 'object' || Array.isArray(v) || !KEPT_ROOMS.has(v.kind)) return null
+  if (v.kind === 'chat') return { kind: 'chat', kept: true }
+  return typeof v.id === 'string' && v.id && v.id.length <= 200 ? { kind: v.kind, id: v.id, kept: true } : null
+}
+
+/** What this browser keeps of a picked room: the room without its mark, or null */
+export function roomToKeep(room) {
+  if (!room || !KEPT_ROOMS.has(room.kind)) return null
+  return JSON.stringify(room.kind === 'chat' ? { kind: 'chat' } : { kind: room.kind, id: room.id })
+}
+
+/** The room the right side shows: the one picked, else the chat. One kept from before a reload whose tab,
+ *  workspace or Bridge is gone shows the chat; one picked by hand stays and says it is closed */
+export function roomShown(s) {
+  const room = s?.ui?.room ?? null
+  if (!room) return { kind: 'chat' }
+  if (!room.kept) return room
+  const gone = room.kind === 'tab' ? Array.isArray(s.tabs?.tabs) && !s.tabs.tabs.some(x => x.ref === room.id)
+    : room.kind === 'ws' ? Array.isArray(s.tabs?.workspaces) && !roomsOf(s).workspaces.some(w => w.key === room.id)
+    : room.kind === 'bridge' ? Array.isArray(s.rooms?.bridges) && !s.rooms.bridges.some(b => b.id === room.id)
+    : false
+  return gone ? { kind: 'chat' } : room
+}
+
+/** Where the Chat opens once when nothing is kept or picked (round 6d C3): a question that is open or was
+ *  answered within the hour, else the first tab that wants you; null for nothing, or when a room or a question
+ *  is picked already. { room, conv } */
+export function chatLanding(s, lang) {
+  if (s?.ui?.room || s?.ui?.quickConv) return null
+  const now = s?.now || Date.now()
+  const asks = askList(listedChats(s?.quick?.convs, s?.quick?.keep_hours, now), s, lang)
+  const fresh = asks.find(x => x.open || now - (x.conv.last_ms ?? x.conv.started_ms ?? 0) < FRESH_ANSWER_MS)
+  if (fresh) return { room: { kind: 'chat' }, conv: fresh.conv.id }
+  const ref = walkRefs(s?.tabs?.tabs)[0]
+  return ref ? { room: { kind: 'tab', id: ref }, conv: null } : null
+}
+
+// an inbox item's id (inbox.py: date, time, slug, hash); a start on anything else is a task's
+const INBOX_ITEM_RE = /^\d{8}-\d{4}-/
+
+/** Where a tab came from (round 6d C5): the start that opened it (model.returns, by its tab, else by its item
+ *  or task), the question it was handed on from (the start's conv, or the question handed on as its item), the
+ *  job, inbox item or task behind it. { kind: ask | job | item | task, key, title, conv? }, null for the control
+ *  session and a tab of nothing known */
+export function tabOrigin(s, tab, lang) {
+  if (!tab || tab.is_control) return null
+  const returns = s?.model?.returns ?? []
+  const own = tab.item ?? tab.slug ?? null
+  const start = returns.find(r => r.tab?.ref === tab.ref) ?? (own ? returns.find(r => r.item === own) : null) ?? null
+  const item = tab.item ?? (start && INBOX_ITEM_RE.test(start.item ?? '') ? start.item : null)
+  const convs = [...(s?.quick?.convs ?? []), ...(s?.chatArchive?.convs ?? [])]
+  const conv = (start?.conv ? convs.find(x => x.id === start.conv) : null)
+    ?? (item ? convs.find(x => x.handed?.inbox_id === item || (x.about?.kind === 'handoff' && x.about?.inbox === item)) : null)
+  if (conv) return { kind: 'ask', key: `ask:${conv.id}`, conv: conv.id, title: askTitle(conv, s, lang) }
+  const rows = indexRows(s?.model)
+  if (item) {
+    const row = rows.get(`inbox:${item}`)
+    const job = WORKER_KEY.exec(row?.inbox_key ?? '')
+    if (job) {
+      const [key, host, id] = job
+      const run = (s?.workers?.data?.runs ?? []).find(r => r?.host === host && r?.id === id)
+      return { kind: 'job', key, title: `${run?.title || id} · ${host}` }
+    }
+    return { kind: 'item', key: `inbox:${item}`, title: short(row?.title ?? start?.title ?? item, 80) }
+  }
+  const slug = tab.slug ?? (start && !INBOX_ITEM_RE.test(start.item ?? '') ? start.item : null)
+  if (!slug) return null
+  return { kind: 'task', key: `task:${slug}`, title: short(rows.get(`task:${slug}`)?.title ?? slug, 80) }
 }
 
 const VERDICT_KEYS = { first: ['zuerst', 'first'], then: ['dann', 'then'], later: ['kann warten', 'can wait'] }
@@ -2977,6 +3620,9 @@ export function tickerStatus(s, now, kinds = TICKER_KINDS) {
   const add = (id, cat, tone, key, vars = [], target = null) => out.push({ id: `st:${id}`, cat, tone, key, vars, target })
   const model = s?.model ?? {}
   const tk = s?.ticker ?? {}
+  // where the state of the sources, the pass and the triage stands: the day column of Due, else (Due switched off)
+  // the day's status on Start (round 6 B), since Work through shows neither it nor its Repair
+  const dayAt = workViewsIn(s).includes('due') ? { kind: 'page', id: 'briefing' } : { kind: 'page', id: '@start', at: '.day-status' }
   // 1 findings on a page
   for (const a of model.alarms ?? []) add(`alarm:${a.page_id}:${a.section_title}`, 'failing', 'bad', 'alarm', [a.count, `${a.section_title} (${a.page_title})`], { kind: 'page', id: a.page_id })
   // 2 the quotas, against their marks and their pace
@@ -2989,21 +3635,21 @@ export function tickerStatus(s, now, kinds = TICKER_KINDS) {
   for (const o of tk.perf?.outliers ?? []) add(`outlier:${o.source}`, 'quota', 'warn', 'outlier', [o.source, o.factor], { kind: 'page', id: '@sessions' })
   // 4 and 5 the briefing pass: failed, or running far longer than it should
   const ld = s?.loading ?? {}
-  if (ld.last_error) add('load-failed', 'failing', 'bad', 'loadFailed', [short(ld.last_error.message ?? '', 60)], { kind: 'page', id: 'briefing' })
+  if (ld.last_error) add('load-failed', 'failing', 'bad', 'loadFailed', [short(ld.last_error.message ?? '', 60)], dayAt)
   if (ld.pass && ld.started_ms && now - ld.started_ms > Math.max(1.5 * (ld.eta_ms || 0), 30000)) {
     add('load-slow', 'slow', 'warn', 'loadSlow', [duration(now - ld.started_ms)])
   }
   // 6 the last pass, against the collect time limit
   const pass = (tk.perf?.passes ?? []).at(-1)
   const limit = tk.limits?.timeout_ms ?? 0
-  if (pass && limit && pass.took_ms >= 0.9 * limit) add('pass-slow', 'slow', 'bad', 'passSlow', [Math.round(pass.took_ms / 1000)], { kind: 'page', id: 'briefing' })
-  else if (pass && pass.took_ms >= 60000) add('pass-slow', 'slow', 'warn', 'passSlow', [Math.round(pass.took_ms / 1000)], { kind: 'page', id: 'briefing' })
+  if (pass && limit && pass.took_ms >= 0.9 * limit) add('pass-slow', 'slow', 'bad', 'passSlow', [Math.round(pass.took_ms / 1000)], dayAt)
+  else if (pass && pass.took_ms >= 60000) add('pass-slow', 'slow', 'warn', 'passSlow', [Math.round(pass.took_ms / 1000)], dayAt)
   // 7 a source of the briefing in error: out of time is slow, anything else failing
   for (const x of model.status ?? []) {
-    if (skipFixable(x)) add(`source:${x.title}`, 'failing', 'warn', 'sourceCannotRun', [x.title, short(x.reason ?? '', 60)], { kind: 'page', id: 'briefing' })
+    if (skipFixable(x)) add(`source:${x.title}`, 'failing', 'warn', 'sourceCannotRun', [x.title, short(x.reason ?? '', 60)], dayAt)
     if (x.state !== 'error') continue
-    if (/took longer|time limit/i.test(x.reason ?? '')) add(`source:${x.title}`, 'slow', 'warn', 'sourceSlow', [x.title], { kind: 'page', id: 'briefing' })
-    else add(`source:${x.title}`, 'failing', 'bad', 'sourceFailed', [x.title, short(x.reason ?? '', 60)], { kind: 'page', id: 'briefing' })
+    if (/took longer|time limit/i.test(x.reason ?? '')) add(`source:${x.title}`, 'slow', 'warn', 'sourceSlow', [x.title], dayAt)
+    else add(`source:${x.title}`, 'failing', 'bad', 'sourceFailed', [x.title, short(x.reason ?? '', 60)], dayAt)
   }
   // 8 to 10 the page itself
   if (model.stale) add('stale', 'failing', 'warn', 'stale')
@@ -3039,8 +3685,8 @@ export function tickerStatus(s, now, kinds = TICKER_KINDS) {
   else if (rv.error) add('review', 'failing', 'bad', 'reviewFailed', [], { kind: 'review' })
   if (!rv.running && (rv.last?.to_close ?? 0) > 0) add('to-close', 'waiting', 'info', 'toClose', [rv.last.to_close], { kind: 'review' })
   // 18 the daily check
-  if (s?.triage?.running) add('triage', 'running', 'info', 'triageRuns', [], { kind: 'page', id: 'briefing' })
-  else if (s?.triage?.error) add('triage', 'failing', 'bad', 'triageFailed', [], { kind: 'page', id: 'briefing' })
+  if (s?.triage?.running) add('triage', 'running', 'info', 'triageRuns', [], dayAt)
+  else if (s?.triage?.error) add('triage', 'failing', 'bad', 'triageFailed', [], dayAt)
   // 19 and 20 the agents of other Bridges
   for (const p of s?.agents?.peers ?? []) {
     if (['refused', 'failed', 'unreachable'].includes(p.reach)) add(`peer:${p.id}`, 'offline', 'warn', 'peerDown', [p.name ?? p.id], { kind: 'page', id: '@agents' })
@@ -3053,9 +3699,13 @@ export function tickerStatus(s, now, kinds = TICKER_KINDS) {
   }
   // 21 the background jobs
   for (const run of s?.workers?.data?.runs ?? []) {
-    if (run.retired) continue
+    if (run.retired || run.acked) continue
     const lastRun = (run.strip ?? []).at(-1)
-    const tone = workerTone(run) === 'bad' || ['failed', 'expired'].includes(lastRun?.verdict) ? 'bad' : workerTone(run) === 'warn' ? 'warn' : null
+    // an outage is news in red; upkeep the engine files medium is no news at all, only a run without a severity
+    // keeps the orange of its state
+    const sev = jobSeverity(run)
+    const tone = sev === 'high' || workerTone(run) === 'bad' || ['failed', 'expired'].includes(lastRun?.verdict) ? 'bad'
+      : sev == null && workerTone(run) === 'warn' ? 'warn' : null
     if (tone) add(`job:${run.id}`, 'failing', tone, tone === 'bad' ? 'jobFailed' : 'jobWarn', [run.title ?? run.id], { kind: 'workers' })
   }
   // 22 machines, clouds and model sources that are down, from the pages of the profile
@@ -3082,10 +3732,11 @@ export function tickerStatus(s, now, kinds = TICKER_KINDS) {
 
 /** Where a page target of the band leads: every page the controller routes itself (the tab row, a page
  *  of group work or day, Jev wherever it lives, the agents wherever a peer is: as cmux they are the Chat's
- *  A2A area, app.js setPage); Today only for a name that exists nowhere */
+ *  A2A area, a page that is a view now, like the Sessions tab as Running now: flowPageFor; app.js setPage);
+ *  Today only for a name that exists nowhere */
 export function tickerPage(s, id, order = []) {
   const known = order.includes(id) || id === '@jev' || (id === '@agents' && (s?.agents?.peers ?? []).length > 0)
-    || (s?.model?.pages ?? []).some(p => p.id === id)
+    || (s?.model?.pages ?? []).some(p => p.id === id) || !!flowPageFor(id, s)
   return known ? id : 'briefing'
 }
 
@@ -3358,7 +4009,9 @@ export function tourIndex(s) {
 
 /** The tour's steps in order. A step names its texts (text.js tour.steps.<id>), the page it opens and the
  *  area it lights (a CSS selector); one without a target stands in the middle. The tab column is left out
- *  where the layout shows none (narrow: its own switch at the foot) */
+ *  where the layout shows none (narrow: its own switch at the foot); the files tab where it stands in the bar
+ *  (filesOn); the sessions are Running now where Work through lists them (sessionsInFlow: the same page id,
+ *  app.js setPage leads it there) */
 export function tourSteps(s) {
   const narrow = s?.layout === 'narrow'
   return [
@@ -3366,12 +4019,41 @@ export function tourSteps(s) {
     { id: 'pages', target: '.pagebar' },
     { id: 'start', page: '@start', target: '#main' },
     { id: 'work', page: 'briefing', target: '#main' },
+    ...(filesOn(s) ? [{ id: 'files', page: FILES_PAGE, target: '#main' }] : []),
     ...(narrow ? [] : [{ id: 'tabs', target: '#tabs-column, .hdr-tabs' }]),
     { id: 'ask', target: '.hdr-ask' },
-    { id: 'sessions', page: '@sessions', target: '#main' },
+    { id: sessionsInFlow(s) ? 'running' : 'sessions', page: '@sessions', target: '#main' },
     { id: 'help', target: '.hdr-help' },
     { id: 'done' },
   ]
+}
+
+/** The Setup page (docs/bridge-cockpit.md, The Setup page): the page that holds its checks (a profile may place
+ *  them on a page of its own) and how many of their rows are findings, red or yellow; null without the section */
+export function setupPageOf(model) {
+  for (const p of model?.pages ?? []) {
+    const sec = (p.sections ?? []).find(x => x?.id === 'setup-checks')
+    if (sec) return { page: p.id, findings: (sec.items ?? []).filter(it => it?.tone === 'bad' || it?.tone === 'warn').length }
+  }
+  return null
+}
+
+/** The Settings area a page of the group settings opens (the Setup page, briefing_view SETUP_GROUP): it has no tab
+ *  and no place behind More, its sections stand in Settings, Setup; null for every other page */
+export function settingsAreaOf(model, id) {
+  return (model?.pages ?? []).some(p => p.id === id && p.group === 'settings') ? 'setup' : null
+}
+
+/** What the Settings tab carries: the badge of the Setup page while it stands in Settings and counts something (a
+ *  finding of its checks); null otherwise, also when a profile placed the checks on a page of its own, whose tab counts them */
+export function settingsBadgeOf(model) {
+  const badge = (model?.pages ?? []).find(p => p.group === 'settings')?.badge
+  return badge && (badge.kind === 'bad' || badge.kind === 'count') ? badge : null
+}
+
+/** Whether the welcome offers "Set up first": something on the Setup page still keeps the cockpit from working well */
+export function setupWanted(model) {
+  return (setupPageOf(model)?.findings ?? 0) > 0
 }
 
 /** Where the tour's box stands beside the lit area `rect` ({top, left, width, height}, null: none): below
@@ -3403,6 +4085,9 @@ const HINTS = {
   '@start': [['prompt', '.stage-prompt'], ['signals', '.home-signals'], ['ticker', '.ticker'],
     ['stations', '.station'], ['core', '.core-button'], ['today', '.stage-card'], ['projects', '.home-chips'],
     ['tabCards', '.hcard:not(.hcard-row)'], ['rowCards', '.hcard-row'], ['starts', '.home-starts']],
+  // the files tab on its search start: the field, its chips, the question to the AI, the records, the walk
+  '@files': [['filesFind', '.fs-find'], ['filesAsk', '.fs-ask'], ['filesChips', '.fs-chips'], ['filesList', '.fs-list'],
+    ['filesWalk', '.fs-walk']],
   briefing: [['alarm', '.col-day .alarm'], ['secHead', '.col-day .sec-head'], ['rowMain', '.col-day .row-main'],
     ['rowActs', '.col-day .row-acts'], ['secTools', '.col-day .sec-tools'], ['hiddenRows', '.col-day .hidden-rows'],
     ['detail', '.col-detail'], ['tabcol', '#tabs-column'], ['tabWait', '#tabs-column .tabcard.st-needs-you'], ['snap', '#tabs-column .snap']],
@@ -3411,7 +4096,8 @@ const HINTS = {
   '@sessions': [['stats', '.stats'], ['guideBoard', '.guide-board'], ['guideRoot', '.guide-root'],
     ['guideBranches', '.guide-branches'], ['guideFoot', '.guide-foot'], ['sessCards', '.sess-grid'],
     ['sessAgents', '.sess-agent-list'], ['sessFoot', '.sess-foot']],
-  '@workers': [['workerStats', '.stats'], ['wfilters', '.wfilters'], ['wgroup', '.wgroup .rgroup-head'], ['wrow', '.wrow-name'],
+  '@workers': [['folderbar', '.folderbar'], ['workerStats', '.stats'], ['wfilters', '.wfilters'], ['wmachine', '.wmachine-head'],
+    ['wgroup', '.wgroup .rgroup-head'], ['wrow', '.wrow-name'],
     ['wwhen', '.wrow-when'], ['wstrip', '.wrow-strip'], ['wstate', '.wrow-state']],
   '@agents': [['agentList', '.agents-list'], ['agentConvs', '.agent-convs'], ['agentProfile', '.agent-bar'],
     ['agentSkills', '.agent-skill-cards'], ['agentModes', '.agent-modes'], ['agentSend', '.chat-main .tabview-send']],
@@ -3419,25 +4105,133 @@ const HINTS = {
     ['reviewSort', '.review-top .seg'], ['reviewTable', '.tbl-review']],
   '@jev': [['jevRun', '.jev-actions'], ['jevStage', '.jev-stage'], ['jevPlan', '.jev-side']],
   '@settings': [['settingsNav', '.settings-nav'], ['settingsBody', '.settings-body'], ['setCard', '.set-card-head']],
+  // Settings at its area Setup (briefing.py collect --setup): the three lists, each a section drawn as on a page
+  '@settings/setup': [['settingsNav', '.settings-nav'], ['setupChecks', '.settings-body .psec[aria-labelledby$="-setup-checks"]'],
+    ['setupAvailable', '.settings-body .psec[aria-labelledby$="-setup-available"]'],
+    ['setupOn', '.settings-body .psec[aria-labelledby$="-setup-on"]'], ['rowActs', '.settings-body .psec td.c-acts']],
+  // Work through, a view of the work tab (its parts are explained there, hintsFor), with the session cards of Running now
+  // and the row of the task check under Not now with the check's filter and table in the middle (round 6 c)
+  '@flow': [['flowSide', '.flow-side'], ['flowOverview', '.flow-overview'], ['flowCard', '.flow-card'], ['flowVerbs', '.flow-card .verbbar'],
+    ['flowDetails', '.flow-details'], ['flowWalk', '.flow-walk'], ['sessCards', '.flow-sessions'], ['flowCheck', '.flow-check-row'],
+    ['reviewFilter', '.review-bar'], ['reviewTable', '.tbl-review']],
 }
 // a page of the briefing profile is built from the same parts everywhere: each part it has is explained
-const PAGE_HINTS = [['pageBadge', '.col-page > .page-head .pbadge'], ['oboard', '.oboard'], ['kinds', '.tri-kinds'],
+const PAGE_HINTS = [['folderbar', '.folderbar'], ['pageBadge', '.col-page > .page-head .pbadge'], ['machines', '.mlines'],
+  ['oboard', '.oboard'], ['psum', '.psum'], ['kinds', '.tri-kinds'],
   ['triage', '.tri-sort'], ['reviewStrip', '.review-strip'], ['jorder', '.jorder'], ['sectionHead', '.psec .psec-head'],
-  ['table', '.psec .table-wrap'], ['quiet', '.psec-quiet'], ['ghFigures', '.ghb-figures'], ['ghBoards', '.ghb-boards'],
-  ['ghPeople', '.ghb-people'], ['ghList', '.ghl-tools'], ['gauges', '.gtiles'], ['costBars', '.ubars'], ['costList', '.clist'],
+  ['table', '.psec .table-wrap'], ['quiet', '.psec-quiet'], ['ghFigures', '.ghb-figures'], ['ghBoards', '.ghl-facts'],
+  ['ghFilters', '.ghf'], ['ghList', '.ghl-tools'], ['gauges', '.gtiles'], ['costBars', '.ubars'], ['costList', '.clist'],
   ['calFigures', '.calf'], ['calBar', '.calbar'], ['calDays', '.cal-day']]
-const HEADER_HINTS = [['pages', '.pagebar'], ['asof', '.hdr-asof'], ['reload', '.hdr-reload'], ['tabsButton', '.hdr-tabs'],
-  ['ask', '.hdr-ask'], ['history', '.hdr-history'], ['relay', '.hdr-relay'], ['notes', '.hdr-notes'], ['help', '.hdr-help']]
+// the as-of time is the reload button; the notes stand under the bell and in the history by day; Help, last, holds
+// Explain first, then the look-up topics and the tour (decision 6, menue.md)
+const HEADER_HINTS = [['pages', '.pagebar'], ['asof', '.hdr-asof'], ['tabsButton', '.hdr-tabs'],
+  ['ask', '.hdr-ask'], ['history', '.hdr-history'], ['notes', '.hdr-notes'], ['relay', '.hdr-relay'], ['help', '.hdr-help']]
 
 /** What the overlay explains on the page now: its own areas (group page), then the header (group head).
- *  The work tab showing a page instead of the day's columns (by area, by Jev) explains that page's parts */
+ *  The work tab showing a page instead of the day's columns (by area, by Jev) explains that page's parts; the work
+ *  switch's item carries the views on offer as `vars` */
 export function hintsFor(s) {
   const page = s?.ui?.page
-  const dayColumns = page !== 'briefing' || workViewOf(s.ui.workView, workPageOf(s.model?.pages), s.jev) === 'due'
-  const own = !dayColumns ? [['workSwitch', '.work-switch'], ...PAGE_HINTS, ['tabcol', '#tabs-column']]
-    : HINTS[page] ?? [...PAGE_HINTS, ['tabcol', '#tabs-column']]
-  return [...own.map(([id, target]) => ({ id, target, group: 'page' })),
+  const view = page === 'briefing' ? workViewIn(s) : null
+  const dayColumns = page !== 'briefing' || view === 'due'
+  const own = view === 'flow' ? [['workSwitch', '.work-switch'], ...HINTS['@flow']] : !dayColumns ? [['workSwitch', '.work-switch'], ...PAGE_HINTS, ['tabcol', '#tabs-column']]
+    : (page === '@settings' && s?.ui?.settingsSection === 'setup' ? HINTS['@settings/setup'] : null) ?? HINTS[page]
+      ?? [...PAGE_HINTS, ['tabcol', '#tabs-column']]
+  // the work switch names the views it offers, no other (round 6 B): its words get them as `vars` (hintText)
+  const vars = id => (id === 'workSwitch' ? { vars: [workViewsIn(s)] } : {})
+  return [...own.map(([id, target]) => ({ id, target, group: 'page', ...vars(id) })),
     ...HEADER_HINTS.map(([id, target]) => ({ id, target, group: 'head' }))]
+}
+
+/** A hint's words as the page shows them: a body that depends on the page (a function of the hint's `vars`, hintsFor)
+ *  filled in, any other as it stands */
+export function hintText(words, vars = []) {
+  return typeof words?.body === 'function' ? { ...words, body: words.body(...vars) } : words
+}
+
+// ---------------------------------------------------------------- the click origin log (round 6d, item 10)
+
+// which control was used from which place, never what about: the page, its view, the area of the explain overlay the
+// click stood in and the control's name from the code, counted and sent in small batches (POST /api/clicks, usage.jsonl
+// on the server, counted by scripts/cockpit-usage.py); only while the server's bootstrap says clicks: true
+export const USAGE_FLUSH_MS = 30000
+export const USAGE_VERB_MS = 2000      // a verb this soon after a click was sent by it
+const USAGE_MAX = 40
+const USAGE_CONTROL = new Set(['button', 'a', 'input', 'select', 'summary', 'label', 'textarea'])
+const USAGE_ROLES = new Set(['button', 'tab', 'menuitem', 'option', 'switch', 'checkbox', 'radio', 'link'])
+// classes that say how a control looks or stands, not which it is
+const USAGE_PLAIN = /^(btn|is-|has-|on$|off$|active$|small$|muted$|mono$|tone-|st-|sr-only$)/
+const USAGE_NAME = /^@?[A-Za-z][A-Za-z0-9_-]{0,47}$/
+
+/** The page and view a click is counted on: the work tab's view, the start page's view, else none (as /api/seen) */
+export function usagePlace(s) {
+  const page = s?.ui?.page ?? '-'
+  const view = page === 'briefing' ? workViewIn(s) : page === '@start' ? homeView(homeChosen(s?.model, s?.home)) : null
+  return { page, view: typeof view === 'string' && USAGE_NAME.test(view) ? view : '-' }
+}
+
+/** The name of the control a click stands in: its data-u, else up to two of its own classes (none that says how it
+ *  looks, none with a digit), else its role or tag. Never its words. null where the click hit no control */
+export function usageControl(target) {
+  for (let n = target; n && n.nodeType === 1; n = n.parentNode) {
+    const tag = String(n.tagName ?? '').toLowerCase()
+    const role = n.getAttribute?.('role') ?? null
+    const u = n.getAttribute?.('data-u') ?? null
+    if (!USAGE_CONTROL.has(tag) && !USAGE_ROLES.has(role) && !u) continue
+    if (u && USAGE_NAME.test(u)) return u
+    const own = String(n.getAttribute?.('class') ?? n.className ?? '').split(/\s+/)
+      .filter(c => c && USAGE_NAME.test(c) && !/\d/.test(c) && !USAGE_PLAIN.test(c) && c === c.toLowerCase())
+    if (own.length) return own.slice(0, 2).join('.')
+    return role && USAGE_NAME.test(role) ? role : tag || null
+  }
+  return null
+}
+
+/** The innermost area of the explain overlay (hintsFor: the page's, then the header's) the click stands in; a dialog
+ *  without one says dialog; else '-' */
+export function usageArea(s, target) {
+  const hints = hintsFor(s)
+  for (let n = target; n && n.nodeType === 1; n = n.parentNode) {
+    for (const h of hints) {
+      try { if (n.matches?.(h.target)) return h.id } catch { /* a selector this browser does not know */ }
+    }
+    if (n.getAttribute?.('role') === 'dialog') return 'dialog'
+  }
+  return '-'
+}
+
+/** The page's click log: click({page, view, area, control}) and verb(name) count, flush() sends what was counted as
+ *  one batch, and a batch of `max` different events goes by itself. Only the named fields are kept, so a title
+ *  handed in by mistake never leaves the page. A verb without a click just before it is no use of a control */
+export function createUsageLog({ send, now = Date.now, max = USAGE_MAX }) {
+  let counts = new Map()
+  let last = null
+  const name = v => (typeof v === 'string' && v ? v : '-')
+  function flush() {
+    if (!counts.size) return
+    const events = [...counts.values()]
+    counts = new Map()
+    send(events)
+  }
+  const add = ev => {
+    const key = [ev.kind, ev.page, ev.view, ev.area, ev.control, ev.verb].join('|')
+    const had = counts.get(key)
+    counts.set(key, had ? { ...had, n: had.n + 1 } : { ...ev, n: 1 })
+    if (counts.size >= max) flush()
+  }
+  return {
+    click(at) {
+      if (!at || name(at.control) === '-') return
+      const ev = { kind: 'click', page: name(at.page), view: name(at.view), area: name(at.area), control: name(at.control), verb: '-' }
+      last = { ev, at: now() }
+      add(ev)
+    },
+    verb(verb) {
+      if (!last || now() - last.at > USAGE_VERB_MS || typeof verb !== 'string') return
+      add({ ...last.ev, kind: 'verb', verb })
+    },
+    flush,
+  }
 }
 
 const HINT_MARGIN = 12    // the notes keep this far off the screen's edges

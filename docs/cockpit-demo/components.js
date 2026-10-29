@@ -7,7 +7,7 @@
 // views/, which imports what it uses from the others. app.js imports from here only.
 
 import { html, useEffect, useLayoutEffect, useState } from './vendor/htm-preact-3.1.1.module.js'
-import { areaScope, cardPlan, indexRows, railShown, triageKey, workKinds, workPageOf } from './logic.js'
+import { areaScope, cardPlan, indexRows, railOn, triageKey, workKinds, workPageOf } from './logic.js'
 import { T } from './text.js'
 import { TriageBar } from './triage.js'
 import { InnerRoom } from './inner.js'
@@ -19,17 +19,18 @@ import { ReviewBody, ReviewPage, ReviewStrip } from './views/check.js'
 import { DayColumn, WorkSwitch } from './views/day.js'
 import { DetailColumn } from './views/detail.js'
 import { DossierView } from './views/dossier.js'
-import { Header, PageBadge, PageBar } from './views/header.js'
+import { FlowPage } from './views/flow.js'
+import { FolderBar, Header, PageBadge, PageBar } from './views/header.js'
 import { AreaBar, HomePage, jumpToTab, useHomeTitle } from './views/home.js'
 import {
-  AGENTS_PAGE, CHAT_PAGE, CHECK_PAGE, JEV_PAGE, SESSIONS_PAGE, SETTINGS_PAGE, START_PAGE, WORKERS_PAGE, onPageOf, reviewHomeOf,
-  workViewNow,
+  AGENTS_PAGE, CHAT_PAGE, CHECK_PAGE, FILES_PAGE, FLOW_PAGE, JEV_PAGE, SESSIONS_PAGE, SETTINGS_PAGE, START_PAGE, WORKERS_PAGE, onPageOf, reviewHomeOf,
+  headBadgeOf, parentOf, workViewNow,
 } from './views/nav.js'
 import {
-  AuthPanel, BootPanel, ConfirmDialog, HelpDialog, HistoryDrawer, InfoDrawer, ItemDrawer, MobileSwitch, NotesDrawer,
+  AuthPanel, BootPanel, ConfirmDialog, HistoryDrawer, InfoDrawer, ItemDrawer, MobileSwitch, NotesDrawer,
   TabsDrawer, Toasts,
 } from './views/overlays.js'
-import { JevList, KindBar, OverviewBoard, PageCard, PageSection, WorkOrder } from './views/pages.js'
+import { JevList, KindBar, MachineLines, OverviewBoard, PageCard, PageSection, PageSummary, WorkOrder } from './views/pages.js'
 import { Empty, StateLine } from './views/parts.js'
 import { SessionsPage, WorkersPage } from './views/sessions.js'
 import { SettingsPage } from './views/settings.js'
@@ -39,8 +40,8 @@ import { HintsOverlay } from './views/hints.js'
 export { useHomeTitle } from './views/home.js'
 export { quickLive } from './views/chat.js'
 export {
-  AGENTS_PAGE, CHAT_PAGE, CHECK_PAGE, JEV_PAGE, SESSIONS_PAGE, SETTINGS_PAGE, START_PAGE, WORKERS_PAGE, agentsLanding, chatAreaActions, chatAsWorkspaces,
-  morePages, pageOrder, workViewNow,
+  AGENTS_PAGE, CHAT_PAGE, CHECK_PAGE, FILES_PAGE, FLOW_PAGE, JEV_PAGE, SESSIONS_PAGE, SETTINGS_PAGE, START_PAGE, WORKERS_PAGE, agentsLanding, chatAreaActions, chatAsWorkspaces,
+  morePages, pageOrder, parentOf, workViewNow,
 } from './views/nav.js'
 
 // Jev is an optional integration (integrations.typesafe): its page and stylesheet load only once it is
@@ -69,11 +70,14 @@ function PageView({ s, c }) {
   if (s.ui.page === WORKERS_PAGE) return html`<${WorkersPage} s=${s} c=${c} />`
   if (s.ui.page === CHAT_PAGE) return s.rooms?.layout === 'workspaces' ? html`<${RoomsPage} s=${s} c=${c} />` : html`<${ChatPage} s=${s} c=${c} />`
   if (s.ui.page === SETTINGS_PAGE) return html`<${SettingsPage} s=${s} c=${c} />`
+  // the files tab (round 6c): its search first, a record or the walk through the active ones on a click; it needs
+  // no work page, it walks the tasks of the model
+  if (s.ui.page === FILES_PAGE) return html`<${DossierView} s=${s} c=${c} />`
   // as cmux the agents live in the Chat (its A2A area): a stored or stray @agents shows the Chat until the controller moves it there
   if (s.ui.page === AGENTS_PAGE && (s.agents?.peers ?? []).length) return s.rooms?.layout === 'workspaces' ? html`<${RoomsPage} s=${s} c=${c} />` : html`<${AgentsPage} s=${s} c=${c} />`
   const view = workViewNow(s)
-  // the files view (one task at a time) needs no work page: it walks the tasks of the model
-  if (view === 'dossier') return html`<${DossierView} s=${s} c=${c} />`
+  // Work through (cockpit.flow.enabled) needs none either: it walks every open point of the model
+  if (view === 'flow') return html`<${FlowPage} s=${s} c=${c} />`
   const work = view === 'due' ? null : workPageOf(s.model?.pages)
   if (view === 'jev') {
     const JevWork = jev?.JevWork
@@ -112,12 +116,18 @@ function PageView({ s, c }) {
   // the order by Jev stands in place of the sections, so a card placed after one moves to the end
   const jevList = !!(page.jev && !work && s.jev?.enabled && s.jev?.ready && s.ui.workView === 'jev' && s.jevOrder[page.id]?.order)
   const card = id => html`<${PageCard} key=${`@${id}`} id=${id} page=${page} s=${s} c=${c} />`
+  // a folder's bar stands on top of the folder page and of each of its sub pages; the folder page names its
+  // machines first, a sub page with `overview` gets a head card of its own parts instead of the tiles
+  const sub = !!parentOf(s, whole.id)
   return html`<div class="col col-page">
+    ${work ? null : html`<${FolderBar} s=${s} c=${c} />`}
     <header class="page-head">
       ${work ? html`<${WorkSwitch} s=${s} c=${c} />` : html`<h2 class="detail-title">${page.title}</h2>`}
-      <${PageBadge} badge=${page.badge} />
+      <${PageBadge} badge=${headBadgeOf(s, whole)} />
     </header>
-    ${page.overview ? html`<${OverviewBoard} page=${page} s=${s} c=${c} />` : null}
+    ${work ? null : html`<${MachineLines} page=${whole} s=${s} c=${c} />`}
+    ${page.overview && sub ? html`<${PageSummary} page=${page} s=${s} c=${c} />`
+      : page.overview ? html`<${OverviewBoard} page=${page} s=${s} c=${c} />` : null}
     ${kinds.length > 1 ? html`<${KindBar} kinds=${kinds} active=${kind} c=${c} />` : null}
     ${page.sections?.some(sec => sec.kind === 'tasks' || sec.kind === 'inbox') ? html`<${TriageBar} s=${s} c=${c} byKey=${indexRows(s.model)}
       items=${(kind ? whole.sections.filter(sec => kind.sections.includes(sec.id)) : whole.sections)
@@ -157,7 +167,7 @@ export function App({ store, ctl }) {
   const peek = onPage && s.ui.pageDetail && !!s.ui.selectedKey
   const pane = onPage && !peek && s.ui.pane === 'detail' ? 'day' : s.ui.pane
   // a wide page that shows sessions itself or needs the width folds the tab column to its header button
-  const rail = layout === 'wide' && railShown(s.ui.page, s.rooms?.layout, s.ui.railHidden)
+  const rail = layout === 'wide' && railOn(s)
   const tabsDrawer = layout === 'medium' || (layout === 'wide' && !rail)
   const showTabsCol = rail || (layout === 'narrow' && pane === 'tabs')
   const main = onPage
@@ -178,7 +188,6 @@ export function App({ store, ctl }) {
     ${tabsDrawer && s.ui.drawer === 'tabs' ? html`<${TabsDrawer} s=${v} c=${ctl} byKey=${shownKey} />` : null}
     ${s.ui.drawer === 'notes' ? html`<${NotesDrawer} s=${s} c=${ctl} />` : null}
     ${s.ui.drawer === 'history' ? html`<${HistoryDrawer} s=${s} c=${ctl} />` : null}
-    ${s.ui.drawer === 'help' ? html`<${HelpDialog} s=${s} c=${ctl} />` : null}
     ${s.ui.drawer === 'item' && s.ui.item ? html`<${ItemDrawer} s=${s} c=${ctl} byKey=${byKey} />` : null}
     ${s.ui.drawer === 'info' && s.ui.info ? html`<${InfoDrawer} s=${s} c=${ctl} />` : null}
     ${s.ui.tabView === '@ask' ? html`<${QuickChat} s=${s} c=${ctl} />` : s.ui.tabView ? html`<${TabView} s=${s} c=${ctl} />` : null}

@@ -2,7 +2,7 @@
 // Pure helpers of the cockpit's areas: the start page's area lines, where a number of them leads, the one
 // area filter (ui.area) and the state a page sees under it. No DOM, no network, no state. logic.js passes
 // every name on, so a view may import it from either; the frontend test imports this file under node.
-import { asksYou, dueWhen, homeChosen, homeView, indexRows, wantsYou } from './logic.js'
+import { asksYou, dueWhen, homeChosen, homeView, indexRows, wantsYou, workViewIn } from './logic.js'
 import { scopedFileQueue } from './files.js'
 
 /** The project a row belongs to: its area, else its first area name, else the label of its mark */
@@ -46,7 +46,7 @@ export function projectTone(name) {
 
 /** Is a row past its date? `due_at` or `due`, a day (YYYY-MM-DD, the server's form) or milliseconds;
  *  due today is not overdue */
-function rowOverdue(row, nowMs) {
+export function rowOverdue(row, nowMs) {
   const due = row?.due_at ?? row?.due
   if (typeof due === 'number') return due < nowMs
   return dueWhen(due, nowMs)?.kind === 'overdue'
@@ -115,18 +115,25 @@ const NONE = '\u0000none'   // no area name can be this
 /** Where a number of the areas leads, the area as the filter there (ui.area): tabs alone that want you
  *  are answered in the chat, one after the other (its walk); rows, or rows and tabs, wait in Work, what is due first, as do
  *  overdue rows; what runs and what is to review are the sessions and the starts of the Sessions page;
- *  the tasks open Work in the view it was left in, the area's name the files view */
+ *  the tasks open Work in the view it was left in, the area's name the files tab */
 export function areaJump(kind, area) {
+  // with Work through on (flow.js flowAreas) what waits, what is to review and what is overdue are its points
+  if (area?.flow && ['waiting', 'review', 'overdue'].includes(kind)) return { page: '@flow' }
   if (kind === 'waiting') return area?.waitingTabs && !area.waitingRows ? { page: '@chat', walk: true } : { page: 'briefing', view: 'due' }
   if (kind === 'running' || kind === 'review') return { page: '@sessions' }
   if (kind === 'overdue') return { page: 'briefing', view: 'due' }
-  // the area's name opens its files (one task at a time; the files view stands on every Bridge)
-  if (kind === 'name') return { page: 'briefing', view: 'dossier' }
+  // the area's name opens its files (the files tab, logic.js FILES_PAGE, stands on every Bridge)
+  if (kind === 'name') return { page: '@files' }
   return { page: 'briefing' }
 }
 
-// the pages the area filter (ui.area) acts on
-export const AREA_PAGES = new Set(['briefing', '@chat', '@sessions'])
+// the pages the area filter (ui.area) acts on; '@flow' is the Work through page (flow.js FLOW_PAGE), '@files' the files
+// tab (logic.js FILES_PAGE), named here as literals since this file is evaluated before them when logic.js loads
+export const AREA_PAGES = new Set(['briefing', '@chat', '@sessions', '@flow', '@files'])
+
+// the view areaScope asks for when Work through takes the rows as Due scopes them: no view of the work tab, so the
+// work tab's fallback (a Due switched off falls back to Work through) never leads back into Work through
+const DUE_ROWS = '@due'
 
 /** The row behind a page item: by its key, its task or its inbox item */
 function itemRow(it, byKey) {
@@ -135,12 +142,14 @@ function itemRow(it, byKey) {
 
 /** The state a page sees under the area filter (ui.area) and Work's star (ui.pinnedOnly): Work keeps the
  *  rows and page items of the area (or pinned) and the area's tabs beside them, Chat the tabs of the area, Sessions its sessions (by
- *  their tab, else their folder) and its starts. Every other page, and the header with its badges, gets
+ *  their tab, else their folder) and its starts. Work through sees what Work sees under the area, and the starts of
+ *  the area beside it (the star stays Work's). Every other page, and the header with its badges, gets
  *  the state as it is; so does a page without a filter (the same object back) */
 export function areaScope(s) {
   const page = s?.ui?.page
   const area = AREA_PAGES.has(page) ? s.ui.area || null : null
-  const pins = page === 'briefing' && s.ui.pinnedOnly ? new Set(s.home?.pins ?? []) : null
+  // Work's star keeps only the pinned rows, in the files tab too (it was a view of Work before round 6c)
+  const pins = (page === 'briefing' || page === '@files') && s.ui.pinnedOnly ? new Set(s.home?.pins ?? []) : null
   if (!area && !pins) return s
   const byKey = indexRows(s.model)
   const tabs = s.tabs?.tabs ?? []
@@ -150,7 +159,26 @@ export function areaScope(s) {
   const slugs = new Set(areaRows.map(r => r.task).filter(Boolean))
   const items = new Set(areaRows.map(r => r.inbox_id).filter(Boolean))
   const keepTab = t => t.is_control || inProject(t, area) || (!!t.slug && slugs.has(t.slug)) || (!!t.item && items.has(t.item))
-  if (page === 'briefing') {
+  const tabOf = new Map(tabs.map(t => [t.ref, t]))
+  const keepReturn = r => inProject(byKey.get(r.key) ?? {}, area) || (!!r.tab?.ref && !!tabOf.get(r.tab.ref) && inProject(tabOf.get(r.tab.ref), area))
+  // the view the work tab shows, its fallback too (logic.js workViewIn: a view switched off shows Work through)
+  if (page === '@flow' || (page === 'briefing' && s.ui.workView !== DUE_ROWS && workViewIn(s) === 'flow')) {
+    // the rows as Due scopes them (DUE_ROWS: the same call with the view Work through again never ended)
+    const v = areaScope({ ...s, ui: { ...s.ui, page: 'briefing', workView: DUE_ROWS, pinnedOnly: false } })
+    // the sessions too, by their tab or folder as on the Sessions page: a linked session drives its task (In progress)
+    const keepSession = x => (x.tab?.ref && tabOf.get(x.tab.ref) ? inProject(tabOf.get(x.tab.ref), area) : inProject({ workspace: x.project }, area))
+    // the files of the area too (round 4: a backlog task or a stream of model.files is an open row of the page); the
+    // files view keeps reading every file through wholeModel
+    const files = Array.isArray(v.model?.files) && area ? { files: v.model.files.filter(f => inProject({ area_names: f.area_names }, area)) } : {}
+    // the open tasks a page names and the items put off past the window are rows of the page too (flow.js universeOf):
+    // under an area only that area's (28.10.: another area's closable task stood in every area)
+    const rest = area && v.model ? { task_rows: (v.model.task_rows ?? []).filter(r => inProject(r, area)),
+      deferred: (v.model.deferred ?? []).filter(r => inProject(r, area)) } : {}
+    return { ...v, ui: s.ui, model: v.model && { ...v.model, returns: (s.model?.returns ?? []).filter(keepReturn), ...files, ...rest },
+      sessions: s.sessions && area ? { ...s.sessions, sessions: (s.sessions.sessions ?? []).filter(keepSession) } : s.sessions }
+  }
+  // the files tab takes the rows as Work does (it was Work's view until round 6c)
+  if (page === 'briefing' || page === '@files') {
     const keepRow = r => !!r && inProject(r, area) && (!pins || pins.has(r.key))
     const keepItem = it => {
       const row = itemRow(it, byKey)
@@ -188,12 +216,10 @@ export function areaScope(s) {
     return { ...s, tabs: { ...s.tabs, tabs: kept, ...workspaces } }
   }
   // the Sessions page
-  const tabOf = new Map(tabs.map(t => [t.ref, t]))
   const keepSession = x => {
     const tab = x.tab?.ref ? tabOf.get(x.tab.ref) : null
     return tab ? inProject(tab, area) : inProject({ workspace: x.project }, area)
   }
-  const keepReturn = r => inProject(byKey.get(r.key) ?? {}, area) || (!!r.tab?.ref && !!tabOf.get(r.tab.ref) && inProject(tabOf.get(r.tab.ref), area))
   return {
     ...s,
     tabs: { ...s.tabs, tabs: tabs.filter(keepTab) },

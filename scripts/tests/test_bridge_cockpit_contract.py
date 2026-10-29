@@ -211,6 +211,25 @@ def s_waits(w: World) -> None:
     w.act("task_running", slug="demo-task")
 
 
+def s_shelve(w: World) -> None:
+    """The Work through page's "Drop because" on a task: a reason that looks like flags, and a day"""
+    w.act("shelve", key="task:other-task", reason="--until 2030-01-01; not needed")
+    w.act("shelve", key="task:demo-task", reason="after the release", until=TOMORROW)
+
+
+def s_merge(w: World) -> None:
+    """Merge on the Work through page, and its undo: task.py merge with the heading, task.py unmerge with --as"""
+    from lib.bridge_cockpit.actions_work import merge_marks
+    for slug, state in (("other-task", "review"), ("filed-task", "backlog")):
+        folder = w.root / "work" / "tasks" / slug
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "STATUS.md").write_text(f"---\nstatus: {state}\n---\n", encoding="utf-8")
+    res = w.act("flow_merge", keep="task:demo-task", keys=["task:other-task", "task:filed-task"])
+    keep = w.root / "work" / "tasks" / "demo-task" / "STATUS.md"
+    keep.write_text(keep.read_text(encoding="utf-8") + "\n".join(merge_marks("other-task")) + "\n", encoding="utf-8")
+    w.act("task_unmerge", **res["undo"][0]["undo"]["args"])
+
+
 def s_to_task(w: World) -> None:
     w.runner.handlers["task.new"] = lambda argv: ok(json.dumps({"slug": "tidy-labels", "status": "backlog"}))
     w.act("to_task", key=f"inbox:{YES_ID}")
@@ -363,6 +382,7 @@ class Scenario:
 
 EFFORT_CFG = tbc.LAUNCH_CFG.format(more="    effort: true\n")
 WORKSPACES_CFG = "cockpit:\n  enabled: true\n  language: en\n  chat_layout: workspaces\n"
+FLOW_CFG = "cockpit:\n  enabled: true\n  language: en\n  flow:\n    enabled: true\n"
 
 SCENARIOS = {
     "passes": Scenario(s_passes, {"briefing.collect", "workplace.tasks", "workplace.teams", "workplace.status",
@@ -374,7 +394,9 @@ SCENARIOS = {
     "resume": Scenario(s_resume, {"workplace.launch"}),
     "filed": Scenario(s_filed, {"inbox.add", "workplace.launch"}),
     "waits": Scenario(s_waits, {"inbox.defer", "task.wait"}),
+    "shelve": Scenario(s_shelve, {"task.shelve"}),
     "to_task": Scenario(s_to_task, {"task.new"}),
+    "merge": Scenario(s_merge, {"task.merge", "task.unmerge"}, config=FLOW_CFG),
     "inbox_edits": Scenario(s_inbox_edits, {"inbox.urgency", "inbox.area", "inbox.note", "inbox.drop", "inbox.unmute", "inbox.close"}),
     "task_edits": Scenario(s_task_edits, {"task.priority", "task.note", "task.next", "task.close"}),
     "settle": Scenario(s_settle, {"inbox.close", "inbox.drop", "task.close", "task.log"}),
@@ -492,8 +514,10 @@ READS = {
                   "priority", "state", "lines", "origin_raw"},
 }
 # keys the fixture uses that only other kinds of rows carry: a GitHub row (ref), a command section with its
-# own view (view), the rows of a command or accounts section (tags, account, row_id, actions)
-ONLY_ELSEWHERE = {"row": {"ref"}, "page_section": {"view"}, "page_item": {"tags", "account", "row_id", "actions"}}
+# own view or drawn only with a finding (view, hide_ok), the rows of a command or accounts section (tags, account,
+# row_id, actions), and a page placed under another by view.pages (under, and its parent's subs)
+ONLY_ELSEWHERE = {"row": {"ref"}, "page": {"under", "subs"}, "page_section": {"view", "hide_ok"},
+                  "page_item": {"tags", "account", "row_id", "actions"}}
 
 
 def levels(data: dict) -> dict[str, set[str]]:
@@ -613,6 +637,7 @@ def test_the_undo_of_a_task_closed_in_review_parses_with_task_py(tmp_path):
 STATE_FIELDS = {
     "sessions.sessions[].tab.ws_ref": (str, type(None)),
     "tabs.tabs[].ask": (dict, type(None)),
+    "tabs.tabs[].behind": (dict, type(None)),       # the open task and inbox item behind a tab (returns.py)
     "tabs.tabs[].state_source": (str, type(None)),   # hook | glyph where the driver says, else None
     "agents.keep_hours": (int, float),                # A2A conversations untouched this long leave (0: never)
     "quick.convs[].about": (dict, type(None)),        # the row or item a chat is about; None for a free one

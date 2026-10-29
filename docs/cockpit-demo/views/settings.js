@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // The cockpit, the settings: one page with an area per subject (the start page, how it looks, the model an
-// agent tab starts with). Everything the start page can show is chosen here, in its area Start page.
+// agent tab starts with). Everything the start page can show is chosen here, in its area Start page; the colours
+// and the look-up card of what the help said (the signs of a row, acting, the keys, costs) stand under Appearance.
 // The rules every component keeps stand at the head of components.js.
 
 import { html, useEffect, useState } from '../vendor/htm-preact-3.1.1.module.js'
@@ -15,8 +16,9 @@ import { Btn, Chip, Empty, Icon, StateLine, useRoving } from './parts.js'
 import { GuideSettings } from './guide.js'
 import { TickerSettings } from './ticker.js'
 import { BoardSettings } from './github.js'
+import { PageSection } from './pages.js'
 
-const SECTIONS = ['start', 'look', 'launch', 'ticker', 'guide', 'boards']
+const SECTIONS = ['setup', 'start', 'look', 'launch', 'ticker', 'guide', 'boards']
 const STATION_KINDS = ['quota', 'count', 'page']
 
 // ---------------------------------------------------------------- the parts every area uses
@@ -236,8 +238,31 @@ function DetailsCard({ s, c }) {
   <//>`
 }
 
+const LOOKUP_TOPICS = ['rows', 'act', 'keys', 'trust']
+
+/** To look up, one topic at a time: what the marks of a row say, how acting works, the keys (only while they are on:
+ *  mouse first, so off the card says only that they are off, the card above switches them on), what costs tokens and
+ *  what stays local. Help in the header opens it on a topic. What each part of a page is for is Explain's, in Help */
+function LookupCard({ s }) {
+  const t = T()
+  const w = t.settings
+  // the topic the header's Help picked (app.js openLookup), each pick anew; a click on the card's own switch after it
+  const [topic, setTopic] = useState(s.ui.lookupTopic ?? 'rows')
+  useEffect(() => { if (s.ui.lookupTopic) setTopic(s.ui.lookupTopic) }, [s.ui.lookupTopic, s.ui.lookupAt])
+  const body = topic === 'keys'
+    ? s.ui.shortcuts ? html`<p class="muted small">${t.commandHint}</p>
+      <dl class="keys">${t.keys.map(([k, v], i) => html`<div key=${i}><dt><kbd>${k}</kbd></dt><dd>${v}</dd></div>`)}</dl>`
+      : html`<p class="muted small">${t.keysOff}</p>`
+    : html`<dl class="help-text">${t.helpTopics[topic].map(([k, v]) => html`<div key=${k}><dt>${k}</dt><dd>${Array.isArray(v)
+      ? html`<ul class="plain help-list">${v.map(x => html`<li key=${x}>${x}</li>`)}</ul>` : v}</dd></div>`)}</dl>`
+  return html`<${Card} title=${w.lookupTitle} intro=${w.lookupIntro}>
+    <${Segmented} label=${t.help.tabsLabel} current=${topic} values=${LOOKUP_TOPICS.map(id => [id, t.help.tabs[id]])} onPick=${setTopic} />
+    <div class="lookup-pane">${body}</div>
+  <//>`
+}
+
 function LookArea({ s, c }) {
-  return html`<${ThemeCard} s=${s} c=${c} /><${KeysCard} s=${s} c=${c} /><${TourCard} s=${s} c=${c} />`
+  return html`<${ThemeCard} s=${s} c=${c} /><${KeysCard} s=${s} c=${c} /><${LookupCard} s=${s} /><${TourCard} s=${s} c=${c} />`
 }
 
 /** The first-run tour: start it now, and offer it again on the next visit once it ended */
@@ -442,14 +467,32 @@ export function ConfigWarnings({ s }) {
   </div>`
 }
 
+// ---------------------------------------------------------------- setup
+
+/** The Setup page's sections (briefing.py collect --setup, docs/bridge-cockpit.md, The Setup page): what still keeps
+ *  the cockpit from working well, what can be switched on, what is on. Drawn as every page draws a section, so a row
+ *  keeps its steps (Let AI do it, Advise, Close, Later, its own steps and their undo) and its key */
+function SetupArea({ s, c }) {
+  const pages = (s.model?.pages ?? []).filter(p => p.group === 'settings')
+  return html`<div class="set-setup">${pages.flatMap(p => (p.sections ?? []).map(sec =>
+    html`<${PageSection} key=${`${p.id}/${sec.id}`} page=${p} section=${sec} s=${s} c=${c} />`))}</div>`
+}
+
+/** The areas this Bridge offers: Setup only while the view carries its page (cockpit.setup) */
+function sectionsOf(s) {
+  return (s.model?.pages ?? []).some(p => p.group === 'settings') ? SECTIONS : SECTIONS.filter(id => id !== 'setup')
+}
+
 // the news ticker on the start page: its own group from views/ticker.js
-const AREAS = { start: StartArea, look: LookArea, launch: LaunchArea, ticker: TickerSettings, guide: GuideSettings, boards: BoardSettings }
-const AREA_ICONS = { start: 'home', look: 'sun', launch: 'spark', ticker: 'bell', guide: 'chat', boards: 'sliders' }
+const AREAS = { setup: SetupArea, start: StartArea, look: LookArea, launch: LaunchArea, ticker: TickerSettings, guide: GuideSettings, boards: BoardSettings }
+const AREA_ICONS = { setup: 'bulb', start: 'home', look: 'sun', launch: 'spark', ticker: 'bell', guide: 'chat', boards: 'sliders' }
 
 /** The page: the areas as a list on the left (a row of buttons on a narrow screen), the one chosen beside it */
 export function SettingsPage({ s, c }) {
   const w = T().settings
-  const at = SECTIONS.includes(s.ui.settingsSection) ? s.ui.settingsSection : SECTIONS[0]
+  const sections = sectionsOf(s)
+  // a stored choice the Bridge no longer offers (Setup without its page) falls back to the start page's area
+  const at = sections.includes(s.ui.settingsSection) ? s.ui.settingsSection : 'start'
   const Area = AREAS[at]
   return html`<div class="col col-page settings-page">
     <header class="page-head settings-head">
@@ -459,7 +502,7 @@ export function SettingsPage({ s, c }) {
     <${ConfigWarnings} s=${s} />
     <div class="settings-layout">
       <nav class="settings-nav" aria-label=${w.sectionsLabel}>
-        ${SECTIONS.map(id => html`<button type="button" key=${id} class=${`settings-nav-item${at === id ? ' is-on' : ''}`}
+        ${sections.map(id => html`<button type="button" key=${id} class=${`settings-nav-item${at === id ? ' is-on' : ''}`}
           aria-current=${at === id ? 'page' : undefined} onClick=${() => c.setSettingsSection(id)}>
           <${Icon} name=${AREA_ICONS[id]} size=${18} />
           <span class="settings-nav-text"><b>${w.section[id].title}</b><small>${w.section[id].sub}</small></span>

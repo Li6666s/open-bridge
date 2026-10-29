@@ -16,19 +16,43 @@ import re
 import yaml
 
 from .. import model_route as mr
+from .. import work_find as wf
+from . import activity as act
 from . import describe as dsc
 from . import guide as gd
 from . import origin as og
+from . import themes as thm
 from . import ticker as tk
 
 DEFAULT_PORT = 8797
 OPEN_IN = ("auto", "cmux", "system", "none")
 TARGETS = ("tab", "workspace", "area", "auto")
 CHAT_LAYOUTS = ("classic", "workspaces")   # workspaces: the chat as cmux shows it (workspaces, tabs, Bridges, agents)
-# the view the work tab opens on (cockpit.work_view): Due, By source, By Jev or Files; the page maps each to its own id
-WORK_VIEWS = ("due", "source", "jev", "files")
+# the view the work tab opens on (cockpit.work_view): Due, By source, By Jev, Files or Work through (only while
+# cockpit.flow.enabled is on, else Due); the page maps each to its own id
+WORK_VIEWS = ("due", "source", "jev", "files", "flow")
 # which tasks the files view holds (cockpit.files_scope): the doing and review ones, or every task and stream
 FILES_SCOPES = ("active", "all")
+# the Work through page (cockpit.flow, page @flow): off unless switched on. drop_reasons are what "Drop because"
+# offers to click, keys the page words (text-flow.js) or a reason of the instance's own, shown as written;
+# return_after_s is how long after a jump to a tab the page asks how it went, once it is in view again.
+# FLOW_INTS: how many cards ahead get their brief prepared (0: none), how many starts may run before Let AI do it
+# asks first, how old a Jev rank may be and still order the tasks, how often a day a click may order them anew,
+# how many days before its due day a point stands in front (later ones wait under Not now, Later);
+# each with its default and minimum (a value below it keeps the default)
+FLOW_DROP_REASONS = ("resolves_itself", "not_needed", "someone_else", "not_worth_it")
+FLOW_INTS = (("prep_ahead", 2, 0), ("max_running", 4, 1), ("rank_max_age_days", 7, 1), ("rerank_per_day", 3, 0),
+             ("ahead_days", 2, 0))
+# infer_sessions: a live session in a tab that names one open task in the end of its own transcript runs under
+# Running now as work on that task (sessions.py infer), without a link by hand; only while the page is on
+# themes: the nested block of the themes the page groups its points by (themes.py, cockpit.flow.themes); summary,
+# instruct and attach the nested blocks of the Activity tab and the instruction line (activity.py, instruct.py), each
+# off by default, the two that call a model within a budget a day
+FLOW_KEYS = ("enabled", "drop_reasons", "return_after_s", *(key for key, _d, _low in FLOW_INTS), "infer_sessions",
+             "themes", "summary", "instruct", "attach")
+FLOW_REASON_MAX = 80
+FLOW_REASONS_MAX = 12
+FLOW_RETURN_MAX = 3600
 
 
 JEV_MODEL_RE = re.compile(r"^jev-[0-9]+(\.[0-9]+){1,2}\Z")
@@ -92,6 +116,9 @@ class WebConfig:
     # the first-run tour of the page (cockpit.tour): offered on a first visit unless switched off;
     # Help and Settings start it by hand either way
     tour: bool = True
+    # the Setup page (cockpit.setup): what still keeps the cockpit from working well and what can be switched on,
+    # collected with `briefing.py collect --setup` (scripts/bridge-setup.py); on unless switched off
+    setup: bool = True
     # the view the work tab opens on until a click on its switch picks another (cockpit.work_view); "due" is
     # what the tab always opened on, so a Bridge without the key sees no change
     work_view: str = "due"
@@ -106,9 +133,21 @@ class WebConfig:
     # each item's brief written and kept by a small model (cockpit.describe, describe.py): {auto, budget_per_hour,
     # kinds, effort}; auto off unless switched on, the button on a card works either way
     describe: dict = field(default_factory=dsc.defaults)
+    # the Work through page (cockpit.flow, flow_of): {enabled, drop_reasons, return_after_s, prep_ahead,
+    # max_running, rank_max_age_days, rerank_per_day, ahead_days, infer_sessions, ...}; off by default
+    flow: dict = field(default_factory=lambda: flow_defaults())
+    # the views the work tab's switch offers (cockpit.work_views, work_views_of): all of them unless the config
+    # names fewer; files is always among them, every "open the file" link leads there (the files tab, round 6c)
+    work_views: tuple = WORK_VIEWS
+    # the files tab's question to its records (cockpit.files_search, files_search_of): {enabled, budget_per_day,
+    # model, block}; off by default, block empty
+    files_search: dict = field(default_factory=lambda: files_search_defaults())
     # further sources of A2A peers beside infra/a2a-peers/ (cockpit.a2a_sources, agents.py): ({name, script}, ...),
     # each script a skill's own that lists its peers, reads their cards and asks them in a fixed JSON contract
     a2a_sources: tuple = ()
+    # the click origin log (cockpit.usage.clicks, store.append_clicks): which control was used from which place,
+    # never what it was about, kept in usage.jsonl for scripts/cockpit-usage.py; on unless switched off
+    usage_clicks: bool = True
     # what the check of the block found (check_block): unknown keys and values the loader replaced, each
     # naming the key and the value used instead; shown by `status` and on the settings page, never fatal
     config_warnings: tuple = ()
@@ -138,6 +177,117 @@ def jev_criteria_of(value: Any) -> dict | None:
                 and all(isinstance(x, str) and 0 < len(x.strip()) <= 200 for x in levels)):
             out[scale] = [x.strip() for x in levels]
     return out or None
+
+
+def flow_defaults() -> dict:
+    return {"enabled": False, "drop_reasons": list(FLOW_DROP_REASONS), "return_after_s": 20,
+            **{key: default for key, default, _low in FLOW_INTS}, "infer_sessions": True, "themes": thm.defaults(),
+            "summary": act.ai_defaults(act.SUMMARY_BUDGET), "instruct": act.ai_defaults(act.INSTRUCT_BUDGET),
+            "attach": act.attach_defaults()}
+
+
+def files_search_defaults() -> dict:
+    return {**act.ai_defaults(act.FILES_BUDGET), "block": []}
+
+
+def files_search_of(value: Any) -> dict:
+    """cockpit.files_search on top of the defaults, key by key (activity.py ai_of); block keeps the words that fit
+    (work_find.block_words)"""
+    out = {**act.ai_of(value, act.FILES_BUDGET), "block": []}
+    if isinstance(value, dict):
+        out["block"] = wf.block_words(value.get("block"))
+    return out
+
+
+def _check_files_search(value: Any, used: dict, where: str) -> list[str]:
+    """One warning per unknown key or value files_search_of replaced, naming what is used instead"""
+    if not isinstance(value, dict):
+        return [f"{where}: must be a mapping, got {_show(value)}; using enabled false"]
+    out = act.ai_check({k: v for k, v in value.items() if k != "block"}, used, where, act.FILES_SERVICE)
+    words = value.get("block")
+    if words is not None and not isinstance(words, list):
+        out.append(f"{where}.block: must be a list of words, got {_show(words)}; using none")
+    elif isinstance(words, list) and len(wf.block_words(words)) < len(words):
+        out.append(f"{where}.block: a word that is no text of 1 to {wf.BLOCK_WORD_MAX} characters, said twice or past "
+                   f"the first {wf.BLOCK_MAX} is ignored")
+    return out
+
+
+def _flow_reasons(value: Any) -> tuple[list[str], list[str]]:
+    """The reasons of a drop_reasons list that fit (text of 1 to FLOW_REASON_MAX characters, at most
+    FLOW_REASONS_MAX, each once), and the ones left out"""
+    good, bad = [], []
+    for x in value:
+        text = " ".join(x.split()) if isinstance(x, str) else ""
+        if text and len(text) <= FLOW_REASON_MAX and text not in good and len(good) < FLOW_REASONS_MAX:
+            good.append(text)
+        else:
+            bad.append(x)
+    return good, bad
+
+
+def flow_of(value: Any) -> dict:
+    """cockpit.flow on top of the defaults, key by key: a bad value keeps the default of its key, a list of reasons
+    keeps the ones that fit (the defaults when none does)"""
+    out = flow_defaults()
+    if not isinstance(value, dict):
+        return out
+    if isinstance(value.get("enabled"), bool):
+        out["enabled"] = value["enabled"]
+    if isinstance(value.get("infer_sessions"), bool):
+        out["infer_sessions"] = value["infer_sessions"]
+    if isinstance(value.get("drop_reasons"), list):
+        out["drop_reasons"] = _flow_reasons(value["drop_reasons"])[0] or out["drop_reasons"]
+    after = value.get("return_after_s")
+    if _is_int(after) and 0 <= after <= FLOW_RETURN_MAX:
+        out["return_after_s"] = after
+    for key, _default, low in FLOW_INTS:
+        if _is_int(value.get(key)) and value[key] >= low:
+            out[key] = value[key]
+    out["themes"] = thm.themes_of(value.get("themes"))
+    out["summary"] = act.ai_of(value.get("summary"), act.SUMMARY_BUDGET)
+    out["instruct"] = act.ai_of(value.get("instruct"), act.INSTRUCT_BUDGET)
+    out["attach"] = act.attach_of(value.get("attach"))
+    return out
+
+
+def _check_flow(value: Any, used: dict, where: str) -> list[str]:
+    """One warning per unknown key or value flow_of replaced, naming what is used instead"""
+    if not isinstance(value, dict):
+        return [f"{where}: must be a mapping, got {_show(value)}; using enabled false"]
+    lows = {key: low for key, _default, low in FLOW_INTS}
+    out = []
+    for key, v in value.items():
+        at = f"{where}.{str(key)[:40]}"
+        if v is None:
+            continue
+        if key in ("enabled", "infer_sessions") and not isinstance(v, bool):
+            out.append(f"{at}: must be true or false, got {_show(v)}; using {_show(used[key])}")
+        elif key == "drop_reasons":
+            if not isinstance(v, list):
+                out.append(f"{at}: must be a list of reasons, got {_show(v)}; using the default reasons")
+            else:
+                bad = _flow_reasons(v)[1]
+                if bad:
+                    out.append(f"{at}: {', '.join(_show(x) for x in bad[:3])} is no reason of 1 to {FLOW_REASON_MAX} "
+                               f"characters, or one too many; ignored")
+        elif key == "return_after_s" and (not _is_int(v) or not 0 <= v <= FLOW_RETURN_MAX):
+            out.append(f"{at}: must be a whole number of seconds from 0 to {FLOW_RETURN_MAX}, got {_show(v)}; "
+                       f"using {used['return_after_s']}")
+        elif key == "themes":
+            out += thm.check(v, used["themes"], at)
+        elif key in ("summary", "instruct"):
+            out += act.ai_check(v, used[key], at, act.SERVICE if key == "summary" else act.INSTRUCT_SERVICE)
+        elif key == "attach":
+            out += act.attach_check(v, used["attach"], at)
+        elif key in lows:
+            if not _is_int(v):
+                out.append(f"{at}: must be a whole number, got {_show(v)}; using {used[key]}")
+            elif v < lows[key]:
+                out.append(f"{at}: {_show(v)} is below the minimum {lows[key]}; using {used[key]}")
+        elif key not in FLOW_KEYS:
+            out.append(f"{at}: unknown key, ignored")
+    return out
 
 
 def language_of(value: Any) -> str:
@@ -182,12 +332,13 @@ BLOCK = {
     "chat_layout": ("choice", "chat_layout", CHAT_LAYOUTS), "chat_keep_hours": ("number", "chat_keep_hours", 0),
     "launch": ("block", {"target": ("choice", "target", TARGETS)}),
     "launch_model": ("launch_model",), "ticker": ("ticker",), "usage": ("usage",),
-    "session_guide": ("session_guide",), "tour": ("bool", "tour"),
+    "session_guide": ("session_guide",), "tour": ("bool", "tour"), "setup": ("bool", "setup"),
     "work_view": ("choice", "work_view", WORK_VIEWS), "focus_to_files": ("bool", "focus_to_files"),
     "files_scope": ("choice", "files_scope", FILES_SCOPES),
     "origin_map": ("origin_map",), "describe": ("describe",), "a2a_sources": ("a2a_sources",),
+    "flow": ("flow",), "work_views": ("work_views",), "files_search": ("files_search",),
 }
-USAGE_KEYS = ("remotes", "remote_file", "host")      # read by usage.remote_hosts, not by the loader
+USAGE_KEYS = ("remotes", "remote_file", "host", "clicks")   # read by usage.remote_hosts, clicks by the loader
 HOST_SLUG_RE = re.compile(r"[A-Za-z0-9._-]{1,64}")
 BLOCK_KEYS = tuple(BLOCK)
 
@@ -259,7 +410,7 @@ def _check_ticker(value: Any, cfg: WebConfig, where: str) -> list[str]:
 
 def _check_usage(value: Any, where: str) -> list[str]:
     """cockpit.usage: remotes (infra/remotes slugs; a list, empty for none), remote_file (text) and host (this machine). usage.py
-    skips what does not fit, so each warning says what is used instead."""
+    skips what does not fit, so each warning says what is used instead. clicks (true or false) is the click origin log."""
     if not isinstance(value, dict):
         return [f"{where}: must be a mapping, got {_show(value)}; using the machines of infra/instances"]
     out = []
@@ -277,6 +428,9 @@ def _check_usage(value: Any, where: str) -> list[str]:
                 bad = [x for x in v if not isinstance(x, str) or not HOST_SLUG_RE.fullmatch(x)]
                 if bad:
                     out.append(f"{at}: {', '.join(_show(x) for x in bad[:3])} is no machine name; skipped")
+        elif key == "clicks":
+            if not isinstance(v, bool):
+                out.append(f"{at}: must be true or false, got {_show(v)}; using true")
         elif key == "host":
             if not isinstance(v, str) or not HOST_SLUG_RE.fullmatch(v):
                 out.append(f"{at}: {_show(v)} is no machine name; using the infra/remotes entry that matches this machine")
@@ -350,6 +504,25 @@ def a2a_sources_of(value: Any, root: Path | None) -> tuple[tuple, list[str]]:
     return tuple(out), warnings
 
 
+def work_views_of(value: Any) -> tuple[tuple, list[str]]:
+    """cockpit.work_views as the views kept, in WORK_VIEWS order, and a warning for each word left out or added:
+    an unknown word is dropped, files is always kept (added when missing), not a list or nothing left gives all"""
+    where = "cockpit.work_views"
+    every = ", ".join(WORK_VIEWS)
+    if value is None:
+        return WORK_VIEWS, []
+    if not isinstance(value, list):
+        return WORK_VIEWS, [f"{where}: must be a list of {every}, got {_show(value)}; using all of them"]
+    warnings = [f"{where}: {_show(x)} is no view of the work tab ({every}); ignored"
+                for x in value if x not in WORK_VIEWS]
+    known = [x for x in value if x in WORK_VIEWS]
+    if not known:
+        return WORK_VIEWS, warnings + [f"{where}: nothing left of the list; using all of them"]
+    if "files" not in known:
+        warnings.append(f"{where}: files is always kept, every link that opens a task's file leads there; added")
+    return tuple(v for v in WORK_VIEWS if v in known or v == "files"), warnings
+
+
 def check_block(block: Any, cfg: WebConfig, where: str = "cockpit", keys: dict = BLOCK) -> tuple:
     """One warning per unknown key, wrong type or value the loader replaced, naming the key and the value
     `cfg` (the loaded config) uses instead. A None value counts as left out, as it does for the loader."""
@@ -385,8 +558,17 @@ def check_block(block: Any, cfg: WebConfig, where: str = "cockpit", keys: dict =
         if kind == "describe":
             out += dsc.check(value, cfg.describe, at)
             continue
+        if kind == "flow":
+            out += _check_flow(value, cfg.flow, at)
+            continue
         if kind == "a2a_sources":
             out += a2a_sources_of(value, cfg.root)[1]
+            continue
+        if kind == "work_views":
+            out += work_views_of(value)[1]
+            continue
+        if kind == "files_search":
+            out += _check_files_search(value, cfg.files_search, at)
             continue
         if kind == "block":
             if not isinstance(value, dict):
@@ -402,6 +584,8 @@ def check_block(block: Any, cfg: WebConfig, where: str = "cockpit", keys: dict =
             out.append(f"{at}: must be text, got {_show(value)}; {used}")
         elif kind == "choice" and value not in rule[2]:
             out.append(f"{at}: {_show(value)} is not one of {', '.join(rule[2])}; {used}")
+        elif key == "work_view" and where == "cockpit" and value not in cfg.work_views:
+            out.append(f"{at}: {_show(value)} is not among cockpit.work_views ({', '.join(cfg.work_views)}); {used}")
         elif kind in ("int", "number"):
             if not (_is_int(value) if kind == "int" else _is_number(value)):
                 what = "a whole number" if kind == "int" else "a number"
@@ -461,6 +645,13 @@ def load_web_config(root: Path | str, data: dict | None = None) -> WebConfig:
     def text_or_none(v: Any, cap: int) -> str | None:
         return v.strip()[:cap] if isinstance(v, str) and v.strip() else None
 
+    work_views = work_views_of(w.get("work_views"))[0]
+    work_view = w["work_view"] if w.get("work_view") in WORK_VIEWS else "due"
+    flow = flow_of(w.get("flow"))
+    # a view the list leaves out opens Work through where it is kept and on (a Bridge that switched the other views
+    # off never lands in the files), else the first one kept
+    fallback = "flow" if "flow" in work_views and flow["enabled"] else work_views[0]
+
     cfg = WebConfig(root=root, enabled=w.get("enabled") is True, port=port, open_in=open_in, relay=relay,
                     profile=profile, tabs_seconds=tabs_seconds, language=language, full_minutes=full_minutes,
                     voice=voice, target=target, control=control, areas=areas, jev_enabled=ts.get("enabled") is True,
@@ -469,12 +660,15 @@ def load_web_config(root: Path | str, data: dict | None = None) -> WebConfig:
                     jev_model=jev_model, launch_model=launch_model, ticker=tk.ticker_of(w.get("ticker")),
                     session_guide=gd.guide_of(w.get("session_guide")),
                     tour=w["tour"] if isinstance(w.get("tour"), bool) else True,
-                    work_view=w["work_view"] if w.get("work_view") in WORK_VIEWS else "due",
+                    setup=w["setup"] if isinstance(w.get("setup"), bool) else True,
+                    work_view=work_view if work_view in work_views else fallback, work_views=work_views,
                     focus_to_files=w.get("focus_to_files") is True,
                     files_scope=w["files_scope"] if w.get("files_scope") in FILES_SCOPES else "active",
                     origin_map=origin_map_of(w.get("origin_map"))[0], describe=dsc.describe_of(w.get("describe")),
                     a2a_sources=a2a_sources_of(w.get("a2a_sources"), root)[0],
+                    flow=flow, files_search=files_search_of(w.get("files_search")),
                     snapshot_minutes=snapshot_minutes, idle_minutes=idle_minutes, triage_daily=w.get("triage_daily") is True,
                     chat_layout=w.get("chat_layout") if w.get("chat_layout") in CHAT_LAYOUTS else "classic",
-                    chat_keep_hours=max(0, w["chat_keep_hours"]) if _is_number(w.get("chat_keep_hours")) else 24)
+                    chat_keep_hours=max(0, w["chat_keep_hours"]) if _is_number(w.get("chat_keep_hours")) else 24,
+                    usage_clicks=_dict(w.get("usage")).get("clicks") is not False)
     return replace(cfg, config_warnings=check_block(raw.get("cockpit"), cfg))

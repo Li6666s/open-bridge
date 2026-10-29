@@ -4,7 +4,9 @@
 Every script call of the server goes through `Runner.run`. Before a process starts,
 `check` refuses any argv that is not one of the eight Bridge scripts of SCRIPT_PATHS (run
 with this interpreter) or one of the exact shapes below it lets through: an A2A ask, a quick
-question, codex read-only, the Haiku judge, organize, describe, and ps for one pid. No call adds to the
+question, codex read-only, the Haiku judge, organize, describe, the themes of Work through, the summary of
+a point's activity and the instruction line, the files tab's question to its records, the two git logs the activity reads, and ps for one
+pid. No call adds to the
 clean env. The cmux CLI is
 never called directly; tabs go through workplace.py and its terminal driver. Tests inject a
 fake runner that overrides `_spawn` and so still passes through the same check.
@@ -22,10 +24,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from . import activity
 from . import agents
 from . import describe
+from . import instruct
 from . import organize
+from . import themes
 from ..model_route import haiku_argv_ok
+from ..work_find import ask_argv_ok as files_argv_ok
 from .quick import argv_ok, resolve_claude
 from ..ai_services import codex_argv_ok, resolve, select, CLAUDE_MODELS
 
@@ -63,7 +69,7 @@ def resolve_cmux(env: dict | None = None) -> str | None:
 
 class Runner:
     def __init__(self, root: Path | str, cmux: str | None = "auto", claude: str | None = "auto", codex: str | None = "auto",
-                 code: Path | str | None = None):
+                 code: Path | str | None = None, git: str | None = "auto"):
         self.root = Path(root).resolve()
         # where the helper scripts come from: the checkout this cockpit runs from, which is the Bridge itself
         # unless a cockpit from another checkout (a branch beside it) is pointed at the live data with --root
@@ -72,6 +78,8 @@ class Runner:
         self.cmux = resolve_cmux() if cmux == "auto" else cmux
         self.claude = resolve_claude() if claude == "auto" else claude
         self.codex = resolve("codex") if codex == "auto" else codex
+        # the activity of a point reads two git logs of a task's folder (activity.py); without git it reads file times
+        self.git = shutil.which("git") if git == "auto" else git
         self.scripts = frozenset(str(self.code / p) for p in SCRIPT_PATHS)
         # the scripts of cockpit.a2a_sources (absolute), let through in agents.argv_ok's shapes; set by the app
         self.a2a_sources: frozenset = frozenset()
@@ -111,6 +119,18 @@ class Runner:
             return
         # describe: one call with one item as data and a fixed answer schema, no tools (describe.py)
         if describe.argv_ok(argv, self.claude):
+            return
+        # the themes of the Work through page: one call with the open points as data, a fixed schema (themes.py)
+        if themes.argv_ok(argv, self.claude):
+            return
+        # the summary of a point's activity and the instruction line: one call each with data and a fixed schema
+        if activity.summary_argv_ok(argv, self.claude) or instruct.argv_ok(argv, self.claude):
+            return
+        # the files tab's question to its records: one call with the records as data and a fixed schema (work_find.py)
+        if files_argv_ok(argv, self.claude, CLAUDE_MODELS.values()):
+            return
+        # what git knows of a task's documents and status changes: two exact log shapes (activity.py)
+        if activity.git_argv_ok(argv, self.git, str(self.root)):
             return
         # the Sessions page reads one variable of a Claude process's environment (sessions.py)
         if len(argv) == 6 and argv[:5] == ["/bin/ps", "eww", "-o", "command=", "-p"] and argv[5].isdigit():

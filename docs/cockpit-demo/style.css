@@ -30,8 +30,10 @@ code { font-size: 12px; overflow-wrap: anywhere; }
 :focus-visible { outline: 2px solid var(--secondary); outline-offset: 2px; }
 :focus:not(:focus-visible) { outline: none; }
 
+/* pinned to the corner of its containing block: where it flowed instead, the spans of a long list in the page
+   column reached past the window and the document scrolled with the column */
 .sr-only {
-  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  position: absolute; top: 0; left: 0; width: 1px; height: 1px; padding: 0; margin: -1px;
   overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
 }
 .skip {
@@ -124,6 +126,8 @@ code { font-size: 12px; overflow-wrap: anywhere; }
 .icon-btn:hover { background: var(--surface-muted); }
 
 .btn-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+/* the one close of a tab (views/detail.js TabClose) lays its buttons into the row it stands in */
+.tab-close { display: contents; }
 
 /* ---------------------------------------------------------------- chips */
 
@@ -215,11 +219,23 @@ kbd {
 }
 .hdr-status > span { overflow: hidden; text-overflow: ellipsis; max-width: 320px; }
 .hdr-relay { padding: 0 4px; flex: 0 0 auto; }
+/* the as-of time is the reload button: the time and ↻ in one, no reload button of its own */
+.asof-btn {
+  display: inline-flex; align-items: center; gap: 4px; min-width: 0; padding: 2px 6px; border: 0; border-radius: var(--radius-md);
+  background: none; font: inherit; color: var(--on-surface-muted); cursor: pointer;
+}
+.asof-btn .asof-text { overflow: hidden; text-overflow: ellipsis; }
+.asof-btn .icon { flex: none; }
+.asof-btn:hover:not([disabled]) { background: var(--surface-muted); color: var(--on-surface); }
+.asof-btn[aria-busy] .icon { animation: spin 0.8s linear infinite; }
 /* what works in this Bridge's tabs now; a click opens the Sessions page */
 .hdr-agents { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; padding: 0 4px; font-size: 12.5px; white-space: nowrap; color: var(--on-surface-muted); }
 .hdr-agents:hover { color: var(--ink); }
 /* only the loading line and the as-of time give way; buttons and the relay word never overlap */
-.hdr-right > .btn, .hdr-right > .cmd { flex: 0 0 auto; }
+.hdr-right > .btn, .hdr-right > .cmd, .hdr-right > .hdr-help { flex: 0 0 auto; }
+/* Help, last in the header: Explain, the look-up topics and the tour under it, aligned to its right edge */
+.help-menu { min-width: 220px; }
+.help-menu .settle-hint { padding-top: 8px; }
 .hdr-status, .hdr-asof { flex: 0 1 auto; overflow: hidden; }
 /* the right side never grows wider than its buttons plus one short loading line, so it stays off the page tabs */
 .hdr-status { max-width: min(300px, 22vw); }
@@ -769,7 +785,6 @@ kbd {
 /* Dates as an agenda (views/dates.js): figures, filters, agenda by day, week grid, month overview */
 .cal { display: grid; gap: 14px; margin: 4px 0 8px; }
 .calf { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; grid-template-columns: repeat(auto-fill, minmax(128px, 1fr)); }
-.calf-wide { grid-column: span 2; }
 .calf-tile {
   width: 100%; height: 100%; display: grid; gap: 2px; justify-items: start; align-content: start; padding: 10px 12px; text-align: left;
   background: var(--surface-raised); border: 1px solid var(--border); border-radius: var(--radius-lg); color: var(--on-surface); font: inherit;
@@ -784,7 +799,6 @@ kbd {
 .calf-tile.is-static:hover { border-color: var(--border); }
 .calf-n { font-size: 24px; font-weight: 600; line-height: 1.1; font-variant-numeric: tabular-nums; color: var(--counter); }
 .calf-label { font-size: var(--text-sm); }
-.calf-title { font-weight: 600; overflow-wrap: anywhere; }
 .calf-sub { font-size: 11px; }
 .cal-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
 .cal-nav { display: inline-flex; align-items: center; gap: 6px; }
@@ -864,7 +878,6 @@ kbd {
 .cal-facts { display: grid; gap: 12px; }
 .cal-people { margin: 4px 0 0; padding-left: 18px; display: grid; gap: 2px; font-size: var(--text-sm); }
 @media (max-width: 760px) {
-  .calf-wide { grid-column: span 1; }
   .cal-row { grid-template-columns: 64px 1fr; }
   .cal-acts { grid-column: 1 / -1; justify-content: flex-start; }
   .cal-dayhead { grid-template-columns: 1fr; }
@@ -872,7 +885,9 @@ kbd {
   .cal-mo-title { display: none; }
 }
 
-/* GitHub work (views/github.js): figures, boards with their switch, an opened issue or pull request */
+/* GitHub work (views/github.js): the figures with a cause, the filter bar (.ghf, round 6c), the boards' facts in the
+   list, an opened issue or pull request; the switch of a board (.ghb-mode) stands in the settings. The rows are compact
+   (round 6c) so more of them fit */
 .ghb { display: grid; gap: 14px; margin: 4px 0 14px; }
 .ghb-figures { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); }
 .ghb-figure {
@@ -884,29 +899,12 @@ kbd {
 .ghb-figure.is-on { border-color: var(--secondary); box-shadow: inset 0 0 0 1px var(--secondary); }
 .ghb-figure.is-loud { border-left: 3px solid var(--tk); }
 .ghb-figure.is-loud .ghb-n { color: var(--tk); }
-.ghb-figure.is-done { cursor: default; background: var(--surface-muted); }
 .ghb-n { font-size: 24px; font-weight: 600; line-height: 1.1; font-variant-numeric: tabular-nums; color: var(--counter); }
 .ghb-label { font-size: var(--text-sm); }
-.ghb-sub { font-size: var(--text-xs, 11px); }
-.ghb-boards { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
-.ghb-board {
-  display: grid; gap: 8px; align-content: start; padding: 12px 14px;
-  background: var(--surface-raised); border: 1px solid var(--border); border-radius: var(--radius-xl);
-}
-.ghb-board.is-on { border-color: var(--secondary); box-shadow: inset 0 0 0 1px var(--secondary); }
-.ghb-board-head {
-  display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 0; border: 0; background: none;
-  color: var(--on-surface); font: inherit; text-align: left; cursor: pointer;
-}
-.ghb-board-head:disabled { cursor: default; }
-.ghb-board-head:focus-visible { outline: 2px solid var(--secondary); outline-offset: 3px; border-radius: 4px; }
-.ghb-board-name { font-size: var(--text-sm); font-weight: 600; overflow-wrap: anywhere; }
-.ghb-board .ghb-n { font-size: 20px; }
 .ghb-bar { display: flex; gap: 2px; height: 8px; border-radius: 4px; overflow: hidden; background: var(--border); }
 .ghb-seg { flex-basis: 0; min-width: 4px; background: var(--tk); }
 .ghb-legend { display: flex; flex-wrap: wrap; gap: 2px 10px; margin: 0; }
 .ghb-dot { display: inline-block; width: 8px; height: 8px; margin-right: 4px; border-radius: 50%; background: var(--tk); vertical-align: 0; }
-.ghb-off { margin: 0; }
 .ghb-mode { display: inline-flex; justify-self: start; border: 1px solid var(--border); border-radius: var(--radius-md); overflow: hidden; }
 .ghb-mode-btn {
   padding: 3px 10px; border: 0; border-right: 1px solid var(--border); background: transparent; color: var(--on-surface-muted);
@@ -921,8 +919,10 @@ kbd {
 .board-set-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px; }
 .board-set-row.is-off .board-set-name { color: var(--on-surface-muted); }
 .board-set-name { font-weight: 600; overflow-wrap: anywhere; }
-.ghb-filter { display: flex; align-items: center; gap: 8px; margin: 0; }
-.ghb-people { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0; }
+.ghf { display: flex; flex-wrap: wrap; align-items: end; gap: 8px 12px; }
+.ghf-field { display: grid; gap: 2px; min-width: 0; }
+.ghf-field select { max-width: 220px; }
+.ghf-count { align-self: center; }
 .ghl { display: grid; gap: 12px; }
 .ghl-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
 .ghl-search {
@@ -938,18 +938,19 @@ kbd {
 .ghl-head:focus-visible { outline: 2px solid var(--secondary); outline-offset: 2px; border-radius: 4px; }
 .ghl-head-name { font-size: var(--text-sm); font-weight: 600; letter-spacing: .02em; }
 .ghl-head-bar { flex: 0 1 160px; height: 6px; margin-left: auto; }
+.ghl-facts { padding-left: calc(1em + 8px); }
 .ghl-chev { display: inline-block; width: 1em; color: var(--on-surface-muted); transition: transform 120ms ease-out; }
 .ghl-chev.is-open { transform: rotate(90deg); }
 .ghl-rows { list-style: none; margin: 0; padding: 0; display: grid; }
 .ghl-row {
-  display: grid; grid-template-columns: 22px minmax(0, 1fr) auto auto; align-items: center; gap: 4px 14px;
-  padding: 10px 8px; border-bottom: 1px solid var(--border); border-radius: var(--radius-md); cursor: pointer;
+  display: grid; grid-template-columns: 22px minmax(0, 1fr) auto auto; align-items: center; gap: 2px 12px;
+  padding: 5px 8px; border-bottom: 1px solid var(--border); border-radius: var(--radius-md); cursor: pointer;
 }
 .ghl-row:hover { background: var(--surface-muted); }
 .ghl-row:focus-visible { outline: 2px solid var(--secondary); outline-offset: -2px; }
 .ghl-row.is-quiet .ghl-title { color: var(--on-surface-muted); }
 .ghl-icon { color: var(--tk); align-self: start; margin-top: 2px; }
-.ghl-main { min-width: 0; display: grid; gap: 4px; }
+.ghl-main { min-width: 0; display: grid; gap: 2px; }
 .ghl-title { margin: 0; font-size: var(--text-sm); font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; }
 .ghl-meta { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size: var(--text-xs, 11px); }
 .ghl-state { display: inline-flex; align-items: center; gap: 5px; color: var(--on-surface); }
@@ -959,8 +960,13 @@ kbd {
 .ghl-chip-quiet { border-color: var(--warning); color: var(--on-surface); }
 .ghl-chip-untasked { border-color: var(--warning); border-style: dashed; color: var(--on-surface); }
 .ghl-chip-draft { border-style: dashed; }
+.ghl-chip-board { border-color: var(--info); color: var(--on-surface); }
+.ghl-pr { border-color: var(--tk); color: var(--on-surface); }
 .ghl-side { display: grid; justify-items: end; gap: 2px; text-align: right; white-space: nowrap; }
-.ghl-people { display: flex; gap: 6px; }
+.ghl-people { display: block; }
+/* round 6d: a name on a row is a button that filters by it, drawn as the name */
+.ghl-pick { background: none; border: 0; padding: 0; font: inherit; color: inherit; cursor: pointer; }
+.ghl-pick:hover, .ghl-pick:focus-visible { text-decoration: underline; }
 .ghl-acts { justify-content: flex-end; flex-wrap: nowrap; }
 @media (max-width: 860px) {
   .ghl-row { grid-template-columns: 22px minmax(0, 1fr); }
@@ -987,7 +993,6 @@ kbd {
 .gh-comment-head { margin: 0 0 6px; display: flex; gap: 6px; align-items: center; }
 @media (max-width: 560px) {
   .ghb-figures { grid-template-columns: repeat(2, 1fr); }
-  .ghb-boards { grid-template-columns: 1fr; }
 }
 
 .settle { position: relative; display: inline-flex; }
@@ -1014,13 +1019,18 @@ kbd {
 .card-opens:focus-visible { outline: 2px solid var(--secondary); outline-offset: 2px; }
 .info-detail-full { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .send-btns { display: flex; flex-direction: column; gap: 6px; }
-.chat-hint { margin: 6px 0 0; }
-/* the chat's one input: where Enter goes, and once handed on, how that went (views/chat.js ChatFoot) */
-.route-line { margin: 6px 0 0; }
-.route-chip { cursor: pointer; }
-.route-chip.is-tab { font-weight: 600; }
+/* the chat's one input: once handed on, how that went (views/chat.js ChatFoot) */
 .handoff-status { margin: 6px 0 0; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .ptab-more { display: inline-flex; }
+/* a folder's tab with its ▾ (views/header.js FolderTab); the tab keeps its own button, the marker measures it */
+.ptab-folder { display: inline-flex; align-items: stretch; }
+.ptab-caret {
+  position: relative; display: inline-flex; align-items: center; padding: 0 10px 0 6px; margin-left: -8px; border: 0; background: transparent;
+  color: var(--on-surface-muted); font-size: 15px; cursor: pointer;
+}
+.ptab-caret:hover, .ptab-caret[aria-expanded="true"] { color: var(--on-surface); background: var(--surface-muted); }
+.more-menu.folder-menu .settle-item { justify-content: flex-start; gap: 8px; }
+.folder-menu .folder-note { margin-left: auto; }
 .more-menu { position: fixed; right: auto; min-width: 220px; z-index: 70; }
 .more-menu .settle-item { justify-content: space-between; }
 .more-menu .settle-item.is-on { font-weight: 600; background: var(--accent-subtle); }
@@ -1035,6 +1045,13 @@ kbd {
 }
 .tabview-title { margin: 0; }
 .tabview-live { margin-left: auto; }
+/* a tab open in the Chat keeps its head on one line where it fits: a long name (a terminal's folder) gives way first,
+   cut short, and Write and the close stay together on the right */
+.rooms-main .tabview-title { flex: 1 1 10em; min-width: 6em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rooms-main .tabview-head .room-task, .rooms-main .tabview-head .room-from-link {
+  flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.room-head-acts { display: inline-flex; flex-wrap: nowrap; align-items: center; gap: 6px; flex-shrink: 0; }
 .tabview-body {
   overflow-y: auto; padding: 14px 18px; background: var(--surface); font-family: var(--font-mono);
   font-size: var(--text-code); line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere;
@@ -1134,23 +1151,34 @@ kbd {
   color: var(--secondary); font-size: var(--text-label); text-align: center; }
 .room-bridge { font-weight: 400; }
 .room-more { justify-self: start; margin: 2px 0 4px 16px; }
+/* round 6d: a handed question's marker beside its title (views/chat.js AskMark), an archived one greyed, and what
+   a handed question came back with, under it and in its status line */
+.ask-mark { font-size: var(--text-label); font-weight: 600; color: var(--tk, var(--on-surface-muted)); white-space: nowrap; }
+.room-chat-row.is-archived .room-name { color: var(--on-surface-muted); }
+/* a question's title takes its whole line, its marker and time stand under it (round 6d fix) */
+.room-chat { flex-wrap: wrap; row-gap: 0; }
+.room-chat .room-name { flex: 1 1 0; white-space: normal; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical; }
+.room-sub { flex: 1 0 100%; display: flex; gap: 8px; align-items: baseline; min-width: 0; padding-left: 20px; }
+/* round 6d: a waiting tab as a short line (C2), greyed in its workspace below; what a tab came from (C5), as a
+   second line of its row and as a link in its head */
+.room-wait { padding-left: 16px; flex-wrap: wrap; row-gap: 0; }
+.room-wait .room-name { flex: 1 1 0; }
+.room-lage { flex: 1 0 100%; min-width: 0; padding-left: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.room-wait.is-left { opacity: 0.55; }
+.room-item.is-dim .room-name { color: var(--on-surface-muted); }
+.room-item.has-from { flex-wrap: wrap; row-gap: 0; }
+.room-from { flex: 1 0 100%; min-width: 0; padding-left: 20px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.qoutcome { display: grid; gap: 4px; padding: 6px 12px; border-left: 3px solid var(--border-strong); }
 .rooms-main { height: calc(100dvh - 180px); grid-template-rows: auto minmax(0, 1fr) auto; }
 .rooms-main.rooms-agent { display: block; }
 .rooms-main > .tabview-body { overflow-y: auto; padding: 12px 16px; }
 .room-ws-pane { border-top: 3px solid var(--ws-color, var(--border)); }
 /* what a waiting tab asks, and the answers to it (views/reply.js) */
-.reply-group { display: grid; gap: 6px; margin: 0 0 8px; }
+.reply-group { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1px; margin: 0 0 8px; }
 .reply-group > .room-group { margin-bottom: 0; }
-.reply-row { display: grid; gap: 4px; min-width: 0; padding: 6px 8px; margin: 0 4px; border: 1px solid var(--border);
-  border-radius: var(--radius-md); background: var(--surface-raised); }
-.reply-row.is-left { opacity: 0.55; }
-/* the whole row opens its tab (a control in it does its own work) */
-.reply-row.is-pickable { cursor: pointer; }
-.reply-head { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 0; border: none; background: none;
-  color: inherit; font: inherit; font-weight: 600; text-align: left; cursor: pointer; }
-.reply-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .reply-ask { margin: 0; font-size: 12.5px; white-space: pre-line; overflow-wrap: anywhere; }
-.reply-done, .reply-draft, .reply-note { margin: 0; }
+.reply-draft, .reply-note { margin: 0; }
 .reply-note { color: var(--danger); }
 .reply-btns { flex-wrap: wrap; }
 .reply-field { display: flex; gap: 6px; align-items: flex-end; }
@@ -1254,6 +1282,9 @@ kbd {
 .wfacet { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
 .wfacet .label-caps { min-width: 72px; }
 .wgroup { display: grid; gap: 10px; }
+/* one panel per machine, its systems inside (views/sessions.js WorkersPage) */
+.wmachine { display: grid; gap: 14px; }
+.wgroup-title { font-size: var(--text-sm); }
 .wlist { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
 .wrow { border: 1px solid var(--border); border-left-width: 4px; border-radius: var(--radius-lg); background: var(--surface-raised); }
 .wrow-main {
@@ -1352,16 +1383,9 @@ kbd {
 .conf { margin-left: 6px; letter-spacing: 1px; }
 .tbl-review .c-reason { min-width: 220px; }
 .tbl-review tr.is-kept td { opacity: 0.75; }
-.help-dialog { width: min(760px, 100%); display: flex; flex-direction: column; overflow: hidden; }
-.help-tabs { align-self: flex-start; margin-bottom: 12px; flex-wrap: nowrap; max-width: 100%; overflow-x: auto; flex-shrink: 0; }
-.help-tabs .seg-btn { white-space: nowrap; }
-.help-pane { overflow-y: auto; height: min(52vh, 460px); padding-right: 4px; }
-.help-pane > p { margin: 0 0 10px; }
-.help-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 8px; margin: 0 0 14px; }
-.help-cards > div { border: 1px solid var(--border); border-radius: var(--radius-md); padding: 8px 10px; background: var(--surface); }
-.help-cards dt { font-weight: 600; font-size: var(--text-sm); }
-.help-cards dd { margin: 2px 0 0; color: var(--on-surface-muted); font-size: var(--text-sm); }
-.help-sub { margin: 6px 0 8px; }
+/* the look-up card under Settings, Appearance (views/settings.js LookupCard): one topic below its switch */
+.lookup-pane { margin-top: 12px; }
+.lookup-pane > p { margin: 0 0 10px; }
 .keys > div, .help-text > div {
   display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 10px; padding: 6px 0;
   border-top: 1px solid var(--border); font-size: var(--text-sm);
@@ -1370,6 +1394,9 @@ kbd {
 .help-text dt { font-weight: 600; }
 .help-text dd { color: var(--on-surface-muted); }
 .notes { display: flex; flex-direction: column; }
+/* the notes of a day in the history, above its closed items */
+.hist-notes summary { cursor: pointer; }
+.hist-notes .notes { margin: 4px 0 0; }
 .note { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 8px; padding: 8px 0; border-top: 1px solid var(--border); font-size: var(--text-sm); }
 
 .toasts {
@@ -1393,7 +1420,7 @@ kbd {
 .toast-go:hover, .note-go:hover { background: var(--surface-muted); }
 .toast-go:hover > span { text-decoration: underline; text-decoration-color: var(--accent); text-underline-offset: 3px; }
 .toast-go:hover svg, .note-go:hover svg { color: var(--accent); }
-/* past four: one compact last toast that opens the notes drawer */
+/* past four: one compact last toast that opens the notes in the history */
 .toast.toast-more {
   display: block; justify-self: end; align-self: flex-end; width: auto; padding: 6px 12px; cursor: pointer;
   color: var(--on-surface-muted); font: inherit; font-size: var(--text-sm); text-align: center;
@@ -1427,6 +1454,36 @@ kbd {
 .otile-big { font-size: 26px; font-weight: 600; line-height: 1.15; color: var(--ink); }
 .otile.tk-danger .otile-big, .otile.tk-warning .otile-big { color: var(--tk); }
 .otile-sub { font-size: var(--text-sm); color: var(--on-surface-muted); }
+
+/* the bar of a folder on top of its pages (views/header.js FolderBar): stays in view while the page scrolls */
+.folderbar {
+  position: sticky; top: 0; z-index: 5; flex: none; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: thin;
+  margin: -4px 0 0; padding: 4px 0 8px; background: var(--surface);
+}
+.folder-chip { flex: none; padding: 6px 12px; font-size: var(--text-sm); }
+.folder-name { font-weight: 600; }
+.folder-note { color: var(--on-surface-muted); }
+/* the machines of a folder's overview, one line each (views/pages.js MachineLines) */
+.mlines { display: grid; gap: 8px; }
+.mlines-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.mline { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.mline-main {
+  display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 6px 8px; border: 0; border-radius: var(--radius-md);
+  background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer;
+}
+.mline-main:hover { background: var(--surface-muted); }
+.mline-name { font-size: var(--text-sm); }
+.mline-bad { color: var(--danger); font-weight: 600; }
+/* the head card of a sub page (views/pages.js PageSummary) */
+.psum-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.psum-line {
+  width: 100%; display: grid; grid-template-columns: auto minmax(120px, 220px) minmax(0, 1fr); align-items: center; gap: 10px;
+  padding: 5px 8px; border: 0; border-radius: var(--radius-md); background: transparent; color: inherit; font: inherit;
+  font-size: var(--text-sm); text-align: left; cursor: pointer;
+}
+.psum-line:hover { background: var(--surface-muted); }
+.psum-title { font-weight: 600; }
+.psum-text { color: var(--on-surface-muted); overflow-wrap: anywhere; }
 .otile-note { font-size: var(--text-label); color: var(--on-surface); overflow: hidden;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 
@@ -1523,10 +1580,11 @@ kbd {
 
 @media (max-width: 1279px) {
   .hdr-headline { display: none; }
-  /* icons only for reload and history, so the header fits beside the command box */
+  /* icons only for History and Explain, so the header fits beside the command box */
   .hide-narrow { display: none; }
-  /* the as-of time moves into the day column (.day-counts), the header keeps its buttons in view */
-  .hdr .hdr-asof { display: none; }
+  /* only the as-of time gives way: it moves into the day column (.day-counts) and stays in the button's tooltip;
+     the warnings (connection lost, stale model, failed pass) and ↻ stay in view at every width */
+  .hdr .hdr-asof .asof-text { display: none; }
   .hdr-right { min-width: 0; }
   .hdr-right { flex: 1 1 auto; justify-content: flex-end; }
 }
@@ -1553,6 +1611,10 @@ kbd {
   .cmd-input { padding-right: 8px; }
   .btn-sm { min-height: 34px; padding: 0 9px; }
   .pagebar-tabs { padding: 0 8px; }
+  /* the folder bar scrolls with the page under the sticky header; the head card's lines wrap */
+  .folderbar { position: static; }
+  .psum-line { grid-template-columns: auto minmax(0, 1fr); }
+  .psum-text { grid-column: 2; }
   /* More stays in view at the right edge while the tabs scroll under it (review C21) */
   .ptab-more { position: sticky; right: 0; z-index: 1; background: var(--surface); }
   .panel-pad { padding: 14px 14px; }
@@ -1661,7 +1723,10 @@ kbd {
 .quickchat { display: flex; flex-direction: column; }
 .quickchat > .quick-body { flex: 1 1 auto; min-height: 0; }
 .quickchat > .quick-convs { flex: none; align-items: center; }
-.quick-conv { flex: none; max-width: 280px; overflow: hidden; text-overflow: ellipsis; padding: 4px 12px; border-radius: var(--radius-full); }
+.quick-conv { flex: none; display: inline-flex; align-items: center; gap: 4px; max-width: 420px; padding: 4px 12px; border-radius: var(--radius-full); }
+/* only the title is clipped, the marker beside it stays in view (round 6d) */
+.quick-conv-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.quick-conv .ask-mark, .room-chat .ask-mark { flex: none; }
 
 /* A2A agents: the agents as cards on the left, the conversation with one on the right */
 .agents-grid { display: grid; grid-template-columns: minmax(240px, 340px) minmax(0, 1fr); gap: 16px; align-items: start; }
@@ -2976,11 +3041,6 @@ pre.guide-read-text { font-family: var(--font-mono); }
 .tour-dot.is-on { background: var(--accent); width: 16px; }
 .tour-acts { margin-top: 14px; align-items: center; }
 .tour-gap { flex: 1; }
-.help-head { flex-wrap: wrap; }
-.help-tour { margin-left: auto; }
-@media (max-width: 599px) {
-  .help-tour { order: 3; width: 100%; margin-left: 0; }
-}
 .tour-done { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0; }
 @media (prefers-reduced-motion: reduce) {
   .tour-spot { transition: none; }
@@ -3012,6 +3072,15 @@ pre.guide-read-text { font-family: var(--font-mono); }
 }
 .hints-bar .btn { white-space: nowrap; }
 .hints-where, .hints-bar-text { white-space: nowrap; }
+/* "What bothers you here?": its field stands above the bar, a note it can pick from is ringed */
+.hints-say {
+  position: fixed; left: 50%; bottom: 68px; transform: translateX(-50%); display: flex; flex-direction: column; gap: 8px;
+  width: min(460px, calc(100vw - 32px)); background: var(--surface-raised); border: 1px solid var(--border); cursor: default;
+  border-radius: var(--radius-lg); box-shadow: var(--shadow-float); padding: 10px 12px;
+}
+.hints-say-acts { display: flex; justify-content: flex-end; gap: 8px; }
+.hints-note.is-picked { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-line), var(--shadow-float); }
+.hints-noted { color: var(--on-surface-muted); }
 @media (max-width: 599px) {
   .hints-bar-text { display: none; }
   .hints-bar { padding-left: 8px; }
